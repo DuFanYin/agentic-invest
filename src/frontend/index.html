@@ -1,0 +1,73 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Investment Research Agent</title>
+    <link rel="stylesheet" href="/static/styles.css" />
+  </head>
+  <body>
+    <header class="header">
+      <div>
+        <p class="eyebrow">Investment Research</p>
+        <h1>Research Agent</h1>
+      </div>
+      <div class="question-summary">
+        <span id="question-summary">输入一个投资研究问题开始分析</span>
+      </div>
+      <div class="status-pill" id="status">Idle</div>
+    </header>
+
+    <main class="main">
+      <aside class="sidebar">
+        <section class="card">
+          <h2>Input</h2>
+          <p class="muted">输入公司、行业、宏观事件或任意投资相关问题。</p>
+          <label for="query">Query</label>
+          <textarea
+            id="query"
+            rows="7"
+            placeholder="例如：分析 AI 半导体供应链未来 5 年的投资机会，并给出可能场景和概率。"
+          ></textarea>
+          <button id="run-btn" type="button">Run Research</button>
+        </section>
+
+        <section class="card">
+          <h2>Navigation</h2>
+          <ul class="nav-list">
+            <li>Summary</li>
+            <li>Intent</li>
+            <li>Evidence</li>
+            <li>Analysis</li>
+            <li>Scenarios</li>
+            <li>Validation</li>
+          </ul>
+        </section>
+
+        <section class="card">
+          <h2>Agent Status</h2>
+          <div id="agent-status-panel" class="agent-status-panel"></div>
+          <h3>Timeline</h3>
+          <div id="agent-timeline" class="agent-timeline"></div>
+        </section>
+      </aside>
+
+      <section class="content">
+        <article class="card">
+          <div class="section-title">
+            <h2>Result</h2>
+            <span id="validation-badge" class="badge">Not run</span>
+          </div>
+          <div id="result" class="result-empty">等待执行...</div>
+        </article>
+      </section>
+    </main>
+
+    <footer class="footer">
+      <div id="source-count">Sources: 0</div>
+      <div>Disclaimer: This tool is for research only, not financial advice.</div>
+    </footer>
+
+    <script src="/static/app.js"></script>
+  </body>
+</html>
