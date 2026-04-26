@@ -9,10 +9,11 @@ const agentStatusPanel = document.getElementById("agent-status-panel");
 const agentTimeline = document.getElementById("agent-timeline");
 
 const DEFAULT_AGENT_STATUSES = [
-  { agent: "orchestrator", status: "idle", action: "waiting", details: [] },
+  { agent: "parse_intent", status: "idle", action: "waiting", details: [] },
   { agent: "research", status: "idle", action: "waiting", details: [] },
   { agent: "fundamental_analysis", status: "idle", action: "waiting", details: [] },
   { agent: "market_sentiment", status: "idle", action: "waiting", details: [] },
+  { agent: "gap_check", status: "idle", action: "waiting", details: [] },
   { agent: "scenario_scoring", status: "idle", action: "waiting", details: [] },
   { agent: "report_verification", status: "idle", action: "waiting", details: [] },
 ];
@@ -345,10 +346,11 @@ async function runResearch() {
   resetTimeline();
   appendTimelineEntry("run started");
   renderAgentStatuses([
-    { agent: "orchestrator", status: "running", action: "parsing query", details: [] },
+    { agent: "parse_intent", status: "running", action: "parsing query", details: [] },
     { agent: "research", status: "idle", action: "waiting", details: [] },
     { agent: "fundamental_analysis", status: "idle", action: "waiting", details: [] },
     { agent: "market_sentiment", status: "idle", action: "waiting", details: [] },
+    { agent: "gap_check", status: "idle", action: "waiting", details: [] },
     { agent: "scenario_scoring", status: "idle", action: "waiting", details: [] },
     { agent: "report_verification", status: "idle", action: "waiting", details: [] },
   ]);
@@ -362,10 +364,11 @@ async function runResearch() {
     resultBox.className = "result-empty error";
     resultBox.textContent = `请求失败: ${error.message}`;
     renderAgentStatuses([
-      { agent: "orchestrator", status: "failed", action: "request failed", details: [error.message] },
+      { agent: "parse_intent", status: "failed", action: "request failed", details: [error.message] },
       { agent: "research", status: "idle", action: "not started", details: [] },
       { agent: "fundamental_analysis", status: "idle", action: "not started", details: [] },
       { agent: "market_sentiment", status: "idle", action: "not started", details: [] },
+      { agent: "gap_check", status: "idle", action: "not started", details: [] },
       { agent: "scenario_scoring", status: "idle", action: "not started", details: [] },
       { agent: "report_verification", status: "idle", action: "not started", details: [] },
     ]);
