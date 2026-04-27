@@ -159,7 +159,7 @@ def scenario_scoring_node(state: ResearchState, *, llm: OpenRouterClient = _defa
     if evidence:
         prompt = _build_prompt(fundamental_analysis, market_sentiment, evidence, intent)
         try:
-            raw = llm.call_with_retry(prompt, system=_SYSTEM)
+            raw = llm.call_with_retry(prompt, system=_SYSTEM, node="scenario_scoring")
             parsed = _parse_llm_scenarios(raw, evidence_ids)
             scenarios = _normalise(parsed)
             llm_used = True

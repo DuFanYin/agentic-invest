@@ -166,7 +166,7 @@ def report_verification_node(state: ResearchState, *, llm: OpenRouterClient = _d
     if evidence:
         prompt = _build_prompt(intent, evidence_dump, fundamental_analysis, market_sentiment, scenarios)
         try:
-            raw = llm.complete_text(prompt, system=_SYSTEM)
+            raw = llm.complete_text(prompt, system=_SYSTEM, node="report_verification")
             if raw and len(raw.strip()) > 100:
                 report_markdown = raw.strip()
                 if errors:

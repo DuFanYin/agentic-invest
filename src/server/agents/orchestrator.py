@@ -29,8 +29,9 @@ from src.server.agents.research import research_node
 from src.server.agents.scenario_scoring import scenario_scoring_node
 from src.server.models.intent import ResearchIntent
 from src.server.models.request import ResearchRequest
-from src.server.models.response import AgentStatus, ResearchResponse, ValidationResult
+from src.server.models.response import AgentStatus, LLMCall, ResearchResponse, ValidationResult
 from src.server.models.state import ResearchState, _RESET
+from src.server.services.collector import LLMCallCollector
 from src.server.services.openrouter import OpenRouterClient
 from src.server.utils.status import initial_agent_statuses, update_status
 
@@ -189,16 +190,29 @@ def build_graph(llm_client: OpenRouterClient | None = None) -> StateGraph:
 
 class OrchestratorAgent:
     def __init__(self, llm_client: OpenRouterClient | None = None) -> None:
-        self.graph = build_graph(llm_client)
+        # llm_client is only set in tests (a MagicMock stub).
+        # Production always leaves this None and gets a fresh client per request.
+        self._test_client = llm_client
+
+    def _client_for_request(self, collector: LLMCallCollector) -> OpenRouterClient:
+        if self._test_client is not None:
+            return self._test_client  # test stub owns its own mock behaviour; collector unused
+        return OpenRouterClient(collector=collector)
 
     def run(self, request: ResearchRequest) -> ResearchResponse:
-        final_state = self.graph.invoke({"query": request.query})
-        return _state_to_response(final_state)
+        collector = LLMCallCollector()
+        client = self._client_for_request(collector)
+        graph = build_graph(client)
+        final_state = graph.invoke({"query": request.query})
+        return _state_to_response(final_state, llm_calls=collector.all())
 
     def run_stream(self, request: ResearchRequest) -> Generator[dict, None, None]:
+        collector = LLMCallCollector()
+        client = self._client_for_request(collector)
+        graph = build_graph(client)
         final_state: ResearchState = {}
 
-        for step in self.graph.stream(
+        for step in graph.stream(
             {"query": request.query},
             stream_mode=["updates", "values"],
         ):
@@ -206,25 +220,22 @@ class OrchestratorAgent:
 
             if mode == "updates":
                 for node_name, delta in payload.items():
+                    for item in collector.drain():
+                        yield {"type": "llm_call", "payload": item.model_dump()}
                     agent_statuses = delta.get("agent_statuses")
                     if agent_statuses:
                         yield {
                             "type": "agent_status",
                             "payload": [s.model_dump() for s in agent_statuses],
                         }
-                    open_questions = delta.get("open_questions") or []
-                    yield {
-                        "type": "state_update",
-                        "payload": {
-                            "node": node_name,
-                            "research_state": {"open_questions": open_questions},
-                        },
-                    }
 
             elif mode == "values":
                 final_state = payload
 
-        response = _state_to_response(final_state)
+        all_llm_calls = collector.all()
+        for item in collector.drain():
+            yield {"type": "llm_call", "payload": item.model_dump()}
+        response = _state_to_response(final_state, llm_calls=all_llm_calls)
         yield {"type": "final", "payload": response}
 
 
@@ -247,7 +258,7 @@ def _parse_intent(query: str, llm_client: OpenRouterClient) -> ResearchIntent:
         f"Query: {query}"
     )
     try:
-        raw = llm_client.complete(prompt)
+        raw = llm_client.complete(prompt, node="parse_intent")
         parsed = json.loads(raw)
         return ResearchIntent(
             intent=parsed.get("intent", "investment_research"),
@@ -270,7 +281,7 @@ def _parse_intent(query: str, llm_client: OpenRouterClient) -> ResearchIntent:
         )
 
 
-def _state_to_response(state: ResearchState) -> ResearchResponse:
+def _state_to_response(state: ResearchState, *, llm_calls: list[LLMCall] | None = None) -> ResearchResponse:
     from src.server.models.analysis import FundamentalAnalysis, MarketSentiment
     fa = state.get("fundamental_analysis")
     ms = state.get("market_sentiment")
@@ -284,4 +295,5 @@ def _state_to_response(state: ResearchState) -> ResearchResponse:
         scenarios=state.get("scenarios") or [],
         agent_statuses=state.get("agent_statuses") or [],
         validation_result=state.get("validation_result") or ValidationResult(),
+        llm_calls=llm_calls or [],
     )

@@ -240,16 +240,29 @@ body[data-variant="dispatch"] .agent-name { font-family: 'DM Sans', sans-serif; 
 .log-box::-webkit-scrollbar-track { background: transparent; }
 .log-box::-webkit-scrollbar-thumb { background: var(--border2); border-radius: 2px; }
 .log-empty { color: var(--dim); font-style: italic; }
+@keyframes fadein { from{opacity:0;transform:translateY(2px)} to{opacity:1;transform:translateY(0)} }
 .log-line {
   display: flex;
-  gap: 8px;
+  align-items: flex-start;
+  gap: 3px;
   animation: fadein 0.2s ease;
 }
-@keyframes fadein { from{opacity:0;transform:translateY(2px)} to{opacity:1;transform:translateY(0)} }
-.log-time { color: var(--dim); flex-shrink: 0; }
-.log-agent { flex-shrink: 0; font-weight: 600; width: 80px; }
-.log-msg { color: var(--text); }
-.log-msg.is-section { color: var(--accent); }
+.log-time {
+  color: var(--dim);
+  flex-shrink: 0;
+  width: 54px;
+}
+.log-agent {
+  flex-shrink: 0;
+  font-weight: 600;
+  width: 58px;
+}
+.log-msg {
+  color: var(--text);
+  flex: 1;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
 
 /* ── Right: Report panel ── */
 .right-panel {

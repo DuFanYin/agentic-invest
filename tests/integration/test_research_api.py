@@ -104,7 +104,7 @@ def test_health_endpoint() -> None:
 # ── research endpoint ──────────────────────────────────────────────────────
 
 def test_research_endpoint_returns_valid_response() -> None:
-    with patch("src.server.routes.research._orchestrator", _patched_orchestrator()):
+    with patch("src.server.routes.research._new_orchestrator", return_value=_patched_orchestrator()):
         client = TestClient(app)
         response = client.post("/research", json={"query": "Analyse NVDA long-term"})
 

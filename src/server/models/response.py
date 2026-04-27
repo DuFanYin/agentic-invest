@@ -52,6 +52,22 @@ class AgentStatus(BaseModel):
     last_error: str | None = None
 
 
+LLMCallStatus: TypeAlias = Literal["calling", "success", "retry", "failed"]
+
+
+class LLMCall(BaseModel):
+    id: str
+    node: str
+    agent_tag: str
+    model: str
+    attempt: int
+    status: LLMCallStatus
+    latency_ms: int | None = None
+    started_at: str | None = None
+    finished_at: str | None = None
+    error: str | None = None
+
+
 class ResearchResponse(BaseModel):
     report_markdown: str
     report_json: dict = Field(default_factory=dict)
@@ -62,3 +78,4 @@ class ResearchResponse(BaseModel):
     scenarios: list[Scenario] = Field(default_factory=list)
     agent_statuses: list[AgentStatus] = Field(default_factory=list)
     validation_result: ValidationResult = Field(default_factory=ValidationResult)
+    llm_calls: list[LLMCall] = Field(default_factory=list)

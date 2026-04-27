@@ -90,7 +90,7 @@ def fundamental_analysis_node(state: ResearchState, *, llm: OpenRouterClient = _
     if evidence:
         prompt = _build_prompt(evidence, metrics, missing_fields, intent)
         try:
-            raw = llm.call_with_retry(prompt, system=_SYSTEM)
+            raw = llm.call_with_retry(prompt, system=_SYSTEM, node="fundamental_analysis")
             parsed = json.loads(raw)
             parsed["metrics"] = metrics
             parsed.setdefault("missing_fields", missing_fields)

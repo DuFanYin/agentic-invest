@@ -16,6 +16,7 @@
 
 <script type="text/babel">
 const { useState, useEffect, useRef, useCallback } = React;
+const STORAGE_KEY = 'agentic-invest-ui-state-v1';
 
 const NOW = () => {
   const d = new Date();
@@ -69,21 +70,21 @@ const deriveExecutionPhase = (agentState, nowMs) => {
   return 'RUNNING';
 };
 
-const formatAgentStatusLog = (s) => {
-  const parts = [];
-  parts.push(`${s.lifecycle || 'unknown'}`);
-  if (s.phase) parts.push(s.phase);
-  if (s.action) parts.push(s.action);
-  if (s.progress_hint) parts.push(`progress ${s.progress_hint}`);
-  if (s.waiting_on) parts.push(`waiting ${s.waiting_on}`);
-  if (typeof s.retry_count === 'number' && typeof s.max_retries === 'number' && s.max_retries > 0) {
-    parts.push(`retry ${s.retry_count}/${s.max_retries}`);
-  }
-  if (s.last_error) parts.push(`error ${s.last_error}`);
-  return parts.join(' · ');
-};
-
 const formatPct = (value) => `${Math.round((Number(value) || 0) * 100)}%`;
+const shortenModel = (model) => {
+  if (!model) return 'unknown-model';
+  const m = model.toLowerCase();
+  if (m.includes('gpt-oss')) return 'gpt-oss';
+  if (m.includes('qwen3')) return 'qwen3';
+  if (m.includes('llama-3.3')) return 'llama3.3';
+  if (m.includes('gemma-3')) return 'gemma3';
+  const base = model.split('/').pop() || model;
+  return base
+    .replace(':free', '')
+    .replace('-a3b-instruct', '')
+    .replace('-instruct', '')
+    .replace('-it', '');
+};
 const firstSentence = (text) => {
   if (!text) return 'N/A';
   const i = text.indexOf('.');
@@ -125,6 +126,31 @@ const revealSections = (setSections) => {
   });
 };
 
+const classifyErrorType = (rawError) => {
+  const msg = String(rawError || '').toLowerCase();
+  if (!msg) return '';
+  if (msg.includes('http 429')) return 'HTTP_429';
+  if (msg.includes('http 5')) return 'HTTP_5XX';
+  if (msg.includes('http 4')) return 'HTTP_4XX';
+  if (msg.includes('invalid json')) return 'INVALID_JSON';
+  if (msg.includes('timeout')) return 'TIMEOUT';
+  if (msg.includes('network')) return 'NETWORK';
+  if (msg.includes('empty content')) return 'EMPTY_CONTENT';
+  if (msg.includes('api error')) return 'API_ERROR';
+  return 'UNKNOWN_ERROR';
+};
+
+const formatLLMCallLog = (item) => {
+  const status = String(item.status || 'unknown').toUpperCase();
+  const model = shortenModel(item.model);
+  const attempt = item.attempt || 1;
+  const attemptText = attempt >= 2 ? ` · attempt ${attempt}` : '';
+  const latency = Number.isFinite(item.latency_ms) ? ` · ${item.latency_ms}ms` : '';
+  const errorType = classifyErrorType(item.error);
+  const error = errorType ? ` · ${errorType}` : '';
+  return `[${status}] ${model}${attemptText}${latency}${error}`;
+};
+
 function AgentRow({ agent, lifecycle, phase, action, waitingOn, progressHint, lastUpdateAt, nowMs }) {
   const currentLifecycle = lifecycle || 'standby';
   const label = deriveExecutionPhase({ lifecycle: currentLifecycle, waiting_on: waitingOn, last_update_at: lastUpdateAt }, nowMs);
@@ -155,14 +181,14 @@ function AgentRow({ agent, lifecycle, phase, action, waitingOn, progressHint, la
   );
 }
 
-function LogLine({ time, agentId, msg, isSection }) {
+function LogLine({ time, agentId, msg }) {
   const agent = AGENTS.find(a => a.id === agentId);
   return (
     <div className="log-line">
       <span className="log-time">{time}</span>
       {agent && <span className="log-agent" style={{color: agent.color}}>[{agent.name.slice(0,6).toUpperCase()}]</span>}
       {!agent && <span className="log-agent" style={{color:'var(--accent)'}}>[SYSTEM]</span>}
-      <span className={`log-msg${isSection ? ' is-section' : ''}`}>{msg}</span>
+      <span className="log-msg">{msg}</span>
     </div>
   );
 }
@@ -326,23 +352,20 @@ function App() {
   const [logLines, setLogLines] = useState([]);
   const [sections, setSections] = useState(new Set());
   const [reportData, setReportData] = useState(null);
-  const [streamError, setStreamError] = useState('');
-  const [openQuestionsCount, setOpenQuestionsCount] = useState(0);
+  const [llmCalls, setLlmCalls] = useState([]);
   const [nowMs, setNowMs] = useState(Date.now());
   const logRef = useRef(null);
-  const lastAgentLogSigRef = useRef({});
-  const appendLog = useCallback((agentId, msg, isSection = false, timestamp = NOW()) => {
-    setLogLines(prev => [...prev, { time: timestamp, agentId, msg, isSection }]);
-  }, []);
+  const streamResearchRef = useRef(null);
+  const hydratedRef = useRef(false);
 
   const applyAgentStatuses = useCallback((statuses) => {
     if (!Array.isArray(statuses)) return;
-    setAgentStatuses(() => {
-      const mapped = {};
+    setAgentStatuses((prev) => {
+      const merged = { ...prev };
       statuses.forEach((item) => {
         const id = AGENT_ID_BY_NAME[item.agent];
         if (!id) return;
-        mapped[id] = {
+        merged[id] = {
           lifecycle: item.lifecycle,
           phase: item.phase,
           action: item.action,
@@ -351,7 +374,7 @@ function App() {
           last_update_at: item.last_update_at || '',
         };
       });
-      return mapped;
+      return merged;
     });
   }, []);
 
@@ -402,55 +425,28 @@ function App() {
         return;
       }
 
-      if (eventName === 'timeline') {
-        const ts = parsed?.timestamp ? new Date(parsed.timestamp).toTimeString().slice(0, 8) : NOW();
-        if (parsed?.event === 'agent_status' && Array.isArray(parsed.payload)) {
-          parsed.payload.forEach((s) => {
-            const id = AGENT_ID_BY_NAME[s.agent] || null;
-            const key = id || s.agent || 'system';
-            const signature = JSON.stringify({
-              lifecycle: s.lifecycle || '',
-              phase: s.phase || '',
-              action: s.action || '',
-              progress_hint: s.progress_hint || '',
-              waiting_on: s.waiting_on || '',
-              retry_count: typeof s.retry_count === 'number' ? s.retry_count : null,
-              max_retries: typeof s.max_retries === 'number' ? s.max_retries : null,
-              last_error: s.last_error || '',
-            });
-            if (lastAgentLogSigRef.current[key] === signature) return;
-            lastAgentLogSigRef.current[key] = signature;
-            appendLog(id, formatAgentStatusLog(s), false, ts);
-          });
-        } else if (parsed?.event === 'state_update') {
-          const count = parsed?.payload?.research_state?.open_questions?.length || 0;
-          const extra = count > 0 ? ` · awaiting evidence clarification` : '';
-          appendLog(null, `open questions: ${count}${extra}`, false, ts);
-        }
-        return;
-      }
-
-      if (eventName === 'state_update') {
-        const count = parsed?.research_state?.open_questions?.length || 0;
-        setOpenQuestionsCount(count);
-        return;
-      }
-
       if (eventName === 'error') {
-        const node = parsed?.node || 'unknown';
         const message = parsed?.message || 'Unknown stream error';
         gotError = true;
         setAppState('error');
-        setStreamError(message);
-        appendLog(null, `node ${node} failed: ${message}`);
+        setLogLines((prev) => [...prev, { time: NOW(), agentId: null, msg: `error: ${message}` }]);
+        return;
+      }
+
+      if (eventName === 'llm_call') {
+        setLlmCalls((prev) => [...prev, parsed]);
+        const agentId = parsed?.agent_tag || AGENT_ID_BY_NAME[parsed?.node] || null;
+        setLogLines((prev) => [...prev, { time: NOW(), agentId, msg: formatLLMCallLog(parsed) }]);
         return;
       }
 
       if (eventName === 'final') {
         gotFinal = true;
         setReportData(parsed);
+        if (Array.isArray(parsed?.llm_calls) && parsed.llm_calls.length > 0) {
+          setLlmCalls(parsed.llm_calls);
+        }
         setAppState('complete');
-        appendLog(null, '── Section reveal started ──', true);
         revealSections(setSections);
         return;
       }
@@ -472,30 +468,82 @@ function App() {
     if (!gotFinal && !gotError) {
       throw new Error('Stream ended without final report.');
     }
-  }, [appendLog, applyAgentStatuses]);
+  }, [applyAgentStatuses]);
+  streamResearchRef.current = streamResearch;
 
   const runResearch = useCallback(async () => {
     const trimmed = query.trim();
     if (!trimmed) return;
 
     setAppState('running');
-    setLogLines([]);
     setSections(new Set());
     setAgentStatuses({});
+    setLogLines([]);
     setReportData(null);
-    setStreamError('');
-    setOpenQuestionsCount(0);
-    lastAgentLogSigRef.current = {};
-    appendLog(null, 'run started');
+    setLlmCalls([]);
 
     try {
       await streamResearch(trimmed);
     } catch (error) {
       setAppState('error');
-      setStreamError(error.message || 'Unknown stream error');
-      appendLog(null, `run failed: ${error.message || 'Unknown stream error'}`);
+      setLogLines((prev) => [...prev, { time: NOW(), agentId: null, msg: `run failed: ${error.message || 'Unknown stream error'}` }]);
     }
-  }, [appendLog, query, streamResearch]);
+  }, [query, streamResearch]);
+
+  // hydrate UI snapshot after refresh
+  useEffect(() => {
+    if (hydratedRef.current) return;
+    hydratedRef.current = true;
+    try {
+      const raw = localStorage.getItem(STORAGE_KEY);
+      if (!raw) return;
+      const snap = JSON.parse(raw);
+      if (typeof snap.query === 'string') setQuery(snap.query);
+      if (snap.agentStatuses && typeof snap.agentStatuses === 'object') setAgentStatuses(snap.agentStatuses);
+      if (Array.isArray(snap.logLines)) setLogLines(snap.logLines);
+      if (Array.isArray(snap.llmCalls)) setLlmCalls(snap.llmCalls);
+      if (snap.reportData && typeof snap.reportData === 'object') setReportData(snap.reportData);
+      if (Array.isArray(snap.sections)) setSections(new Set(snap.sections));
+      if (typeof snap.appState === 'string') setAppState(snap.appState);
+
+      // best-effort connection resume: restart stream with prior query
+      if (snap.appState === 'running' && typeof snap.query === 'string' && snap.query.trim()) {
+        setLogLines((prev) => [
+          ...prev,
+          { time: NOW(), agentId: null, msg: 'page refreshed · reconnecting stream' },
+        ]);
+        setTimeout(() => {
+          streamResearchRef.current?.(snap.query.trim()).catch((err) => {
+            setAppState('error');
+            setLogLines((prev) => [
+              ...prev,
+              { time: NOW(), agentId: null, msg: `reconnect failed: ${err?.message || 'unknown error'}` },
+            ]);
+          });
+        }, 100);
+      }
+    } catch (_e) {
+      // ignore bad persisted snapshot
+    }
+  }, []);
+
+  // persist UI snapshot continuously
+  useEffect(() => {
+    try {
+      const snapshot = {
+        appState,
+        query,
+        agentStatuses,
+        logLines,
+        llmCalls,
+        reportData,
+        sections: Array.from(sections),
+      };
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(snapshot));
+    } catch (_e) {
+      // ignore storage quota / serialization errors
+    }
+  }, [appState, query, agentStatuses, logLines, llmCalls, reportData, sections]);
 
   // Auto-scroll log
   useEffect(() => {
@@ -518,6 +566,8 @@ function App() {
     return phase === 'WAITING';
   }).length;
   const isValid = reportData?.validation_result?.is_valid;
+  const llmCalling = llmCalls.filter(c => c.status === 'calling').length;
+  const llmFailed = llmCalls.filter(c => c.status === 'failed').length;
 
   const validationBadge = sections.has('summary') ? (
     <div className={`validation-bar ${isValid ? 'valid' : 'review'}`}>
@@ -577,22 +627,16 @@ function App() {
           </div>
           <div className="log-area">
             <div className="panel-header">
-              <span className="panel-label">Output Log</span>
-              <span className="panel-count">{logLines.length} events</span>
+              <span className="panel-label">Model Calls</span>
+              <span className="panel-count">{llmCalls.length} calls · {llmCalling} calling · {llmFailed} failed</span>
             </div>
             <div className="log-box" ref={logRef}>
               {logLines.length === 0 && (
-                <span className="log-empty">Awaiting query…</span>
+                <span className="log-empty">Awaiting model calls…</span>
               )}
               {logLines.map((l, i) => (
-                <LogLine key={i} time={l.time} agentId={l.agentId} msg={l.msg} isSection={l.isSection} />
+                <LogLine key={i} time={l.time} agentId={l.agentId} msg={l.msg} />
               ))}
-              {openQuestionsCount > 0 && (
-                <LogLine time={NOW()} agentId={null} msg={`open questions pending: ${openQuestionsCount}`} />
-              )}
-              {streamError && (
-                <LogLine time={NOW()} agentId={null} msg={`error: ${streamError}`} />
-              )}
             </div>
           </div>
         </div>

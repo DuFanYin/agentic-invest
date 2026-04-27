@@ -6,9 +6,14 @@ Strategy
 - Primary model: openai/gpt-oss-120b:free  (higher quality default)
 - Fallback chain: qwen/qwen3-next-80b-a3b-instruct:free → meta-llama/llama-3.3-70b-instruct:free → google/gemma-3-27b-it:free
 - Per-model: up to 2 retries with 2 s exponential backoff on 429 / 5xx
-- complete()      — enforces response_format json_object; validates JSON before returning
-- complete_text() — free-form text (Markdown reports); skips JSON mode and validation
+- complete()       — enforces response_format json_object; validates JSON before returning
+- complete_text()  — free-form text (Markdown reports); skips JSON mode and validation
 - call_with_retry() — agent-level retry wrapper over complete()
+
+Telemetry
+─────────
+Pass a LLMCallCollector at construction time to capture call events.
+The client itself holds no mutable call state — isolation is the collector's job.
 """
 
 from __future__ import annotations
@@ -17,15 +22,21 @@ import json
 import logging
 import re
 import time
+from datetime import UTC, datetime
+from typing import TYPE_CHECKING
 
 import httpx
 
+from src.server.models.response import LLMCall
 from src.server.config import (
     OPENROUTER_API_KEY,
     OPENROUTER_APP_TITLE,
     OPENROUTER_BASE_URL,
     OPENROUTER_HTTP_REFERER,
 )
+
+if TYPE_CHECKING:
+    from src.server.services.collector import LLMCallCollector
 
 logger = logging.getLogger(__name__)
 
@@ -37,6 +48,14 @@ _FREE_MODELS = [
 ]
 
 _RETRYABLE_CODES = {429, 500, 502, 503, 504}
+_AGENT_TAG_BY_NODE = {
+    "parse_intent": "O",
+    "research": "R",
+    "fundamental_analysis": "F",
+    "market_sentiment": "M",
+    "scenario_scoring": "S",
+    "report_verification": "V",
+}
 
 
 def _strip_fences(text: str) -> str:
@@ -56,30 +75,29 @@ class OpenRouterClient:
         timeout_seconds: float = 30.0,
         max_retries: int = 2,
         retry_backoff: float = 2.0,
+        collector: LLMCallCollector | None = None,
     ) -> None:
         self.api_key = api_key or OPENROUTER_API_KEY
-        if model:
-            self._models = [model]
-        else:
-            self._models = _FREE_MODELS
+        self._models = [model] if model else _FREE_MODELS
         self.base_url = base_url.rstrip("/")
         self.timeout_seconds = timeout_seconds
         self.max_retries = max_retries
         self.retry_backoff = retry_backoff
+        self._collector = collector  # None → telemetry disabled
 
     # ── public API ─────────────────────────────────────────────────────────
 
-    def complete(self, prompt: str, *, system: str | None = None) -> str:
+    def complete(self, prompt: str, *, system: str | None = None, node: str = "unknown") -> str:
         """Send prompt, return validated JSON string. Raises RuntimeError on exhaustion."""
-        return self._run(prompt, system=system, json_mode=True)
+        return self._run(prompt, system=system, json_mode=True, node=node)
 
-    def complete_json(self, prompt: str, *, system: str | None = None) -> dict:
+    def complete_json(self, prompt: str, *, system: str | None = None, node: str = "unknown") -> dict:
         """Convenience wrapper — parse and return the JSON dict directly."""
-        return json.loads(self.complete(prompt, system=system))
+        return json.loads(self.complete(prompt, system=system, node=node))
 
-    def complete_text(self, prompt: str, *, system: str | None = None) -> str:
+    def complete_text(self, prompt: str, *, system: str | None = None, node: str = "unknown") -> str:
         """Send prompt, return raw text (no JSON enforcement). For Markdown reports."""
-        return self._run(prompt, system=system, json_mode=False)
+        return self._run(prompt, system=system, json_mode=False, node=node)
 
     def call_with_retry(
         self,
@@ -87,16 +105,16 @@ class OpenRouterClient:
         *,
         system: str | None = None,
         attempts: int = 2,
+        node: str = "unknown",
     ) -> str:
         """
         Call complete() up to `attempts` times, swallowing per-attempt errors.
         Raises RuntimeError only after all attempts fail.
-        Agents use this instead of rolling their own retry loop.
         """
         last_exc: Exception | None = None
         for attempt in range(1, attempts + 1):
             try:
-                return self.complete(prompt, system=system)
+                return self.complete(prompt, system=system, node=node)
             except Exception as exc:
                 last_exc = exc
                 logger.warning("call_with_retry attempt %d/%d failed: %s", attempt, attempts, exc)
@@ -115,7 +133,16 @@ class OpenRouterClient:
             h["X-Title"] = OPENROUTER_APP_TITLE
         return h
 
-    def _run(self, prompt: str, *, system: str | None, json_mode: bool) -> str:
+    def _emit(self, call: LLMCall) -> None:
+        if self._collector is not None:
+            self._collector.record(call)
+
+    def _next_id(self) -> str:
+        if self._collector is not None:
+            return self._collector.next_id()
+        return "llm_notrace"
+
+    def _run(self, prompt: str, *, system: str | None, json_mode: bool, node: str) -> str:
         if not self.api_key:
             raise RuntimeError(
                 "OPENROUTER_API_KEY is not set. "
@@ -126,11 +153,41 @@ class OpenRouterClient:
 
         for model_id in self._models:
             for attempt in range(1, self.max_retries + 2):
+                call_id = self._next_id()
+                started_at = datetime.now(UTC).isoformat()
+
+                self._emit(LLMCall(
+                    id=call_id, node=node,
+                    agent_tag=_AGENT_TAG_BY_NODE.get(node, "?"),
+                    model=model_id, attempt=attempt,
+                    status="calling", started_at=started_at,
+                ))
+
                 try:
                     content = self._call(model_id, prompt, system=system, json_mode=json_mode)
+                    finished_at = datetime.now(UTC).isoformat()
+                    self._emit(LLMCall(
+                        id=call_id, node=node,
+                        agent_tag=_AGENT_TAG_BY_NODE.get(node, "?"),
+                        model=model_id, attempt=attempt,
+                        status="success",
+                        latency_ms=_latency_ms(started_at, finished_at),
+                        started_at=started_at, finished_at=finished_at,
+                    ))
                     return content
+
                 except _RetryableError as exc:
                     last_error = exc
+                    finished_at = datetime.now(UTC).isoformat()
+                    self._emit(LLMCall(
+                        id=call_id, node=node,
+                        agent_tag=_AGENT_TAG_BY_NODE.get(node, "?"),
+                        model=model_id, attempt=attempt,
+                        status="retry",
+                        latency_ms=_latency_ms(started_at, finished_at),
+                        started_at=started_at, finished_at=finished_at,
+                        error=str(exc)[:200],
+                    ))
                     if attempt <= self.max_retries:
                         wait = self.retry_backoff ** attempt
                         logger.warning(
@@ -140,8 +197,19 @@ class OpenRouterClient:
                         time.sleep(wait)
                     else:
                         logger.warning("model %s exhausted retries, trying next", model_id)
+
                 except _FatalError as exc:
                     last_error = exc
+                    finished_at = datetime.now(UTC).isoformat()
+                    self._emit(LLMCall(
+                        id=call_id, node=node,
+                        agent_tag=_AGENT_TAG_BY_NODE.get(node, "?"),
+                        model=model_id, attempt=attempt,
+                        status="failed",
+                        latency_ms=_latency_ms(started_at, finished_at),
+                        started_at=started_at, finished_at=finished_at,
+                        error=str(exc)[:200],
+                    ))
                     logger.warning("model %s fatal error: %s — skipping", model_id, exc)
                     break
 
@@ -209,6 +277,19 @@ class OpenRouterClient:
                 raise _RetryableError(f"invalid JSON from model: {content[:120]}") from exc
 
         return content
+
+
+# ── helpers ────────────────────────────────────────────────────────────────
+
+def _latency_ms(started_at: str, finished_at: str) -> int:
+    try:
+        delta = (
+            datetime.fromisoformat(finished_at.replace("Z", "+00:00"))
+            - datetime.fromisoformat(started_at.replace("Z", "+00:00"))
+        ).total_seconds()
+        return max(0, int(delta * 1000))
+    except Exception:
+        return 0
 
 
 # ── internal exception types ───────────────────────────────────────────────

@@ -12,7 +12,8 @@ from src.server.utils.status import AGENT_NAMES
 
 router = APIRouter()
 
-_orchestrator = OrchestratorAgent()
+def _new_orchestrator() -> OrchestratorAgent:
+    return OrchestratorAgent()
 
 _FAILED_PHASE_BY_AGENT = {
     "parse_intent": "planning",
@@ -75,15 +76,16 @@ def _fallback_statuses(message: str) -> list[dict]:
 
 @router.post("/research", response_model=ResearchResponse)
 def run_research(request: ResearchRequest) -> ResearchResponse:
-    return _orchestrator.run(request)
+    return _new_orchestrator().run(request)
 
 
 @router.post("/research/stream")
 def run_research_stream(request: ResearchRequest) -> StreamingResponse:
     def event_stream():
+        orchestrator = _new_orchestrator()
         last_agent_statuses: list[dict] = []
         try:
-            for event in _orchestrator.run_stream(request):
+            for event in orchestrator.run_stream(request):
                 payload = event["payload"]
                 if hasattr(payload, "model_dump"):
                     payload = payload.model_dump()

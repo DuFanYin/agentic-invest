@@ -82,7 +82,7 @@ def market_sentiment_node(state: ResearchState, *, llm: OpenRouterClient = _defa
     if evidence:
         prompt = _build_prompt(news_evidence, price_history, all_evidence_ids)
         try:
-            raw = llm.call_with_retry(prompt, system=_SYSTEM)
+            raw = llm.call_with_retry(prompt, system=_SYSTEM, node="market_sentiment")
             parsed = json.loads(raw)
             result = MarketSentiment.model_validate(parsed)
         except Exception as exc:
