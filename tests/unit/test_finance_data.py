@@ -265,7 +265,8 @@ def test_get_financials_exception_returns_fallback():
     with patch("yfinance.Ticker", side_effect=RuntimeError("timeout")):
         fin = client.get_financials("NVDA")
 
-    assert fin["ttm"] == {}
+    assert isinstance(fin["ttm"], dict)
+    assert fin["ttm"]["revenue"] is None
     assert fin["missing_fields"] == ["all — data unavailable"]
     assert "error" in fin
 

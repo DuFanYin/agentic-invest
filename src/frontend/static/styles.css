@@ -379,16 +379,43 @@ body[data-variant="dispatch"] .section-body { font-size: 14px; line-height: 1.8;
 .intent-key { color: var(--muted); }
 .intent-val { color: var(--accent); }
 
-/* Evidence cards */
-.evidence-list { display: flex; flex-direction: column; gap: 8px; }
-.evidence-card {
-  padding: 10px 14px;
+/* Evidence table */
+.evidence-table-wrap {
   border: 1px solid var(--border);
   border-radius: var(--radius);
+  overflow: auto;
   background: var(--surface);
-  display: flex;
-  align-items: flex-start;
-  gap: 12px;
+}
+.evidence-table {
+  width: 100%;
+  border-collapse: collapse;
+  min-width: 640px;
+}
+.evidence-table th,
+.evidence-table td {
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--border);
+  text-align: left;
+  vertical-align: top;
+  font-size: 12px;
+}
+.evidence-table th {
+  font-family: var(--font-log);
+  font-size: 10px;
+  letter-spacing: 0.06em;
+  color: var(--muted);
+  text-transform: uppercase;
+}
+.evidence-table tr:last-child td {
+  border-bottom: none;
+}
+.evidence-table td a {
+  color: var(--text);
+  text-decoration: none;
+}
+.evidence-table td a:hover {
+  color: var(--accent);
+  text-decoration: underline;
 }
 .ev-reliability {
   flex-shrink: 0;

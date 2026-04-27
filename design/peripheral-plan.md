@@ -14,11 +14,11 @@ This document defines the peripheral specification for the investment research s
   - Valuation perspective
   - Bull vs Bear viewpoints
   - Future scenario analysis (at least 3 scenarios)
-  - Scenario probability scores (sum of all scenario `score` values must equal 1)
+  - Scenario probabilities (sum of all scenario `probability` values must equal 1)
   - Key risks
   - Final conclusion summary (not financial advice)
   - Source links
-- Interaction model: FastAPI + Vanilla HTML page (no frontend framework)
+- Interaction model: FastAPI + React-in-HTML frontend (no build step)
 
 ### Out of Scope
 - Real-time trade execution
@@ -29,7 +29,7 @@ This document defines the peripheral specification for the investment research s
 ## 3) Technical Stack
 
 - Backend: Python + FastAPI
-- Frontend: Vanilla HTML + native JavaScript (calls backend via `fetch`)
+- Frontend: React-in-HTML (`index.html` inline Babel + React/ReactDOM CDN)
 - Agent orchestration: LangGraph or equivalent custom orchestrator
 - LLM adapter: OpenRouter API client
 - Data sources: public financial APIs + news sources
@@ -42,20 +42,20 @@ This document defines the peripheral specification for the investment research s
 - `POST /research`
   - request: `{ "query": "..." }`
   - note: frontend submits only `query`; `ticker`, `horizon`, and `risk_level` are inferred by the Orchestrator
-  - response: `{ "report_markdown": "...", "report_json": {...}, "intent": {...}, "evidence": [...], "fundamental_analysis": {...}, "market_sentiment": {...}, "scenarios": [...], "agent_statuses": [...], "validation_result": {...} }`
+  - response: typed `ResearchResponse` JSON (includes `report_markdown`, `report_json`, `intent`, `evidence`, `fundamental_analysis`, `market_sentiment`, `scenarios`, `agent_statuses`, `validation_result`, `llm_calls`)
 - `POST /research/stream`
   - request: `{ "query": "..." }`
   - response: `text/event-stream`
   - events:
     - `agent_status`: each agent's `status/action/details`
-    - `state_update`: shared `research_state` stage updates (intent/evidence/analysis/scenarios/open_questions/validation_result)
-    - `timeline`: timestamped event record for frontend timeline
+    - `llm_call`: real-time LLM call telemetry (`calling/success/retry/failed`)
     - `final`: final full report object (same shape as `POST /research`)
+    - `error`: terminal error payload when stream execution fails
     - `done`: stream completion marker
 - `GET /`
-  - returns a Vanilla HTML page with query form and result area
+  - returns HTML page with React app mounted in `#root`
 
-### UI Interaction Rules (Vanilla HTML)
+### UI Interaction Rules (React-in-HTML)
 - Inputs:
   - `query` (single input)
   - `ticker`, `horizon`, `risk_level` are not shown in the frontend form
@@ -63,14 +63,14 @@ This document defines the peripheral specification for the investment research s
 - UI includes:
   - Global status (`Idle/Running/Complete/Error`)
   - Agent Status panel (each agent's current status and action)
-  - Timeline (event history + timestamps)
+  - Model-call log stream (event history + timestamps)
   - Final result area (Summary, Intent, Evidence, Fundamental Analysis, Market Sentiment, Scenarios, Validation)
-- UI performs score validation: if scenario `score` sum is not 1, show error and mark result for review
+- UI performs probability validation: if scenario `probability` sum is not 1, show error and mark result for review
 
 ## 5) Quality and Evaluation Mapping
 
 - Correctness: key conclusions must be evidence-backed and pass data consistency checks
-- Scenario quality: scenarios are complete, probabilities are explainable, and `sum(score) = 1`
+- Scenario quality: scenarios are complete, probabilities are explainable, and `sum(probability) = 1`
 - Modularity: clean responsibility separation, stable interfaces, clear boundaries
 - Testability: tool layer, parsing layer, and validation layer are repeatably testable
 - Code quality: typed models, explicit interfaces, isolated services

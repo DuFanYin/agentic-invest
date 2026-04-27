@@ -48,29 +48,17 @@ def validate_evidence_completeness(evidence: list[dict]) -> list[str]:
 
 
 def validate_claim_coverage(
-    analysis: FundamentalAnalysis | MarketSentiment | dict,
+    analysis: FundamentalAnalysis | MarketSentiment,
     available_evidence_ids: set[str],
 ) -> list[str]:
     errors: list[str] = []
-
-    if isinstance(analysis, (FundamentalAnalysis, MarketSentiment)):
-        claims = analysis.claims
-        for claim in claims:
-            if not claim.evidence_ids:
-                errors.append(f"Claim missing evidence: {claim.statement}")
-                continue
-            missing_refs = [ref for ref in claim.evidence_ids if ref not in available_evidence_ids]
-            if missing_refs:
-                errors.append(f"Claim references unknown evidence ids: {', '.join(missing_refs)}")
-    else:
-        # fallback for plain dict (e.g. in tests that haven't migrated yet)
-        for claim in analysis.get("claims", []):
-            claim_evidence = claim.get("evidence_ids", [])
-            if not claim_evidence:
-                errors.append(f"Claim missing evidence: {claim.get('statement', 'unknown')}")
-                continue
-            missing_refs = [ref for ref in claim_evidence if ref not in available_evidence_ids]
-            if missing_refs:
-                errors.append(f"Claim references unknown evidence ids: {', '.join(missing_refs)}")
+    claims = analysis.claims
+    for claim in claims:
+        if not claim.evidence_ids:
+            errors.append(f"Claim missing evidence: {claim.statement}")
+            continue
+        missing_refs = [ref for ref in claim.evidence_ids if ref not in available_evidence_ids]
+        if missing_refs:
+            errors.append(f"Claim references unknown evidence ids: {', '.join(missing_refs)}")
 
     return errors

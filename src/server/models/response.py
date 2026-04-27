@@ -28,6 +28,7 @@ AgentPhase: TypeAlias = Literal[
 
 from src.server.models.evidence import Evidence
 from src.server.models.intent import ResearchIntent
+from src.server.models.analysis import FundamentalAnalysis, MarketSentiment
 from src.server.models.scenario import Scenario
 
 
@@ -73,8 +74,8 @@ class ResearchResponse(BaseModel):
     report_json: dict = Field(default_factory=dict)
     intent: ResearchIntent | None = None
     evidence: list[Evidence] = Field(default_factory=list)
-    fundamental_analysis: dict = Field(default_factory=dict)
-    market_sentiment: dict = Field(default_factory=dict)
+    fundamental_analysis: FundamentalAnalysis | None = None
+    market_sentiment: MarketSentiment | None = None
     scenarios: list[Scenario] = Field(default_factory=list)
     agent_statuses: list[AgentStatus] = Field(default_factory=list)
     validation_result: ValidationResult = Field(default_factory=ValidationResult)

@@ -1,18 +1,31 @@
 """Shared helper for mutating AgentStatus lists."""
 
+from dataclasses import dataclass
 from datetime import UTC, datetime
 
 from src.server.models.response import AgentLifecycle, AgentPhase, AgentStatus
 
-AGENT_NAMES = [
-    "parse_intent",
-    "research",
-    "fundamental_analysis",
-    "market_sentiment",
-    "gap_check",
-    "scenario_scoring",
-    "report_verification",
-]
+
+@dataclass(frozen=True)
+class AgentMeta:
+    name: str
+    tag: str
+    failed_phase: AgentPhase
+
+
+AGENT_REGISTRY: tuple[AgentMeta, ...] = (
+    AgentMeta(name="parse_intent", tag="O", failed_phase="planning"),
+    AgentMeta(name="research", tag="R", failed_phase="collecting_evidence"),
+    AgentMeta(name="fundamental_analysis", tag="F", failed_phase="analyzing_fundamentals"),
+    AgentMeta(name="market_sentiment", tag="M", failed_phase="analyzing_sentiment"),
+    AgentMeta(name="gap_check", tag="G", failed_phase="evaluating_gaps"),
+    AgentMeta(name="scenario_scoring", tag="S", failed_phase="scoring_scenarios"),
+    AgentMeta(name="report_verification", tag="V", failed_phase="generating_report"),
+)
+
+AGENT_NAMES: list[str] = [item.name for item in AGENT_REGISTRY]
+AGENT_TAG_BY_NODE: dict[str, str] = {item.name: item.tag for item in AGENT_REGISTRY}
+FAILED_PHASE_BY_AGENT: dict[str, AgentPhase] = {item.name: item.failed_phase for item in AGENT_REGISTRY}
 
 
 def initial_agent_statuses(*, running: str = "") -> list[AgentStatus]:

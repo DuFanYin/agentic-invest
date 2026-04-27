@@ -14,7 +14,7 @@ Shared Research State
 ├── normalized_data
 ├── fundamental_analysis
 ├── market_sentiment
-├── agent_questions[]        ← appended from parallel analysis nodes (operator.add)
+├── agent_questions[]        ← appended from parallel analysis nodes (_accumulate_or_reset)
 ├── scenarios[]
 ├── open_questions[]         ← replaced each cycle (plain assign, not accumulated)
 ├── research_pass            ← incremented by Research Agent; read by gap_check
@@ -29,7 +29,7 @@ Core principles:
 - Every key conclusion must be traceable to evidence.
 - Agents exchange structured objects instead of long free-form text.
 - Agents do not run in a rigid sequence; they can work in parallel and request additional data when gaps are detected.
-- Final output must pass validation, especially citation integrity, data completeness, and scenario probability checks (`sum(score)=1`).
+- Final output must pass validation, especially citation integrity, data completeness, and scenario probability checks (`sum(probability)=1`).
 - Query types are not hardcoded. The Orchestrator dynamically infers intent, subject, time horizon, and required data.
 
 ## 2) Core Inputs and Outputs
@@ -52,7 +52,7 @@ Output:
 - `evidence[]`: core evidence used by the system
 - `fundamental_analysis`: business quality, financial performance, valuation, and fundamental risk analysis
 - `market_sentiment`: news, market narrative, price action, and investor sentiment analysis
-- `scenarios[]`: forward-looking scenarios; all `score` values must sum to 1
+- `scenarios[]`: forward-looking scenarios; all `probability` values must sum to 1
 - `validation_result`: final validation summary, including missing fields, citation coverage, and probability checks
 
 ## 3) Core Data Objects
@@ -120,7 +120,7 @@ Core flow:
 - `fundamental_analysis` and `market_sentiment` run **in parallel** after each research pass.
 - `gap_check` merges structural gaps (e.g. missing ticker/horizon), analysis-node `agent_questions`, and research conflict signals (`normalized_data.conflicts`) to decide whether to retry.
 - If gaps remain and `research_pass < 2`, the graph loops back to `research` for a supplementary pass.
-- `scenario_scoring` runs once gaps are resolved; scores are normalised in Python before constructing Scenario objects.
+- `scenario_scoring` runs once gaps are resolved; probabilities are normalised in Python before constructing `Scenario` objects.
 - `report_verification` generates the Markdown report via LLM, then runs pure-Python validation. Validation errors are appended as `## Validation Warnings`.
 - If validation detects unsupported/missing evidence references and retry budget remains (`research_pass < 2`), the graph re-routes to `research`; otherwise it terminates.
 - Scenario/report nodes do not use synthetic success fallbacks: if LLM output is unavailable/invalid for those nodes, they raise runtime errors instead of producing stub "successful" artifacts.
@@ -152,7 +152,7 @@ START → parse_intent → research → fundamental_analysis ──┐          
 
 State mutation rules:
 - `evidence[]`: `operator.add` — each research pass appends; never overwritten.
-- `agent_questions[]`: `operator.add` — parallel analysis nodes append missing-field questions; `gap_check` drains and resets for the next cycle.
+- `agent_questions[]`: `_accumulate_or_reset` — parallel analysis nodes append missing-field questions; `gap_check` drains and resets via sentinel for the next cycle.
 - `open_questions[]`: plain replace — `gap_check` resets to the current cycle's list; accumulation would break the termination check.
 - `agent_statuses[]`: `_last_list` custom reducer — both parallel analysis nodes write this field in the same graph step; plain LastValue would raise `InvalidUpdateError`. The reducer merges per-agent updates and prefers newer `last_update_at` snapshots.
 
@@ -219,14 +219,14 @@ State mutation rules:
 ### Scenario Scoring Agent
 
 - Build forward-looking scenario states (3-5 distinct futures), with directional tags as metadata rather than primary buckets
-- Assign probability `score` (0-1) to each scenario
-- Normalize scores before output to ensure total `score` sum is 1
+- Assign probability `probability` (0-1) to each scenario
+- Normalize probabilities before output to ensure total `probability` sum is 1
 - Include key triggers and validation signals for each scenario
 - Input: `evidence[]` + `normalized_data` + `fundamental_analysis` + `market_sentiment`
-- Output: `scenarios[]` (`name/description/score/triggers/signals/evidence_ids`)
+- Output: `scenarios[]` (`name/description/probability/triggers/signals/evidence_ids`)
 - Key strategies:
   - Keep at least 3 mutually exclusive scenarios
-  - Enforce `abs(sum(scores) - 1) < 1e-6`
+  - Enforce `abs(sum(probabilities) - 1) < 1e-6`
   - Recompute when core assumptions change
   - State assumptions, triggers, and validation signals
 

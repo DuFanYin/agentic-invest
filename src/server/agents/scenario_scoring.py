@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 import logging
-from json import JSONDecodeError
 
 from src.server.models.analysis import FundamentalAnalysis, MarketSentiment
 from src.server.models.scenario import Scenario
@@ -168,18 +167,12 @@ async def scenario_scoring_node(
     if evidence:
         prompt = _build_prompt(fundamental_analysis, market_sentiment, evidence, intent)
         try:
-            raw = await llm.call_with_retry(prompt, system=_SYSTEM, node="scenario_scoring")
+            raw = await llm.call_with_retry(prompt, system=_SYSTEM, node=_NODE)
             parsed = _parse_llm_scenarios(raw, evidence_ids)
             scenarios = _normalise(parsed)
             llm_used = True
-        except JSONDecodeError as exc:
-            logger.warning("scenario_scoring: LLM returned invalid JSON — %s", exc)
-        except ValueError as exc:
-            logger.warning("scenario_scoring: scenario structure invalid — %s", exc)
-        except RuntimeError as exc:
-            logger.warning("scenario_scoring: LLM exhausted all models — %s", exc)
         except Exception as exc:
-            logger.warning("scenario_scoring: unexpected error — %s", exc)
+            logger.warning("%s: LLM step failed — %s", _NODE, exc)
 
     if scenarios is None:
         msg = f"[{_NODE}] unable to generate scenarios from LLM output"

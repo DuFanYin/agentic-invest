@@ -30,11 +30,10 @@ def _cache_key(prefix: str, *parts: str) -> str:
     return f"{prefix}:{hashlib.sha256(payload.encode()).hexdigest()[:16]}"
 
 
-def _detect_conflicts(evidence: list[Evidence], metrics: dict) -> list[dict]:
+def _detect_conflicts(evidence: list[Evidence]) -> list[dict]:
     """
     Detect factual conflicts across evidence items.
-    Currently checks: duplicate topics with contradictory reliability signals,
-    and numeric metric divergence between info-level and financials-level data.
+    Currently checks: duplicate topics with contradictory reliability signals.
     Returns a list of conflict descriptors for downstream agents to reason about.
     """
     conflicts: list[dict] = []
@@ -104,9 +103,9 @@ async def research_node(state: ResearchState) -> ResearchState:
                     retrieved_at=retrieved_at,
                     summary=(
                         f"{info.get('name', ticker)} ({info.get('sector', 'unknown sector')}) — "
-                        f"market cap {info.get('market_cap_fmt', 'N/A')}, "
-                        f"P/E {info.get('pe_ratio', 'N/A')}, "
-                        f"EV/EBITDA {info.get('ev_ebitda', 'N/A')}. "
+                        f"market cap {info.get('market_cap', 'N/A')}, "
+                        f"P/E {info.get('trailing_pe', 'N/A')}, "
+                        f"EV/EBITDA {info.get('ev_to_ebitda', 'N/A')}. "
                         f"{info.get('description', '')[:300]}"
                     ),
                     reliability="high",
@@ -136,7 +135,7 @@ async def research_node(state: ResearchState) -> ResearchState:
                 rev = ttm.get("revenue")
                 gm = ttm.get("gross_margin_pct")
                 om = ttm.get("operating_margin_pct")
-                ni = ttm.get("net_income")
+                nm = ttm.get("net_margin_pct")
                 summary_parts = [f"{ticker} financials (TTM):"]
                 if rev is not None:
                     summary_parts.append(f"revenue ${rev:,.0f}")
@@ -144,8 +143,8 @@ async def research_node(state: ResearchState) -> ResearchState:
                     summary_parts.append(f"gross margin {gm:.1f}%")
                 if om is not None:
                     summary_parts.append(f"operating margin {om:.1f}%")
-                if ni is not None:
-                    summary_parts.append(f"net income ${ni:,.0f}")
+                if nm is not None:
+                    summary_parts.append(f"net margin {nm:.1f}%")
                 if missing_fields:
                     summary_parts.append(f"missing: {', '.join(missing_fields)}")
 
@@ -172,11 +171,11 @@ async def research_node(state: ResearchState) -> ResearchState:
                 if price:
                     _cache.set(_ck, price, ttl_seconds=_FINANCE_TTL)
             if price:
-                ret_1y = price.get("return_1y_pct")
+                ret_1y = price.get("period_return_pct")
                 ret_30d = price.get("return_30d_pct")
-                vol = price.get("annualised_volatility_pct")
-                hi52 = price.get("high_52w")
-                lo52 = price.get("low_52w")
+                vol = price.get("volatility_annualised_pct")
+                hi52 = price.get("52w_high")
+                lo52 = price.get("52w_low")
                 parts = [f"{ticker} price history:"]
                 if ret_1y is not None:
                     parts.append(f"1y return {ret_1y:.1f}%")
@@ -273,7 +272,7 @@ async def research_node(state: ResearchState) -> ResearchState:
             )
         raise RuntimeError(msg)
 
-    raw_conflicts = _detect_conflicts(new_evidence, metrics)
+    raw_conflicts = _detect_conflicts(new_evidence)
     conflicts = [Conflict.model_validate(c) for c in raw_conflicts]
 
     metrics_block = MetricsBlock(

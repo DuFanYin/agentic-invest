@@ -13,6 +13,8 @@ import logging
 from datetime import UTC, datetime
 from typing import Any
 
+from src.server.models.finance import CompanyInfo, FinancialsPayload, PriceHistoryPayload
+
 logger = logging.getLogger(__name__)
 
 # yfinance is imported lazily inside each method so that unit tests can patch
@@ -74,7 +76,7 @@ class FinanceDataClient:
             if not info.get("shortName"):
                 logger.warning("ticker %s not found (no shortName)", ticker)
                 return {}
-            return {
+            payload = {
                 "ticker": ticker,
                 "name": info.get("shortName"),
                 "sector": info.get("sector"),
@@ -97,6 +99,7 @@ class FinanceDataClient:
                 "recommendation": info.get("recommendationKey"),
                 "analyst_count": _safe(info.get("numberOfAnalystOpinions")),
             }
+            return CompanyInfo.model_validate(payload).model_dump()
         except Exception as exc:
             logger.error("get_info(%s) failed: %s", ticker, exc)
             return {}
@@ -189,22 +192,24 @@ class FinanceDataClient:
             }
             missing_fields = [k for k, v in required.items() if v is None]
 
-            return {
+            payload = {
                 "ttm": ttm,
                 "three_year_avg": three_year_avg,
                 "latest_quarter": latest_quarter,
                 "missing_fields": missing_fields,
                 "retrieved_at": datetime.now(UTC).isoformat(),
             }
+            return FinancialsPayload.model_validate(payload).model_dump()
 
         except Exception as exc:
             logger.error("get_financials(%s) failed: %s", ticker, exc)
-            return {
+            payload = {
                 "ttm": {}, "three_year_avg": {}, "latest_quarter": {},
                 "missing_fields": ["all — data unavailable"],
                 "retrieved_at": datetime.now(UTC).isoformat(),
                 "error": str(exc),
             }
+            return FinancialsPayload.model_validate(payload).model_dump()
 
     def get_price_history(self, ticker: str, period: str = "1y") -> dict[str, Any]:
         """
@@ -216,7 +221,7 @@ class FinanceDataClient:
             t = yf.Ticker(ticker)
             hist = t.history(period=period)
             if hist.empty:
-                return {"error": f"no price history for {ticker}"}
+                return PriceHistoryPayload(error=f"no price history for {ticker}").model_dump(by_alias=True)
 
             close = hist["Close"]
             first, last = float(close.iloc[0]), float(close.iloc[-1])
@@ -229,7 +234,7 @@ class FinanceDataClient:
             daily_returns = close.pct_change().dropna()
             volatility_annualised_pct = round(float(daily_returns.std()) * (252 ** 0.5) * 100, 2)
 
-            return {
+            payload = {
                 "ticker": ticker,
                 "period": period,
                 "start_price": round(first, 2),
@@ -241,9 +246,10 @@ class FinanceDataClient:
                 "52w_low": round(float(hist["Low"].min()), 2),
                 "retrieved_at": datetime.now(UTC).isoformat(),
             }
+            return PriceHistoryPayload.model_validate(payload).model_dump(by_alias=True)
         except Exception as exc:
             logger.error("get_price_history(%s) failed: %s", ticker, exc)
-            return {"error": str(exc)}
+            return PriceHistoryPayload(error=str(exc)).model_dump(by_alias=True)
 
     def get_news(self, ticker: str) -> list[dict[str, Any]]:
         """

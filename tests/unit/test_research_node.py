@@ -40,9 +40,9 @@ def _mock_finance(
     client.get_info.return_value = info or {
         "name": "Apple Inc",
         "sector": "Technology",
-        "market_cap_fmt": "$3T",
-        "pe_ratio": 28.5,
-        "ev_ebitda": 22.1,
+        "market_cap": 3_000_000_000_000,
+        "trailing_pe": 28.5,
+        "ev_to_ebitda": 22.1,
         "description": "Apple designs consumer electronics.",
     }
     client.get_financials.return_value = financials or {
@@ -50,18 +50,18 @@ def _mock_finance(
             "revenue": 400_000_000_000,
             "gross_margin_pct": 44.5,
             "operating_margin_pct": 30.1,
-            "net_income": 100_000_000_000,
+            "net_margin_pct": 25.0,
         },
         "three_year_avg": {"revenue_growth_pct": 10.2, "operating_margin_pct": 28.0},
         "latest_quarter": {"revenue": 94_000_000_000, "eps": 1.52},
         "missing_fields": [],
     }
     client.get_price_history.return_value = price or {
-        "return_1y_pct": 22.4,
+        "period_return_pct": 22.4,
         "return_30d_pct": 3.1,
-        "annualised_volatility_pct": 18.7,
-        "high_52w": 199.62,
-        "low_52w": 124.17,
+        "volatility_annualised_pct": 18.7,
+        "52w_high": 199.62,
+        "52w_low": 124.17,
     }
     client.get_news.return_value = news or [
         {"title": "Apple reports record earnings", "url": "https://example.com/1", "published_at": "2026-01-01T00:00:00Z"},
@@ -173,7 +173,7 @@ def test_web_search_called_with_query():
 
 def test_missing_fields_from_financials_propagated():
     fin = {
-        "ttm": {"revenue": None, "gross_margin_pct": None, "operating_margin_pct": None, "net_income": None},
+        "ttm": {"revenue": None, "gross_margin_pct": None, "operating_margin_pct": None, "net_margin_pct": None},
         "three_year_avg": {},
         "latest_quarter": {},
         "missing_fields": ["revenue", "gross_margin_pct"],
@@ -261,7 +261,7 @@ def test_price_history_stored_in_metrics():
     with _patch():
         result = _run(research_node(_base_state()))
     assert result["normalized_data"].metrics.price_history
-    assert result["normalized_data"].metrics.price_history["return_1y_pct"] == 22.4
+    assert result["normalized_data"].metrics.price_history["period_return_pct"] == 22.4
 
 
 # ── Conflict detection ─────────────────────────────────────────────────────
@@ -275,7 +275,7 @@ def test_conflict_detected_on_reliability_divergence():
                  reliability="low", retrieved_at="2026-01-01T00:00:00Z",
                  related_topics=["valuation"]),
     ]
-    conflicts = _detect_conflicts(ev, {})
+    conflicts = _detect_conflicts(ev)
     assert len(conflicts) == 1
     assert conflicts[0]["topic"] == "valuation"
     assert conflicts[0]["type"] == "reliability_divergence"
@@ -285,7 +285,7 @@ def test_conflicts_stored_in_normalized_data():
     finance = _mock_finance()
     finance.get_info.return_value = {
         "name": "Apple Inc", "sector": "Technology",
-        "market_cap_fmt": "$3T", "pe_ratio": 28.5, "ev_ebitda": 22.1, "description": "",
+        "market_cap": 3_000_000_000_000, "trailing_pe": 28.5, "ev_to_ebitda": 22.1, "description": "",
     }
     web = _mock_web([{
         "title": "Bearish valuation view",

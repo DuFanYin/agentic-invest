@@ -128,7 +128,11 @@ const metricGroupsFromAnalysis = (analysis) => {
   const metrics = analysis?.metrics || {};
   return Object.entries(metrics).map(([group, value]) => {
     if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
-    const items = Object.entries(value).map(([k, v]) => ({ k, v: String(v ?? 'N/A') }));
+    const entries = Object.entries(value);
+    const hasConcreteValue = entries.some(([, v]) => v !== null && v !== undefined && v !== '');
+    const items = hasConcreteValue
+      ? entries.map(([k, v]) => ({ k, v: String(v ?? 'N/A') }))
+      : [{ k: 'status', v: 'Data unavailable' }];
     return { group, items };
   }).filter(Boolean);
 };
@@ -151,7 +155,7 @@ const scenarioTagTone = (tag) => {
   return 'generic';
 };
 const revealSections = (setSections) => {
-  const order = ['intent', 'evidence', 'fundamental', 'sentiment', 'scenarios', 'summary'];
+  const order = ['intent', 'fundamental', 'sentiment', 'scenarios', 'summary', 'evidence'];
   order.forEach((section, idx) => {
     setTimeout(() => {
       setSections((prev) => new Set([...prev, section]));
@@ -279,16 +283,37 @@ function EvidenceSection({ evidence }) {
     <div className="report-section">
       <SectionLabel>Evidence</SectionLabel>
       <div className="section-title">Key Sources</div>
-      <div className="evidence-list">
-        {items.map(ev => (
-          <div className="evidence-card" key={ev.id}>
-            <div className={`ev-reliability ${ev.reliability || 'medium'}`}>{(ev.reliability || 'medium').toUpperCase()}</div>
-            <div>
-              <div className="ev-source-title">{ev.title}</div>
-              <div className="ev-source-type">{ev.source_type || 'source'} · {ev.id}</div>
-            </div>
-          </div>
-        ))}
+      <div className="evidence-table-wrap">
+        <table className="evidence-table">
+          <thead>
+            <tr>
+              <th>ID</th>
+              <th>Title</th>
+              <th>Type</th>
+              <th>Reliability</th>
+            </tr>
+          </thead>
+          <tbody>
+            {items.map(ev => (
+              <tr key={ev.id}>
+                <td>{ev.id || '-'}</td>
+                <td>
+                  {ev.url ? (
+                    <a href={ev.url} target="_blank" rel="noreferrer">{ev.title || 'Untitled source'}</a>
+                  ) : (
+                    ev.title || 'Untitled source'
+                  )}
+                </td>
+                <td>{ev.source_type || 'source'}</td>
+                <td>
+                  <span className={`ev-reliability ${ev.reliability || 'medium'}`}>
+                    {(ev.reliability || 'medium').toUpperCase()}
+                  </span>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
       </div>
     </div>
   );
@@ -718,10 +743,10 @@ function App() {
             <div className="report-wrap">
               {sections.has('summary') && <SummarySection validationBadge={validationBadge} reportMarkdown={reportData?.report_markdown} intent={reportData?.intent} />}
               {sections.has('intent') && <IntentSection intent={reportData?.intent} />}
-              {sections.has('evidence') && <EvidenceSection evidence={reportData?.evidence} />}
               {sections.has('fundamental') && <FundamentalSection analysis={reportData?.fundamental_analysis} />}
               {sections.has('sentiment') && <SentimentSection sentiment={reportData?.market_sentiment} />}
               {sections.has('scenarios') && <ScenariosSection scenarios={reportData?.scenarios} />}
+              {sections.has('evidence') && <EvidenceSection evidence={reportData?.evidence} />}
             </div>
           )}
           {appState === 'complete' && (

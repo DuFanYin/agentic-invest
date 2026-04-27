@@ -137,7 +137,7 @@ def test_validation_errors_appended_to_report():
                  drivers=["d"], triggers=["t"], signals=["s"], evidence_ids=["ev_001"]),
     ]
     result = _run(report_verification_node(_state(scenarios=bad_scenarios), llm=_mock_llm()))
-    assert "Validation Warnings" in result["report_markdown"]
+    assert "Validation Errors" in result["report_markdown"]
     assert result["validation_result"].is_valid is False
 
 

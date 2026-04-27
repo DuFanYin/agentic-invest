@@ -232,46 +232,57 @@ class OrchestratorAgent:
         call_task: asyncio.Task | None = asyncio.create_task(collector.wait_next())
         graph_done = False
 
-        while True:
-            wait_tasks = [t for t in (step_task, call_task) if t is not None]
-            if not wait_tasks:
-                break
+        try:
+            while True:
+                wait_tasks = [t for t in (step_task, call_task) if t is not None]
+                if not wait_tasks:
+                    break
 
-            done, _ = await asyncio.wait(wait_tasks, return_when=asyncio.FIRST_COMPLETED)
+                done, _ = await asyncio.wait(wait_tasks, return_when=asyncio.FIRST_COMPLETED)
 
-            if call_task is not None and call_task in done:
-                item = call_task.result()
-                yield {"type": "llm_call", "payload": item.model_dump()}
-                call_task = asyncio.create_task(collector.wait_next())
+                if call_task is not None and call_task in done:
+                    item = call_task.result()
+                    yield {"type": "llm_call", "payload": item.model_dump()}
+                    call_task = asyncio.create_task(collector.wait_next())
 
-            if step_task is not None and step_task in done:
-                try:
-                    mode, payload = step_task.result()
-                except StopAsyncIteration:
-                    graph_done = True
-                    step_task = None
-                else:
-                    if mode == "updates":
-                        for _, delta in payload.items():
-                            agent_statuses = delta.get("agent_statuses")
-                            if agent_statuses:
-                                yield {
-                                    "type": "agent_status",
-                                    "payload": [s.model_dump() for s in agent_statuses],
-                                }
-                    elif mode == "values":
-                        final_state = payload
-                    step_task = asyncio.create_task(anext(stream_iter))
-
-            if graph_done and collector.pending_count() == 0:
-                if call_task is not None:
-                    call_task.cancel()
+                if step_task is not None and step_task in done:
                     try:
-                        await call_task
-                    except asyncio.CancelledError:
+                        mode, payload = step_task.result()
+                    except StopAsyncIteration:
+                        graph_done = True
+                        step_task = None
+                    else:
+                        if mode == "updates":
+                            for _, delta in payload.items():
+                                agent_statuses = delta.get("agent_statuses")
+                                if agent_statuses:
+                                    yield {
+                                        "type": "agent_status",
+                                        "payload": [s.model_dump() for s in agent_statuses],
+                                    }
+                        elif mode == "values":
+                            final_state = payload
+                        step_task = asyncio.create_task(anext(stream_iter))
+
+                if graph_done and collector.pending_count() == 0:
+                    if call_task is not None:
+                        call_task.cancel()
+                        try:
+                            await call_task
+                        except asyncio.CancelledError:
+                            pass
+                        call_task = None
+                    break
+        finally:
+            for task in (step_task, call_task):
+                if task is not None and not task.done():
+                    task.cancel()
+            for task in (step_task, call_task):
+                if task is not None:
+                    try:
+                        await task
+                    except (asyncio.CancelledError, StopAsyncIteration, Exception):
                         pass
-                    call_task = None
-                break
 
         all_llm_calls = collector.all()
         response = _state_to_response(final_state, llm_calls=all_llm_calls)
@@ -329,8 +340,8 @@ def _state_to_response(state: ResearchState, *, llm_calls: list[LLMCall] | None 
         report_json=state.get("report_json", {}),
         intent=state.get("intent"),
         evidence=state.get("evidence") or [],
-        fundamental_analysis=fa.model_dump() if isinstance(fa, FundamentalAnalysis) else {},
-        market_sentiment=ms.model_dump() if isinstance(ms, MarketSentiment) else {},
+        fundamental_analysis=fa if isinstance(fa, FundamentalAnalysis) else None,
+        market_sentiment=ms if isinstance(ms, MarketSentiment) else None,
         scenarios=state.get("scenarios") or [],
         agent_statuses=state.get("agent_statuses") or [],
         validation_result=state.get("validation_result") or ValidationResult(),

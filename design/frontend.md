@@ -45,7 +45,7 @@ Two columns:
     - Orchestrator, Research, Fundamental, Sentiment, Scenarios, Verification
     - each row shows dot, agent name, current action, status tag
   - Output log area
-    - timeline-like event stream (`log-box`)
+    - model-call/event stream (`log-box`)
     - shows agent-tagged messages and section-reveal system messages
 - Right panel (`right-panel`, fluid width)
   - idle state: centered placeholder icon + state text
@@ -65,7 +65,7 @@ Section keys and render order:
 3. `evidence` -> Key Sources cards (with reliability badges)
 4. `fundamental` -> Business/financial narrative + metric groups
 5. `sentiment` -> Sentiment/price/narrative/risk blocks
-6. `scenarios` -> Bull/Base/Bear cards with probability bars and trigger lines
+6. `scenarios` -> dynamic scenario cards from backend payload, rendered with probability bars and trigger lines
 
 Validation badge (`VALID`) is attached to summary block when summary section is revealed.
 
@@ -121,6 +121,7 @@ Runtime mapping and stream helpers:
 - `AGENT_ID_BY_NAME`: backend agent name -> UI row ID (`O/R/F/M/S/V`)
 - `applyAgentStatuses`: applies backend lifecycle/phase/action updates from `agent_status`
 - `processBlock`: parses SSE blocks (`event:` + `data:`) and dispatches to state handlers
+  - handled event types: `agent_status`, `llm_call`, `final`, `error`, `done`
 
 ---
 

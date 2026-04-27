@@ -1,6 +1,7 @@
 # Test Suite
 
-Current repository test inventory: **128 tests** (`126` unit + `2` integration; pytest collection count).
+Current repository test inventory is branch-dependent. Use `PYTHONPATH=. pytest tests/ --collect-only -q` as the source of truth.
+At the time of this update, the full suite execution result is **130 passed**.
 
 - Unit tests (fast): `PYTHONPATH=. pytest tests/unit/ -q`
 - Integration tests: `PYTHONPATH=. pytest tests/integration/ -q`
@@ -12,7 +13,7 @@ Current repository test inventory: **128 tests** (`126` unit + `2` integration; 
 
 ## Integration
 
-### `tests/integration/test_research_api.py` — 2 tests
+### `tests/integration/test_research_api.py` — 3 tests
 
 FastAPI endpoint tests via `TestClient` (with mocked LLM client wiring). Covers:
 
@@ -81,7 +82,7 @@ FastAPI endpoint tests via `TestClient` (with mocked LLM client wiring). Covers:
 
 ### `tests/unit/test_openrouter.py` — 11 tests
 
-`OpenRouterClient` with mocked `httpx.Client`:
+`OpenRouterClient` with mocked `httpx.AsyncClient`:
 
 - JSON fence stripping and JSON mode behavior
 - no API key error path
@@ -119,7 +120,7 @@ FastAPI endpoint tests via `TestClient` (with mocked LLM client wiring). Covers:
 
 ---
 
-### `tests/unit/test_scenario_scoring_node.py` — 11 tests
+### `tests/unit/test_scenario_scoring_node.py` — 12 tests
 
 `scenario_scoring_node` with mocked `_llm`:
 
@@ -143,7 +144,7 @@ Validation utility functions in `src/server/utils/validation.py`:
 
 ### `tests/unit/test_web_research.py` — 11 tests
 
-`WebResearchClient` with mocked `httpx.Client`:
+`WebResearchClient` with mocked `httpx.AsyncClient`:
 
 - result shape and required fields
 - missing API key behavior

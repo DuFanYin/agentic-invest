@@ -4,9 +4,6 @@ from __future__ import annotations
 
 import json
 import logging
-from json import JSONDecodeError
-
-from pydantic import ValidationError
 
 from src.server.models.analysis import FundamentalAnalysis
 from src.server.models.state import ResearchState
@@ -95,19 +92,13 @@ async def fundamental_analysis_node(
     if evidence:
         prompt = _build_prompt(evidence, metrics, missing_fields, intent)
         try:
-            raw = await llm.call_with_retry(prompt, system=_SYSTEM, node="fundamental_analysis")
+            raw = await llm.call_with_retry(prompt, system=_SYSTEM, node=_NODE)
             parsed = json.loads(raw)
             parsed["metrics"] = metrics
             parsed.setdefault("missing_fields", missing_fields)
             result = FundamentalAnalysis.model_validate(parsed)
-        except JSONDecodeError as exc:
-            logger.warning("fundamental_analysis: LLM returned invalid JSON — %s", exc)
-        except ValidationError as exc:
-            logger.warning("fundamental_analysis: schema validation failed — %s", exc)
-        except RuntimeError as exc:
-            logger.warning("fundamental_analysis: LLM exhausted all models — %s", exc)
         except Exception as exc:
-            logger.warning("fundamental_analysis: unexpected error — %s", exc)
+            logger.warning("%s: LLM step failed — %s", _NODE, exc)
 
     if result is None:
         msg = f"[{_NODE}] unable to generate grounded fundamental analysis from LLM output"

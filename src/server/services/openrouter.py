@@ -36,6 +36,7 @@ from src.server.config import (
     LLM_HTTP_REFERER,
     LLM_PROVIDER,
 )
+from src.server.utils.status import AGENT_TAG_BY_NODE
 
 if TYPE_CHECKING:
     from src.server.services.collector import LLMCallCollector
@@ -53,16 +54,6 @@ _OPENAI_MODELS = [
 ]
 
 _RETRYABLE_CODES = {429, 500, 502, 503, 504}
-_AGENT_TAG_BY_NODE = {
-    "parse_intent": "O",
-    "research": "R",
-    "fundamental_analysis": "F",
-    "market_sentiment": "M",
-    "scenario_scoring": "S",
-    "report_verification": "V",
-}
-
-
 def _strip_fences(text: str) -> str:
     """Remove ```json ... ``` or ``` ... ``` wrapping that some models emit."""
     text = text.strip()
@@ -174,7 +165,7 @@ class OpenRouterClient:
 
                 self._emit(LLMCall(
                     id=call_id, node=node,
-                    agent_tag=_AGENT_TAG_BY_NODE.get(node, "?"),
+                    agent_tag=AGENT_TAG_BY_NODE.get(node, "?"),
                     model=model_id, attempt=attempt,
                     status="calling", started_at=started_at,
                 ))
@@ -184,7 +175,7 @@ class OpenRouterClient:
                     finished_at = datetime.now(UTC).isoformat()
                     self._emit(LLMCall(
                         id=call_id, node=node,
-                        agent_tag=_AGENT_TAG_BY_NODE.get(node, "?"),
+                        agent_tag=AGENT_TAG_BY_NODE.get(node, "?"),
                         model=model_id, attempt=attempt,
                         status="success",
                         latency_ms=_latency_ms(started_at, finished_at),
@@ -197,7 +188,7 @@ class OpenRouterClient:
                     finished_at = datetime.now(UTC).isoformat()
                     self._emit(LLMCall(
                         id=call_id, node=node,
-                        agent_tag=_AGENT_TAG_BY_NODE.get(node, "?"),
+                        agent_tag=AGENT_TAG_BY_NODE.get(node, "?"),
                         model=model_id, attempt=attempt,
                         status="retry",
                         latency_ms=_latency_ms(started_at, finished_at),
@@ -221,7 +212,7 @@ class OpenRouterClient:
                     finished_at = datetime.now(UTC).isoformat()
                     self._emit(LLMCall(
                         id=call_id, node=node,
-                        agent_tag=_AGENT_TAG_BY_NODE.get(node, "?"),
+                        agent_tag=AGENT_TAG_BY_NODE.get(node, "?"),
                         model=model_id, attempt=attempt,
                         status="failed",
                         latency_ms=_latency_ms(started_at, finished_at),

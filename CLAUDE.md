@@ -16,7 +16,7 @@ source .venv/bin/activate
 PYTHONPATH=. pytest tests/unit/ -q
 ```
 
-All ~126 tests should pass in under 2 seconds. No API keys required.
+Unit tests should pass quickly with no API keys required. For an exact count, use `PYTHONPATH=. pytest tests/unit/ --collect-only -q`.
 
 ### Integration tests (require real API keys)
 
@@ -24,7 +24,7 @@ All ~126 tests should pass in under 2 seconds. No API keys required.
 PYTHONPATH=. pytest tests/integration/ -q
 ```
 
-Integration tests call real external services (OpenRouter LLM, yfinance, Tavily). They require `OPENROUTER_API_KEY` and optionally `TAVILY_API_KEY` to be set. Expect them to take 30–120 seconds and to be flaky under rate limits.
+Integration tests call real external services (LLM provider, yfinance, Tavily). They require `LLM_API_KEY` and optionally `TAVILY_API_KEY` to be set. Expect them to take 30–120 seconds and to be flaky under rate limits.
 
 ## Running the server
 

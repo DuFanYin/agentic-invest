@@ -9,24 +9,13 @@ from src.server import shutdown
 from src.server.agents.orchestrator import OrchestratorAgent
 from src.server.models.request import ResearchRequest
 from src.server.models.response import ResearchResponse
-from src.server.utils.status import AGENT_NAMES, initial_agent_statuses
+from src.server.utils.status import FAILED_PHASE_BY_AGENT, initial_agent_statuses
 
 router = APIRouter()
 
 
 def _new_orchestrator() -> OrchestratorAgent:
     return OrchestratorAgent()
-
-
-_FAILED_PHASE_BY_AGENT = {
-    "parse_intent": "planning",
-    "research": "collecting_evidence",
-    "fundamental_analysis": "analyzing_fundamentals",
-    "market_sentiment": "analyzing_sentiment",
-    "gap_check": "evaluating_gaps",
-    "scenario_scoring": "scoring_scenarios",
-    "report_verification": "generating_report",
-}
 
 
 def _node_from_error(message: str) -> str | None:
@@ -54,7 +43,7 @@ def _mark_failed(statuses: list[dict], node: str | None, message: str) -> list[d
         item["last_update_at"] = now
         if node and item.get("agent") == node:
             item["lifecycle"] = "failed"
-            item["phase"] = _FAILED_PHASE_BY_AGENT.get(node, "idle")
+            item["phase"] = FAILED_PHASE_BY_AGENT.get(node, "idle")
             item["action"] = "node failed"
             item["last_error"] = message
         elif not node and item.get("agent") == "parse_intent":
@@ -66,25 +55,8 @@ def _mark_failed(statuses: list[dict], node: str | None, message: str) -> list[d
     return result
 
 
-def _fallback_statuses(message: str) -> list[dict]:
-    now = datetime.now(UTC).isoformat()
-    return [
-        {
-            "agent": agent,
-            "lifecycle": "standby",
-            "phase": "idle",
-            "action": "waiting",
-            "details": [],
-            "entered_at": now,
-            "last_update_at": now,
-            "waiting_on": None,
-            "progress_hint": None,
-            "retry_count": 0,
-            "max_retries": 0,
-            "last_error": None,
-        }
-        for agent in AGENT_NAMES
-    ]
+def _fallback_statuses(_message: str) -> list[dict]:
+    return [s.model_dump() for s in initial_agent_statuses()]
 
 
 @router.post("/research", response_model=ResearchResponse)

@@ -2,6 +2,13 @@
 
 import pytest
 
+from src.server.models.analysis import (
+    BusinessQuality,
+    Claim,
+    Financials,
+    FundamentalAnalysis,
+    Valuation,
+)
 from src.server.models.scenario import Scenario
 from src.server.utils.validation import (
     validate_claim_coverage,
@@ -78,9 +85,15 @@ def test_evidence_completeness_fails_when_required_field_missing() -> None:
     ],
 )
 def test_claim_coverage_cases(evidence_ids, known_ids, expect_errors) -> None:
-    analysis = {
-        "claims": [{"statement": "claim A", "evidence_ids": evidence_ids}]
-    }
+    analysis = FundamentalAnalysis(
+        claims=[Claim(statement="claim A", confidence="medium", evidence_ids=evidence_ids)],
+        business_quality=BusinessQuality(view="stable", drivers=[]),
+        financials=Financials(profitability_trend="flat", cash_flow_quality="stable"),
+        valuation=Valuation(relative_multiple_view="fair", simplified_dcf_view=""),
+        fundamental_risks=[],
+        missing_fields=[],
+        metrics={},
+    )
     errors = validate_claim_coverage(analysis, known_ids)
     if expect_errors:
         assert errors

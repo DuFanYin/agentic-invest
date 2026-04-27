@@ -2,9 +2,9 @@
 LangGraph shared state.
 
 evidence:        operator.add — each research pass appends new items.
-agent_questions: _merge_or_reset — both parallel analysis nodes append in the
-                 same step; gap_check resets by returning the sentinel [None],
-                 which this reducer treats as a clear instruction.
+agent_questions: _accumulate_or_reset — both parallel analysis nodes append in
+                 the same step; gap_check resets by returning the sentinel
+                 [_RESET], which this reducer treats as a clear instruction.
 open_questions:  plain replace — gap_check writes the merged list each cycle;
                  accumulation would break the retry-loop termination check.
 agent_statuses:  _last_list — fundamental_analysis and market_sentiment run in

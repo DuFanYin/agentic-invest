@@ -15,7 +15,7 @@ The system is designed around that workflow. It searches for sources, builds a s
 
 - Multi-agent feedback cycle (not a one-pass pipeline): the graph can re-enter research when open questions remain.
 - Two-layer agent status model: `lifecycle` (`standby/active/waiting/blocked/failed`) + `phase` (task semantics such as `collecting_evidence`, `generating_report`).
-- Real-time SSE streaming for UI observability (`agent_status`, `state_update`, `timeline`, `final`).
+- Real-time SSE streaming for UI observability (`agent_status`, `llm_call`, `final`, with `error`/`done` control events).
 
 
 ## Structure
@@ -54,15 +54,3 @@ Potential improvements:
 - Add dynamic thresholds for retry decisions.
 - Attach confidence scores to intermediate outputs.
 - Automatically retry or re-verify when confidence is below threshold.
-
-
-fix: more robust json output format from model
-
-strong typed results between agents
-
-failaure qurentine
-
-async flow? find a way to share research state so model work concurretnly
-
-
-more ovservability

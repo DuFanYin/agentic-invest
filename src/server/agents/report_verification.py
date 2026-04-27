@@ -134,8 +134,8 @@ async def report_verification_node(
 ) -> ResearchState:
     intent = state.get("intent")
     evidence = state.get("evidence") or []
-    fundamental_analysis = state.get("fundamental_analysis") or {}
-    market_sentiment = state.get("market_sentiment") or {}
+    fundamental_analysis = state.get("fundamental_analysis")
+    market_sentiment = state.get("market_sentiment")
     scenarios: list[Scenario] = state.get("scenarios") or []
     statuses = list(state.get("agent_statuses") or [])
     if statuses:
@@ -151,8 +151,10 @@ async def report_verification_node(
     errors: list[str] = []
     errors.extend(validate_scenario_scores(scenarios))
     errors.extend(validate_evidence_completeness(evidence_dump))
-    errors.extend(validate_claim_coverage(fundamental_analysis, available_evidence_ids))
-    errors.extend(validate_claim_coverage(market_sentiment, available_evidence_ids))
+    if isinstance(fundamental_analysis, FundamentalAnalysis):
+        errors.extend(validate_claim_coverage(fundamental_analysis, available_evidence_ids))
+    if isinstance(market_sentiment, MarketSentiment):
+        errors.extend(validate_claim_coverage(market_sentiment, available_evidence_ids))
 
     warnings: list[str] = []
     fa_missing = fundamental_analysis.missing_fields if isinstance(fundamental_analysis, FundamentalAnalysis) else []
@@ -168,15 +170,19 @@ async def report_verification_node(
     if evidence:
         prompt = _build_prompt(intent, evidence_dump, fundamental_analysis, market_sentiment, scenarios)
         try:
-            raw = await llm.complete_text(prompt, system=_SYSTEM, node="report_verification")
-            if raw and len(raw.strip()) > 100:
-                report_markdown = raw.strip()
-                if errors:
-                    report_markdown += "\n\n## Validation Warnings\n" + "\n".join(
-                        f"- {e}" for e in errors
-                    )
+            raw = await llm.complete_text(prompt, system=_SYSTEM, node=_NODE)
+            content = (raw or "").strip()
+            report_markdown = content if len(content) > 100 else None
         except Exception as exc:
-            logger.warning("report_verification LLM failed: %s", exc)
+            logger.warning("%s: LLM step failed — %s", _NODE, exc)
+        if report_markdown and errors:
+            report_markdown += "\n\n## Validation Errors\n" + "\n".join(
+                f"- {e}" for e in errors
+            )
+        if report_markdown and warnings:
+            report_markdown += "\n\n## Validation Warnings\n" + "\n".join(
+                f"- {w}" for w in warnings
+            )
 
     if report_markdown is None:
         msg = f"[{_NODE}] unable to generate report markdown from LLM"

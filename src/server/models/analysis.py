@@ -77,20 +77,13 @@ class MarketNarrative(BaseModel):
     crowding_risk: Literal["high", "medium", "low"] = "low"
 
 
-class SentimentRisk(BaseModel):
-    name: str
-    impact: Literal["high", "medium", "low"]
-    signal: str
-    evidence_ids: list[str] = Field(..., min_length=1)
-
-
 class MarketSentiment(BaseModel):
     agent: str = "market_sentiment"
     claims: list[Claim] = Field(default_factory=list)
     news_sentiment: NewsSentiment
     price_action: PriceAction | None = None
     market_narrative: MarketNarrative
-    sentiment_risks: list[SentimentRisk] = Field(default_factory=list)
+    sentiment_risks: list[Risk] = Field(default_factory=list)
     missing_fields: list[str] = Field(default_factory=list)
     _llm_used: bool = True
 
