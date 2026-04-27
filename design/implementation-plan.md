@@ -45,70 +45,28 @@ and working. What is fake:
 
 ---
 
-## Phase 2 — Web/news research service (`services/web_research.py`)
+## ~~Phase 2 — Web/news research service~~ ✅ DONE
 
-**Goal:** replace the `NotImplementedError` stub with real web search using
-the Tavily API (free tier: 1 000 req/month; key stored in `.env`).
+**Delivered:** `services/web_research.py` — Tavily search client over `httpx` (no extra SDK needed).
 
-### What to build
-
-```python
-class WebResearchClient:
-    def search(self, query: str, max_results: int = 5) -> list[dict]
-    # each result: { title, url, content, published_date, score }
-
-    def search_news(self, ticker: str, days: int = 30) -> list[dict]
-    # wraps search with a time-filtered query
-```
-
-Fallback: if `TAVILY_API_KEY` is absent, log a warning and return `[]` (so
-the system degrades gracefully rather than crashing).
-
-### New `.env` key
-
-```
-TAVILY_API_KEY=tvly-...
-```
-
-### New tests
-
-- `tests/unit/test_web_research.py` — mock `httpx.Client.post`; assert
-  result shape normalisation and empty-key fallback.
-
-### Dependencies to add
-
-```
-tavily-python
-```
+- `search(query, max_results)`: posts to Tavily API, normalises results to `{title, url, content, published_date, score, retrieved_at}`, filters out items without URL
+- `search_news(ticker, days)`: wraps `search` with a ticker-focused query
+- Degrades gracefully to `[]` on missing `TAVILY_API_KEY`, any HTTP error, timeout, or network failure
+- `_load_env()` walks up directory tree same as OpenRouter client
+- 15 new tests in `tests/unit/test_web_research.py` — 86 total passing
 
 ---
 
-## Phase 3 — Cache service (`services/cache.py`)
+## ~~Phase 3 — Cache service~~ ✅ DONE
 
-**Goal:** make the cache actually store and retrieve results so repeated
-identical queries skip LLM calls.
+**Delivered:** `services/cache.py` — SQLite-backed TTL cache, no extra dependencies.
 
-### What to build
-
-SQLite-backed cache (no extra infra needed):
-
-```python
-class Cache:
-    def __init__(self, db_path: str = "cache.db")
-    def get(self, key: str) -> object | None    # returns None on miss/expiry
-    def set(self, key: str, value: object, ttl_seconds: int = 3600) -> None
-```
-
-Key = `sha256(query)`. TTL enforced on read (row deleted if expired).
-
-### New tests
-
-- `tests/unit/test_cache.py` — set/get roundtrip, TTL expiry, miss returns
-  `None`.
-
-### Dependencies to add
-
-None (stdlib `sqlite3` + `json`).
+- `get(key)`: returns cached value or None on miss/expiry; deletes expired row on read
+- `set(key, value, ttl_seconds)`: upserts with configurable TTL (default 3600s); JSON-serialises any value
+- `delete(key)`: explicit removal
+- `clear_expired()`: batch cleanup, returns count deleted
+- WAL mode + per-instance threading lock for safety
+- 17 tests in `tests/unit/test_cache.py` — 103 total passing
 
 ---
 

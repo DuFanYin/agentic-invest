@@ -1,6 +1,6 @@
 # Test Suite
 
-**71 tests, all passing.** Run with: `PYTHONPATH=. pytest tests/ -q`
+**103 tests, all passing.** Run with: `PYTHONPATH=. pytest tests/ -q`
 
 ---
 
@@ -58,6 +58,35 @@ End-to-end HTTP layer. Spins up the FastAPI app via `TestClient` with the full L
 - Resilience: each of `get_info`, `get_financials`, `get_price_history` can fail independently without crashing; all four failing together still returns fallback evidence
 - Multi-pass ID offset: second-pass evidence IDs start at ≥ 100
 - Price history stored under `metrics["price_history"]`
+
+---
+
+### `tests/unit/test_cache.py` — 17 tests
+
+`Cache` using a `tmp_path` SQLite file per test. Covers:
+
+- Set/get roundtrip for string, dict, list, int, and None values
+- Miss on unknown key returns None
+- TTL expiry: `ttl=0` entry returns None after a short sleep; non-expired entry returned normally; expired row is deleted from DB on read
+- Overwrite: second `set` replaces value and resets TTL
+- Explicit `delete()`: key gone; deleting non-existent key is safe
+- `clear_expired()`: removes expired rows, returns count; returns 0 when nothing expired
+- Default TTL respected when `ttl_seconds` not passed
+- Multiple independent keys do not interfere
+
+---
+
+### `tests/unit/test_web_research.py` — 15 tests
+
+`WebResearchClient` with `httpx.Client` mocked. Covers:
+
+- Result shape: list returned, required fields present (`title`, `url`, `content`, `retrieved_at`), `published_date` and `score` passed through
+- Missing API key → returns `[]` without making any HTTP call
+- HTTP errors: 401, 429, 500 all return `[]`
+- Network failures: timeout and network error both return `[]`
+- URL filtering: results missing or with empty `url` are dropped
+- Empty API response → `[]`
+- `search_news()`: ticker name present in the outgoing query payload; respects missing key; result shape matches `search()`
 
 ---
 
