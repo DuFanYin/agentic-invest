@@ -34,49 +34,14 @@ and working. What is fake:
 
 ---
 
-## Phase 1 — Finance data service (`services/finance_data.py`)
+## ~~Phase 1 — Finance data service~~ ✅ DONE
 
-**Goal:** replace the `NotImplementedError` stub with real financial data
-using `yfinance` (free, no API key needed).
+**Delivered:** `services/finance_data.py` — real yfinance integration; `services/openrouter.py` — free model fallback chain with retry/backoff.
 
-### What to build
-
-```python
-class FinanceDataClient:
-    def get_price_history(self, ticker: str, period: str = "1y") -> dict
-    def get_financials(self, ticker: str) -> dict   # income stmt, balance sheet, cashflow
-    def get_info(self, ticker: str) -> dict          # market cap, P/E, sector, description
-    def get_news(self, ticker: str) -> list[dict]    # recent headlines from yf.Ticker.news
-```
-
-### Normalisation contract
-
-`get_financials` must return a dict with at least:
-
-```json
-{
-  "ttm":            { "revenue": 0, "gross_margin_pct": 0, "operating_margin_pct": 0, "net_income": 0 },
-  "three_year_avg": { "revenue_growth_pct": 0, "operating_margin_pct": 0 },
-  "latest_quarter": { "revenue": 0, "eps": 0 }
-}
-```
-
-Missing fields are set to `null` and recorded in `normalized_data["missing_fields"]`.
-
-### What stays dummy
-
-Web/news search, SEC filings, LLM reasoning.
-
-### New tests
-
-- `tests/unit/test_finance_data.py` — mock `yfinance.Ticker`; assert field
-  normalisation, missing-field marking, and ticker-not-found fallback.
-
-### Dependencies to add
-
-```
-yfinance
-```
+- `FinanceDataClient`: `get_info`, `get_financials`, `get_price_history`, `get_news` — all backed by yfinance, numpy-safe, missing-field tracked
+- `OpenRouterClient`: free model chain (`gpt-oss-20b → gpt-oss-120b → nemotron-3-super`), `_RetryableError`/`_FatalError` distinction, `response_format: json_object`, `_strip_fences`, `_load_env` directory walk
+- 53 unit tests passing (`tests/unit/test_finance_data.py`, `tests/unit/test_openrouter.py`)
+- `requirements.txt`: added `yfinance`, `python-dotenv`
 
 ---
 
@@ -147,38 +112,17 @@ None (stdlib `sqlite3` + `json`).
 
 ---
 
-## Phase 4 — Research node (`agents/research.py`)
+## ~~Phase 4 — Research node~~ ✅ DONE
 
-**Goal:** replace the three hardcoded `Evidence` objects with real data from
-Phase 1 and Phase 2 services.
+**Delivered:** `agents/research.py` — replaced all dummy evidence with real yfinance data.
 
-### What to build
-
-```
-research_node(state):
-  1. if ticker in intent → FinanceDataClient.get_info + get_financials + get_news
-  2. WebResearchClient.search(subjects + query keywords, max=8)
-  3. Deduplicate by URL; assign reliability ("high" for finance_api, "medium" for web)
-  4. Build Evidence objects from real results
-  5. Build normalized_data["metrics"] from FinanceDataClient.get_financials output
-  6. Populate normalized_data["missing_fields"] from nulls in metrics dict
-```
-
-All three service calls are wrapped in try/except; failures produce an
-`Evidence` item with `reliability="low"` and a note in `summary`.
-
-### Interface contract (unchanged)
-
-The node still returns `{ evidence: list[Evidence], normalized_data: dict, ... }`.
-No other node changes.
-
-### New tests
-
-- `tests/unit/test_research_node.py` — mock both services; assert evidence
-  count ≥ 1, all evidence has `url` + `retrieved_at`, `missing_fields`
-  correctly populated.
-- `tests/integration/test_research_api.py` — existing tests continue to pass
-  with mocked services.
+- Calls `get_info`, `get_financials`, `get_price_history`, `get_news` when a ticker is in intent
+- Builds typed `Evidence` objects per source (`financial_api`, `news`); news capped at 5
+- `normalized_data["metrics"]` has real TTM / 3-year-avg / latest-quarter / price-history
+- `missing_fields` propagated from `FinanceDataClient`
+- Each service call is independently try/excepted; all failing → graceful `web` fallback evidence
+- ID offset by `pass_id * 100` so multi-pass evidence IDs never collide
+- 18 new tests in `tests/unit/test_research_node.py` — 71 total passing
 
 ---
 
@@ -318,25 +262,9 @@ After LLM generates the report:
 
 ---
 
-## Phase 9 — LLM prompt hardening (`services/openrouter.py`)
+## ~~Phase 9 — LLM prompt hardening~~ ✅ DONE (delivered with Phase 1)
 
-**Goal:** make the LLM client production-grade.
-
-### What to build
-
-- `complete_with_retry(prompt, max_retries=2, backoff=2.0)` — exponential
-  backoff on 429/5xx.
-- Structured output mode: add `response_format: { type: "json_object" }` to
-  the payload (supported by OpenAI-compatible endpoints via OpenRouter).
-- Token budget guard: truncate evidence summaries to keep prompt under 12k
-  tokens (rough char count; conservative).
-- Separate system and user message construction into named methods so prompts
-  are unit-testable without an API call.
-
-### New tests
-
-- `tests/unit/test_openrouter.py` — mock `httpx`; assert retry behaviour on
-  429, assert `RuntimeError` after exhausting retries, assert JSON validation.
+Retry/backoff, `response_format: json_object`, JSON validation, and model fallback chain all shipped in `services/openrouter.py`. Token budget guard deferred to a future hardening pass if needed.
 
 ---
 

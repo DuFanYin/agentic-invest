@@ -1,0 +1,328 @@
+"""Unit tests for FinanceDataClient — all yfinance calls mocked."""
+
+from __future__ import annotations
+
+import math
+from unittest.mock import MagicMock, patch
+
+import numpy as np
+import pandas as pd
+import pytest
+
+from src.server.services.finance_data import FinanceDataClient, _growth, _pct, _safe
+
+
+# ── helper builders ────────────────────────────────────────────────────────
+
+def _make_income_stmt(
+    rev=(215_938e6, 130_497e6, 60_922e6, 26_974e6),
+    gp=(153_463e6, 97_858e6, 44_301e6, 15_356e6),
+    op=(130_387e6, 81_453e6, 32_972e6, 5_577e6),
+    ni=(120_067e6, 72_880e6, 29_760e6, 4_368e6),
+    eps=(4.90, 2.94, 1.19, 0.174),
+) -> pd.DataFrame:
+    cols = pd.to_datetime(["2026-01-31", "2025-01-31", "2024-01-31", "2023-01-31"])
+    return pd.DataFrame(
+        {
+            "Total Revenue":   [np.float64(v) for v in rev],
+            "Gross Profit":    [np.float64(v) for v in gp],
+            "Operating Income":[np.float64(v) for v in op],
+            "Net Income":      [np.float64(v) for v in ni],
+            "Diluted EPS":     [np.float64(v) for v in eps],
+        },
+        index=cols,
+    ).T
+
+
+def _make_cashflow(fcf=96_676e6, capex=-6_042e6) -> pd.DataFrame:
+    cols = pd.to_datetime(["2026-01-31"])
+    return pd.DataFrame(
+        {"Free Cash Flow": [np.float64(fcf)], "Capital Expenditure": [np.float64(capex)]},
+        index=cols,
+    ).T
+
+
+def _make_balance_sheet(total_debt=11_412e6) -> pd.DataFrame:
+    cols = pd.to_datetime(["2026-01-31"])
+    return pd.DataFrame({"Total Debt": [np.float64(total_debt)]}, index=cols).T
+
+
+def _make_quarterly_income(
+    q_rev=68_127e6, q_gp=51_093e6, q_op=44_299e6, q_rev_prior=35_082e6
+) -> pd.DataFrame:
+    # 5 quarters so col index 4 (same Q prior year) exists
+    cols = pd.to_datetime(
+        ["2026-01-31", "2025-10-31", "2025-07-31", "2025-04-30", "2025-01-31"]
+    )
+    rows = {
+        "Total Revenue":   [np.float64(q_rev), 0, 0, 0, np.float64(q_rev_prior)],
+        "Gross Profit":    [np.float64(q_gp), 0, 0, 0, 0],
+        "Operating Income":[np.float64(q_op), 0, 0, 0, 0],
+    }
+    return pd.DataFrame(rows, index=cols).T
+
+
+def _make_ticker_mock(info: dict | None = None, *, no_name: bool = False) -> MagicMock:
+    mock = MagicMock()
+    base_info = {
+        "shortName": None if no_name else "NVIDIA Corporation",
+        "sector": "Technology",
+        "industry": "Semiconductors",
+        "longBusinessSummary": "NVIDIA makes GPUs.",
+        "marketCap": np.float64(5_061_759_467_520),
+        "currentPrice": np.float64(208.26),
+        "fiftyTwoWeekHigh": np.float64(212.19),
+        "fiftyTwoWeekLow": np.float64(104.08),
+        "trailingPE": np.float64(42.59),
+        "forwardPE": np.float64(18.53),
+        "priceToBook": np.float64(32.18),
+        "enterpriseToEbitda": np.float64(37.60),
+        "trailingEps": np.float64(4.89),
+        "forwardEps": np.float64(11.24),
+        "revenueGrowth": np.float64(0.732),
+        "grossMargins": np.float64(0.7107),
+        "operatingMargins": np.float64(0.6502),
+        "profitMargins": np.float64(0.5560),
+        "recommendationKey": "strong_buy",
+        "numberOfAnalystOpinions": np.float64(56),
+    }
+    if info:
+        base_info.update(info)
+    mock.info = base_info
+    mock.income_stmt = _make_income_stmt()
+    mock.quarterly_income_stmt = _make_quarterly_income()
+    mock.cashflow = _make_cashflow()
+    mock.balance_sheet = _make_balance_sheet()
+    mock.history.return_value = pd.DataFrame(
+        {"Close": [100.0, 110.0, 120.0, 130.0, 140.0],
+         "High":  [105.0, 115.0, 125.0, 135.0, 145.0],
+         "Low":   [ 95.0, 105.0, 115.0, 125.0, 135.0]},
+        index=pd.date_range("2025-01-01", periods=5, freq="D"),
+    )
+    mock.news = [
+        {
+            "id": "abc",
+            "content": {
+                "title": "NVDA beats estimates",
+                "pubDate": "2026-04-01T10:00:00Z",
+                "summary": "NVIDIA reported record revenue.",
+                "canonicalUrl": {"url": "https://example.com/nvda-beats"},
+                "provider": {"displayName": "Reuters"},
+            },
+        }
+    ]
+    return mock
+
+
+# ── _safe / _pct / _growth helpers ────────────────────────────────────────
+
+def test_safe_converts_numpy_float():
+    assert _safe(np.float64(3.14)) == pytest.approx(3.14)
+    assert isinstance(_safe(np.float64(3.14)), float)
+
+
+def test_safe_converts_numpy_int():
+    assert _safe(np.int64(42)) == 42
+    assert isinstance(_safe(np.int64(42)), int)
+
+
+def test_safe_returns_none_for_nan():
+    assert _safe(float("nan")) is None
+    assert _safe(np.float64(float("nan"))) is None
+
+
+def test_pct_basic():
+    assert _pct(75.0, 100.0) == pytest.approx(75.0)
+
+
+def test_pct_zero_denominator():
+    assert _pct(75.0, 0.0) is None
+
+
+def test_pct_none_input():
+    assert _pct(None, 100.0) is None
+    assert _pct(75.0, None) is None
+
+
+def test_growth_basic():
+    assert _growth(130.0, 100.0) == pytest.approx(30.0)
+
+
+def test_growth_zero_prior():
+    assert _growth(100.0, 0.0) is None
+
+
+# ── get_info ───────────────────────────────────────────────────────────────
+
+def test_get_info_returns_profile_fields():
+    client = FinanceDataClient()
+    with patch("yfinance.Ticker", return_value=_make_ticker_mock()):
+        info = client.get_info("NVDA")
+
+    assert info["name"] == "NVIDIA Corporation"
+    assert info["sector"] == "Technology"
+    assert info["ticker"] == "NVDA"
+    assert isinstance(info["market_cap"], (int, float))
+    assert info["trailing_pe"] == pytest.approx(42.59, rel=1e-2)
+    assert info["recommendation"] == "strong_buy"
+
+
+def test_get_info_unknown_ticker_returns_empty():
+    client = FinanceDataClient()
+    with patch("yfinance.Ticker", return_value=_make_ticker_mock(no_name=True)):
+        info = client.get_info("ZZZZZ")
+
+    assert info == {}
+
+
+def test_get_info_exception_returns_empty():
+    mock = MagicMock()
+    mock.info = property(lambda self: (_ for _ in ()).throw(RuntimeError("network")))
+    client = FinanceDataClient()
+    with patch("yfinance.Ticker", side_effect=RuntimeError("network")):
+        info = client.get_info("NVDA")
+
+    assert info == {}
+
+
+# ── get_financials ─────────────────────────────────────────────────────────
+
+def test_get_financials_ttm_revenue():
+    client = FinanceDataClient()
+    with patch("yfinance.Ticker", return_value=_make_ticker_mock()):
+        fin = client.get_financials("NVDA")
+
+    assert fin["ttm"]["revenue"] == pytest.approx(215_938e6, rel=1e-3)
+
+
+def test_get_financials_gross_margin_pct():
+    client = FinanceDataClient()
+    with patch("yfinance.Ticker", return_value=_make_ticker_mock()):
+        fin = client.get_financials("NVDA")
+
+    # 153_463 / 215_938 ≈ 71.07 %
+    assert fin["ttm"]["gross_margin_pct"] == pytest.approx(71.07, rel=1e-2)
+
+
+def test_get_financials_revenue_growth_yoy():
+    client = FinanceDataClient()
+    with patch("yfinance.Ticker", return_value=_make_ticker_mock()):
+        fin = client.get_financials("NVDA")
+
+    # (215_938 - 130_497) / 130_497 ≈ 65.47 %
+    assert fin["ttm"]["revenue_growth_yoy_pct"] == pytest.approx(65.47, rel=1e-2)
+
+
+def test_get_financials_three_year_cagr():
+    client = FinanceDataClient()
+    with patch("yfinance.Ticker", return_value=_make_ticker_mock()):
+        fin = client.get_financials("NVDA")
+
+    # sqrt(215_938 / 60_922) - 1 ≈ 88.2 %
+    assert fin["three_year_avg"]["revenue_cagr_pct"] == pytest.approx(88.2, rel=1e-1)
+
+
+def test_get_financials_latest_quarter():
+    client = FinanceDataClient()
+    with patch("yfinance.Ticker", return_value=_make_ticker_mock()):
+        fin = client.get_financials("NVDA")
+
+    assert fin["latest_quarter"]["revenue"] == pytest.approx(68_127e6, rel=1e-3)
+    # (68127 - 35082) / 35082 ≈ 94.2 %
+    assert fin["latest_quarter"]["revenue_growth_yoy_pct"] == pytest.approx(94.2, rel=1e-1)
+
+
+def test_get_financials_no_missing_fields_on_complete_data():
+    client = FinanceDataClient()
+    with patch("yfinance.Ticker", return_value=_make_ticker_mock()):
+        fin = client.get_financials("NVDA")
+
+    assert fin["missing_fields"] == []
+
+
+def test_get_financials_marks_missing_when_revenue_nan():
+    mock = _make_ticker_mock()
+    # Replace Total Revenue row with NaN for all columns
+    mock.income_stmt.loc["Total Revenue"] = np.float64(float("nan"))
+    mock.quarterly_income_stmt.loc["Total Revenue"] = np.float64(float("nan"))
+
+    client = FinanceDataClient()
+    with patch("yfinance.Ticker", return_value=mock):
+        fin = client.get_financials("NVDA")
+
+    assert "ttm.revenue" in fin["missing_fields"]
+    assert "latest_quarter.revenue" in fin["missing_fields"]
+
+
+def test_get_financials_exception_returns_fallback():
+    client = FinanceDataClient()
+    with patch("yfinance.Ticker", side_effect=RuntimeError("timeout")):
+        fin = client.get_financials("NVDA")
+
+    assert fin["ttm"] == {}
+    assert fin["missing_fields"] == ["all — data unavailable"]
+    assert "error" in fin
+
+
+# ── get_price_history ──────────────────────────────────────────────────────
+
+def test_get_price_history_returns_expected_keys():
+    client = FinanceDataClient()
+    with patch("yfinance.Ticker", return_value=_make_ticker_mock()):
+        hist = client.get_price_history("NVDA", period="1y")
+
+    assert "period_return_pct" in hist
+    assert "volatility_annualised_pct" in hist
+    assert "52w_high" in hist
+    assert hist["ticker"] == "NVDA"
+
+
+def test_get_price_history_return_calculation():
+    client = FinanceDataClient()
+    with patch("yfinance.Ticker", return_value=_make_ticker_mock()):
+        hist = client.get_price_history("NVDA")
+
+    # mock: close goes 100 → 140, so (140-100)/100 = 40%
+    assert hist["period_return_pct"] == pytest.approx(40.0)
+
+
+def test_get_price_history_empty_returns_error():
+    mock = _make_ticker_mock()
+    mock.history.return_value = pd.DataFrame()
+    client = FinanceDataClient()
+    with patch("yfinance.Ticker", return_value=mock):
+        hist = client.get_price_history("NVDA")
+
+    assert "error" in hist
+
+
+# ── get_news ───────────────────────────────────────────────────────────────
+
+def test_get_news_returns_normalised_items():
+    client = FinanceDataClient()
+    with patch("yfinance.Ticker", return_value=_make_ticker_mock()):
+        news = client.get_news("NVDA")
+
+    assert len(news) == 1
+    assert news[0]["title"] == "NVDA beats estimates"
+    assert news[0]["url"] == "https://example.com/nvda-beats"
+    assert news[0]["publisher"] == "Reuters"
+    assert news[0]["published_at"] == "2026-04-01T10:00:00Z"
+
+
+def test_get_news_skips_items_without_title():
+    mock = _make_ticker_mock()
+    mock.news = [{"id": "x", "content": {"title": ""}}]
+    client = FinanceDataClient()
+    with patch("yfinance.Ticker", return_value=mock):
+        news = client.get_news("NVDA")
+
+    assert news == []
+
+
+def test_get_news_exception_returns_empty_list():
+    client = FinanceDataClient()
+    with patch("yfinance.Ticker", side_effect=RuntimeError("timeout")):
+        news = client.get_news("NVDA")
+
+    assert news == []
