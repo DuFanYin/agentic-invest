@@ -63,17 +63,35 @@ def _mock_finance(
     return client
 
 
+def _mock_web(results: list | None = None):
+    client = MagicMock()
+    client.search.return_value = results or [
+        {"title": "Web result 1", "url": "https://web.example.com/1", "content": "Analysis...", "published_date": None, "score": 0.8},
+        {"title": "Web result 2", "url": "https://web.example.com/2", "content": "More analysis...", "published_date": None, "score": 0.7},
+    ]
+    return client
+
+
+def _patch(finance=None, web=None):
+    """Context manager helper — patches both _finance and _web."""
+    from contextlib import ExitStack
+    stack = ExitStack()
+    stack.enter_context(patch("src.server.agents.research._finance", finance or _mock_finance()))
+    stack.enter_context(patch("src.server.agents.research._web", web or _mock_web()))
+    return stack
+
+
 # ── Basic shape ────────────────────────────────────────────────────────────
 
 def test_returns_evidence_list():
-    with patch("src.server.agents.research._finance", _mock_finance()):
+    with _patch():
         result = research_node(_base_state())
     assert isinstance(result["evidence"], list)
     assert len(result["evidence"]) >= 1
 
 
 def test_all_evidence_have_required_fields():
-    with patch("src.server.agents.research._finance", _mock_finance()):
+    with _patch():
         result = research_node(_base_state())
     for ev in result["evidence"]:
         assert ev.id
@@ -83,14 +101,14 @@ def test_all_evidence_have_required_fields():
 
 
 def test_evidence_ids_are_unique():
-    with patch("src.server.agents.research._finance", _mock_finance()):
+    with _patch():
         result = research_node(_base_state())
     ids = [ev.id for ev in result["evidence"]]
     assert len(ids) == len(set(ids))
 
 
 def test_normalized_data_has_metrics():
-    with patch("src.server.agents.research._finance", _mock_finance()):
+    with _patch():
         result = research_node(_base_state())
     nd = result["normalized_data"]
     assert "metrics" in nd
@@ -100,19 +118,19 @@ def test_normalized_data_has_metrics():
 
 
 def test_normalized_data_has_missing_fields_list():
-    with patch("src.server.agents.research._finance", _mock_finance()):
+    with _patch():
         result = research_node(_base_state())
     assert isinstance(result["normalized_data"]["missing_fields"], list)
 
 
 def test_research_pass_incremented():
-    with patch("src.server.agents.research._finance", _mock_finance()):
+    with _patch():
         result = research_node(_base_state(pass_id=0))
     assert result["research_pass"] == 1
 
 
 def test_research_pass_incremented_on_second_pass():
-    with patch("src.server.agents.research._finance", _mock_finance()):
+    with _patch():
         result = research_node(_base_state(pass_id=1))
     assert result["research_pass"] == 2
 
@@ -120,17 +138,24 @@ def test_research_pass_incremented_on_second_pass():
 # ── Source types ───────────────────────────────────────────────────────────
 
 def test_financial_api_evidence_present():
-    with patch("src.server.agents.research._finance", _mock_finance()):
+    with _patch():
         result = research_node(_base_state())
     types = [ev.source_type for ev in result["evidence"]]
     assert "financial_api" in types
 
 
 def test_news_evidence_present():
-    with patch("src.server.agents.research._finance", _mock_finance()):
+    with _patch():
         result = research_node(_base_state())
     types = [ev.source_type for ev in result["evidence"]]
     assert "news" in types
+
+
+def test_web_evidence_present():
+    with _patch():
+        result = research_node(_base_state())
+    types = [ev.source_type for ev in result["evidence"]]
+    assert "web" in types
 
 
 def test_news_capped_at_five():
@@ -138,10 +163,41 @@ def test_news_capped_at_five():
         {"title": f"Headline {i}", "url": f"https://example.com/{i}", "published_at": None}
         for i in range(10)
     ]
-    with patch("src.server.agents.research._finance", _mock_finance(news=many_news)):
+    with _patch(finance=_mock_finance(news=many_news)):
         result = research_node(_base_state())
     news_items = [ev for ev in result["evidence"] if ev.source_type == "news"]
     assert len(news_items) <= 5
+
+
+# ── Web search deduplication ───────────────────────────────────────────────
+
+def test_web_results_with_duplicate_urls_are_dropped():
+    # URL already returned by yfinance news — should not appear twice
+    web = _mock_web([
+        {"title": "Duplicate", "url": "https://example.com/1", "content": "...", "published_date": None, "score": 0.9},
+        {"title": "Unique", "url": "https://web.example.com/unique", "content": "...", "published_date": None, "score": 0.8},
+    ])
+    with _patch(web=web):
+        result = research_node(_base_state())
+    urls = [ev.url for ev in result["evidence"]]
+    assert urls.count("https://example.com/1") == 1
+
+
+def test_web_results_without_url_excluded():
+    web = _mock_web([
+        {"title": "No URL", "url": "", "content": "...", "published_date": None, "score": 0.5},
+    ])
+    with _patch(web=web):
+        result = research_node(_base_state())
+    web_items = [ev for ev in result["evidence"] if ev.source_type == "web"]
+    assert all(ev.url for ev in web_items)
+
+
+def test_web_search_called_with_query():
+    web = _mock_web()
+    with _patch(web=web):
+        research_node(_base_state())
+    web.search.assert_called_once()
 
 
 # ── Missing fields propagated ──────────────────────────────────────────────
@@ -153,14 +209,15 @@ def test_missing_fields_from_financials_propagated():
         "latest_quarter": {},
         "missing_fields": ["revenue", "gross_margin_pct"],
     }
-    with patch("src.server.agents.research._finance", _mock_finance(financials=fin)):
+    with _patch(finance=_mock_finance(financials=fin)):
         result = research_node(_base_state())
     assert "revenue" in result["normalized_data"]["missing_fields"]
 
 
 # ── Fallback when no ticker ────────────────────────────────────────────────
 
-def test_no_ticker_produces_fallback_evidence():
+def test_no_ticker_web_search_still_runs():
+    web = _mock_web()
     state = {
         "query": "What are good ETFs?",
         "intent": ResearchIntent(ticker=None, subjects=[], scope="general"),
@@ -168,7 +225,22 @@ def test_no_ticker_produces_fallback_evidence():
         "open_questions": [],
         "agent_statuses": [],
     }
-    with patch("src.server.agents.research._finance", _mock_finance()):
+    with _patch(web=web):
+        result = research_node(state)
+    web.search.assert_called_once()
+    assert len(result["evidence"]) >= 1
+
+
+def test_no_ticker_no_web_results_produces_fallback():
+    web = _mock_web([])
+    state = {
+        "query": "What are good ETFs?",
+        "intent": ResearchIntent(ticker=None, subjects=[], scope="general"),
+        "research_pass": 0,
+        "open_questions": [],
+        "agent_statuses": [],
+    }
+    with _patch(finance=_mock_finance(), web=web):
         result = research_node(state)
     assert len(result["evidence"]) >= 1
     assert result["evidence"][0].source_type == "web"
@@ -177,36 +249,46 @@ def test_no_ticker_produces_fallback_evidence():
 # ── Resilience: individual service failures ────────────────────────────────
 
 def test_get_info_failure_does_not_crash():
-    client = _mock_finance()
-    client.get_info.side_effect = Exception("network error")
-    with patch("src.server.agents.research._finance", client):
+    finance = _mock_finance()
+    finance.get_info.side_effect = Exception("network error")
+    with _patch(finance=finance):
         result = research_node(_base_state())
     assert isinstance(result["evidence"], list)
 
 
 def test_get_financials_failure_does_not_crash():
-    client = _mock_finance()
-    client.get_financials.side_effect = Exception("timeout")
-    with patch("src.server.agents.research._finance", client):
+    finance = _mock_finance()
+    finance.get_financials.side_effect = Exception("timeout")
+    with _patch(finance=finance):
         result = research_node(_base_state())
     assert isinstance(result["evidence"], list)
 
 
 def test_get_price_history_failure_does_not_crash():
-    client = _mock_finance()
-    client.get_price_history.side_effect = Exception("rate limit")
-    with patch("src.server.agents.research._finance", client):
+    finance = _mock_finance()
+    finance.get_price_history.side_effect = Exception("rate limit")
+    with _patch(finance=finance):
+        result = research_node(_base_state())
+    assert isinstance(result["evidence"], list)
+
+
+def test_web_search_failure_does_not_crash():
+    web = _mock_web()
+    web.search.side_effect = Exception("Tavily down")
+    with _patch(web=web):
         result = research_node(_base_state())
     assert isinstance(result["evidence"], list)
 
 
 def test_all_services_fail_produces_fallback():
-    client = _mock_finance()
-    client.get_info.side_effect = Exception("err")
-    client.get_financials.side_effect = Exception("err")
-    client.get_price_history.side_effect = Exception("err")
-    client.get_news.side_effect = Exception("err")
-    with patch("src.server.agents.research._finance", client):
+    finance = _mock_finance()
+    finance.get_info.side_effect = Exception("err")
+    finance.get_financials.side_effect = Exception("err")
+    finance.get_price_history.side_effect = Exception("err")
+    finance.get_news.side_effect = Exception("err")
+    web = _mock_web()
+    web.search.side_effect = Exception("err")
+    with _patch(finance=finance, web=web):
         result = research_node(_base_state())
     assert len(result["evidence"]) >= 1
 
@@ -214,17 +296,17 @@ def test_all_services_fail_produces_fallback():
 # ── Id offset on multi-pass ────────────────────────────────────────────────
 
 def test_evidence_ids_offset_on_second_pass():
-    with patch("src.server.agents.research._finance", _mock_finance()):
+    with _patch():
         result = research_node(_base_state(pass_id=1))
     for ev in result["evidence"]:
         num = int(ev.id.split("_")[1])
-        assert num >= 100  # offset = pass_id(1) * 100
+        assert num >= 100
 
 
 # ── Price history in metrics ───────────────────────────────────────────────
 
 def test_price_history_stored_in_metrics():
-    with patch("src.server.agents.research._finance", _mock_finance()):
+    with _patch():
         result = research_node(_base_state())
     assert "price_history" in result["normalized_data"]["metrics"]
     assert result["normalized_data"]["metrics"]["price_history"]["return_1y_pct"] == 22.4

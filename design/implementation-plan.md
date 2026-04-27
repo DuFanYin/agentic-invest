@@ -1,21 +1,20 @@
 # Implementation Plan — Replacing Dummy Code with Real Functionality
 
-## Current state
+## Current state — all phases complete ✅
 
-Every agent node returns hardcoded placeholder data. The LangGraph graph, state
-model, status propagation, streaming route, and validation logic are all real
-and working. What is fake:
+All agent nodes and services are real. The system produces genuine output end-to-end.
 
-| File | What is fake |
+| File | Status |
 |---|---|
-| `services/finance_data.py` | `NotImplementedError` stub |
-| `services/web_research.py` | `NotImplementedError` stub |
-| `services/cache.py` | no-op, never stores anything |
-| `agents/research.py` | three hardcoded `Evidence` objects + fixed metrics dict |
-| `agents/fundamental_analysis.py` | two hardcoded claims + fixed metrics/risks |
-| `agents/market_sentiment.py` | two hardcoded claims + fixed sentiment fields |
-| `agents/scenario_scoring.py` | fixed score heuristic, no real reasoning |
-| `agents/report_verification.py` | template string report, no LLM synthesis |
+| `services/finance_data.py` | ✅ Real yfinance integration |
+| `services/web_research.py` | ✅ Real Tavily search (degrades gracefully if key absent) |
+| `services/cache.py` | ✅ SQLite TTL cache |
+| `services/openrouter.py` | ✅ Free model chain with retry/fallback |
+| `agents/research.py` | ✅ Real evidence from yfinance + Tavily |
+| `agents/fundamental_analysis.py` | ✅ LLM-grounded claims over real evidence |
+| `agents/market_sentiment.py` | ✅ LLM synthesis over news + price history |
+| `agents/scenario_scoring.py` | ✅ LLM scenarios, Python normalisation |
+| `agents/report_verification.py` | ✅ LLM Markdown report, Python validation |
 
 ## Guiding principles
 
@@ -84,139 +83,55 @@ and working. What is fake:
 
 ---
 
-## Phase 5 — Fundamental analysis node (`agents/fundamental_analysis.py`)
+## ~~Phase 5 — Fundamental analysis node~~ ✅ DONE
 
-**Goal:** replace hardcoded claims with LLM-generated structured analysis
-grounded in the real evidence and metrics from Phase 4.
+**Delivered:** `agents/fundamental_analysis.py` — LLM-grounded claims over real evidence and metrics.
 
-### What to build
-
-Single `OpenRouterClient.complete()` call with a structured prompt:
-
-```
-System: You are a senior equity analyst. Return JSON only. Schema: { claims[], 
-        business_quality, financials, valuation, fundamental_risks[], missing_fields[] }
-User:   Evidence summaries + normalized metrics (trimmed to fit context window)
-```
-
-Parse and validate the JSON response. On parse failure: retry once, then fall
-back to the current hardcoded template with a `missing_fields` warning.
-
-### Key constraints
-
-- Each claim must include `evidence_ids` referencing real evidence IDs from
-  the state. The prompt instructs the LLM to bind claims to IDs.
-- `missing_fields` is populated from `normalized_data["missing_fields"]` plus
-  any fields the LLM explicitly flags.
-- No claim is allowed without at least one `evidence_id` — the validation node
-  already enforces this.
-
-### New tests
-
-- `tests/unit/test_fundamental_analysis_node.py` — mock `OpenRouterClient`;
-  assert all claims have `evidence_ids`, `missing_fields` is a list,
-  valuation dict is present.
+- Builds a structured prompt with all evidence IDs + summaries, TTM/3yr/quarter metrics, missing fields, and intent
+- Single `OpenRouterClient.complete()` call; retries once on parse failure; falls back to stub on full failure
+- LLM must cite evidence IDs in every claim and risk — enforced by prompt schema
+- Attaches `metrics` and `_llm_used` flag to output; `missing_fields` propagated from state
+- 16 tests in `tests/unit/test_fundamental_analysis_node.py` — 119 total passing
 
 ---
 
-## Phase 6 — Market sentiment node (`agents/market_sentiment.py`)
-
-**Goal:** replace hardcoded sentiment with LLM synthesis over real news evidence.
-
-### What to build
-
-Two inputs drive this node:
-1. News evidence items collected in Phase 4 (source_type `"news"` or `"web"`)
-2. Price history from `FinanceDataClient.get_price_history` (30-day and
-   1-year return, volatility, 52-week high/low)
-
-Single LLM call with schema:
-
-```json
-{
-  "claims": [],
-  "news_sentiment": { "direction": "positive|neutral|negative", "confidence": "high|medium|low" },
-  "price_action":   { "trend": "...", "return_30d_pct": 0, "volatility": "..." },
-  "market_narrative": { "summary": "...", "crowding_risk": "..." },
-  "sentiment_risks": [],
-  "missing_fields": []
-}
-```
-
-### New tests
-
-- `tests/unit/test_market_sentiment_node.py` — mock LLM + finance client;
-  assert direction is one of the valid enum values, all sentiment_risks have
-  `evidence_ids`.
 
 ---
 
-## Phase 7 — Scenario scoring node (`agents/scenario_scoring.py`)
+## ~~Phase 6 — Market sentiment node~~ ✅ DONE
 
-**Goal:** replace the fixed score heuristic with LLM-generated scenarios and
-probabilities, followed by hard normalisation.
+**Delivered:** `agents/market_sentiment.py` — LLM synthesis over news evidence and price history.
 
-### What to build
-
-LLM prompt includes:
-- The fundamental analysis claims and key metrics
-- The market sentiment summary
-- The investment horizon from intent
-
-LLM returns:
-
-```json
-[
-  { "name": "...", "description": "...", "raw_score": 0.3,
-    "triggers": [], "signals": [], "evidence_ids": [] },
-  ...
-]
-```
-
-Post-processing (Python, not LLM):
-1. Assert `len(scenarios) >= 3`; if fewer returned, pad with "Other" at 0.
-2. Normalise `scores = [s / sum(scores)]`.
-3. Enforce `abs(sum - 1) < 1e-6`.
-
-This keeps the LLM responsible for reasoning and Python responsible for the
-mathematical invariant.
-
-### New tests
-
-- `tests/unit/test_scenario_scoring_node.py` — mock LLM returning 2 scenarios
-  (below minimum) and assert padding; mock returning unormalised scores and
-  assert normalisation.
+- Filters evidence to `news`/`web` source types for the prompt; passes all evidence IDs for citation
+- Price history from `normalized_data["metrics"]["price_history"]` included in prompt
+- LLM returns `claims`, `news_sentiment` (direction must be positive/neutral/negative), `price_action`, `market_narrative`, `sentiment_risks`, `missing_fields`
+- Retries once on failure; falls back to neutral stub with `_llm_used: false`
+- 15 tests in `tests/unit/test_market_sentiment_node.py`
 
 ---
 
-## Phase 8 — Report & verification node (`agents/report_verification.py`)
+## ~~Phase 7 — Scenario scoring node~~ ✅ DONE
 
-**Goal:** replace the template string report with a real LLM-synthesised
-Markdown report that reads the full research state.
+**Delivered:** `agents/scenario_scoring.py` — LLM generates 3 scenarios, Python owns normalisation.
 
-### What to build
+- LLM returns `raw_score` weights (not required to sum to 1); parser normalises before constructing `Scenario` objects (avoids Pydantic `le=1` validation error on raw weights > 1)
+- Pads to minimum 3 scenarios if LLM returns fewer; padding adds score=0 then re-normalises
+- Fallback: equal-weight bull/base/bear if LLM fails or no evidence
+- Score invariant: `sum(scores) == 1.0` guaranteed by Python, never by LLM
+- 13 tests in `tests/unit/test_scenario_scoring_node.py` — 147 total passing
 
-LLM prompt provides the full structured context (intent, evidence summaries,
-fundamental analysis claims, sentiment, scenarios) and asks for a Markdown
-report following the fixed section order from the design doc:
+---
 
-```
-Executive Summary / Company Overview / Key Evidence / Fundamental Analysis /
-Market Sentiment / Valuation View / Risk Analysis / Future Scenarios /
-Bull-Base-Bear Thesis / What To Watch Next / Sources / Disclaimer
-```
+## ~~Phase 8 — Report & verification node~~ ✅ DONE
 
-After LLM generates the report:
-1. Run all existing validation checks (scenario scores, citation coverage,
-   evidence completeness) — these are pure Python and stay unchanged.
-2. If validation has errors, append a `## Validation Warnings` section to the
-   report rather than blocking output.
+**Delivered:** `agents/report_verification.py` — LLM writes full Markdown report, Python validates.
 
-### New tests
-
-- `tests/unit/test_report_node.py` — mock LLM; assert report contains all
-  required section headers, `validation_result.is_valid` reflects real
-  error/warning counts.
+- `_llm_markdown()`: calls OpenRouter without `json_object` mode (report is prose, not JSON); own model fallback chain; bypasses `OpenRouterClient` which enforces JSON mode
+- Prompt provides full context: intent, all evidence summaries, metrics JSON, FA claims/risks, sentiment, scenarios
+- Validation (scenario scores, evidence completeness, claim coverage) always runs in pure Python after LLM
+- Errors appended as `## Validation Warnings` section rather than blocking output
+- Fallback: template report when LLM fails or no evidence
+- 14 tests in `tests/unit/test_report_node.py` — 164 unit tests total
 
 ---
 
@@ -226,21 +141,9 @@ Retry/backoff, `response_format: json_object`, JSON validation, and model fallba
 
 ---
 
-## Implementation order and dependency graph
+## Delivery summary
 
-```
-Phase 1 (yfinance)
-    └── Phase 2 (Tavily)
-            └── Phase 3 (Cache)
-                    └── Phase 4 (research_node) ← unblocks everything below
-                            ├── Phase 5 (fundamental_analysis_node)
-                            ├── Phase 6 (market_sentiment_node)
-                            │       └── Phase 7 (scenario_scoring_node)
-                            │               └── Phase 8 (report_verification_node)
-                            └── Phase 9 (openrouter hardening) — can run in parallel with 5-8
-```
-
-Phases 5, 6, and 9 can be worked on simultaneously once Phase 4 is done.
+All 9 phases complete. 164 unit tests passing. Integration tests hit real OpenRouter + yfinance APIs (~50s).
 
 ---
 

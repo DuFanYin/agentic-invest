@@ -1,6 +1,9 @@
 # Test Suite
 
-**103 tests, all passing.** Run with: `PYTHONPATH=. pytest tests/ -q`
+**164 tests, all passing.**
+
+- Unit tests only (fast, ~1s): `PYTHONPATH=. pytest tests/unit/ -q`
+- Full suite including integration (slow, ~50s — integration tests hit real OpenRouter API): `PYTHONPATH=. pytest tests/ -q`
 
 ---
 
@@ -45,19 +48,19 @@ End-to-end HTTP layer. Spins up the FastAPI app via `TestClient` with the full L
 
 ---
 
-### `tests/unit/test_research_node.py` — 18 tests
+### `tests/unit/test_research_node.py` — 24 tests
 
-`research_node` with `FinanceDataClient` mocked. Covers:
+`research_node` with both `FinanceDataClient` and `WebResearchClient` mocked. Covers:
 
-- Output shape: evidence list returned, all items have `id`/`source_type`/`summary`/`retrieved_at`, IDs unique
-- `normalized_data`: has `metrics` with TTM / 3-year-avg / latest-quarter keys; `missing_fields` is a list
-- `research_pass` incremented on each call (pass 0 → 1, pass 1 → 2)
-- Source types: `financial_api` evidence present; `news` evidence present; news capped at 5 items
-- `missing_fields` from financials propagated into `normalized_data`
-- No-ticker path: falls back to a single `web` evidence item
-- Resilience: each of `get_info`, `get_financials`, `get_price_history` can fail independently without crashing; all four failing together still returns fallback evidence
-- Multi-pass ID offset: second-pass evidence IDs start at ≥ 100
-- Price history stored under `metrics["price_history"]`
+- Output shape: evidence list returned, all items have required fields, IDs unique
+- `normalized_data`: metrics with TTM / 3-year-avg / latest-quarter; `missing_fields` is a list
+- `research_pass` incremented each call
+- Source types: `financial_api`, `news`, and `web` evidence all present; news capped at 5 items
+- Web search: called on every run; duplicate URLs across yfinance and web results deduplicated; empty-URL web results excluded
+- `missing_fields` from financials propagated
+- No-ticker path: web search still runs; returns fallback when both finance and web return nothing
+- Resilience: `get_info`, `get_financials`, `get_price_history`, web search each fail independently without crash; all failing together still returns fallback
+- Multi-pass ID offset; price history in `metrics["price_history"]`
 
 ---
 
@@ -87,6 +90,48 @@ End-to-end HTTP layer. Spins up the FastAPI app via `TestClient` with the full L
 - URL filtering: results missing or with empty `url` are dropped
 - Empty API response → `[]`
 - `search_news()`: ticker name present in the outgoing query payload; respects missing key; result shape matches `search()`
+
+---
+
+### `tests/unit/test_report_node.py` — 14 tests
+
+`report_verification_node` with `_llm_markdown` mocked. Covers:
+
+- Output keys: `report_markdown`, `report_json`, `validation_result` all present
+- All 12 required section headers present in LLM-generated report; Disclaimer contains "Not financial advice"
+- Valid state → no errors, `is_valid: true`
+- Validation errors appended as `## Validation Warnings` section in report
+- Missing fields in FA/sentiment produce warnings on `validation_result`
+- Fallback when LLM raises: template report contains all required sections
+- Fallback when no evidence: still returns a report
+- `report_json` scenarios and evidence are dicts with required keys
+- Empty statuses returned unchanged
+
+---
+
+### `tests/unit/test_market_sentiment_node.py` — 15 tests
+
+`market_sentiment_node` with `_llm` mocked. Covers:
+
+- Output shape: `market_sentiment` key present; claims list; all claims cite evidence IDs
+- `news_sentiment.direction` is one of `positive/neutral/negative`; `price_action` and `market_narrative` present
+- `sentiment_risks` is a list; `missing_fields` is a list; `_llm_used: true` on success
+- Fallback when LLM raises: `direction == "neutral"`, `_llm_used: false`, all required keys present
+- Fallback when no evidence
+- Prompt includes all evidence IDs (not just news type)
+- Empty statuses unchanged
+
+---
+
+### `tests/unit/test_scenario_scoring_node.py` — 13 tests
+
+`scenario_scoring_node` with `_llm` mocked. Covers:
+
+- Output: `scenarios` key; at least 3 scenarios; scores sum to 1.0; all scores non-negative; all scenarios have evidence IDs, name, description
+- Normalisation: raw weights `[3, 5, 2]` → `[0.3, 0.5, 0.2]`; equal weights → thirds
+- Padding: LLM returning 2 scenarios padded to 3; 1 scenario padded to 3; scores still sum to 1
+- Fallback when LLM raises: still 3 scenarios, scores sum to 1
+- Fallback when no evidence; empty statuses unchanged
 
 ---
 

@@ -8,11 +8,13 @@ from datetime import UTC, datetime
 from src.server.models.evidence import Evidence
 from src.server.models.state import ResearchState
 from src.server.services.finance_data import FinanceDataClient
+from src.server.services.web_research import WebResearchClient
 from src.server.utils.status import update_status
 
 logger = logging.getLogger(__name__)
 
 _finance = FinanceDataClient()
+_web = WebResearchClient()
 
 
 def research_node(state: ResearchState) -> ResearchState:
@@ -136,10 +138,10 @@ def research_node(state: ResearchState) -> ResearchState:
         except Exception:
             logger.warning("get_price_history failed for %s", ticker, exc_info=True)
 
-        # News
+        # News (yfinance)
         try:
             news_items = _finance.get_news(ticker)
-            for i, item in enumerate(news_items[:5]):
+            for item in news_items[:5]:
                 new_evidence.append(Evidence(
                     id=f"ev_{ev_id:03d}",
                     source_type="news",
@@ -154,6 +156,34 @@ def research_node(state: ResearchState) -> ResearchState:
                 ev_id += 1
         except Exception:
             logger.warning("get_news failed for %s", ticker, exc_info=True)
+
+    # ── Web search (Tavily) — runs for any query, ticker or not ───────────
+    web_query = (
+        f"{intent.subjects[0] if intent and intent.subjects else query} "
+        f"{open_questions[0] if open_questions else 'investment analysis'}"
+    ).strip()
+    try:
+        web_results = _web.search(web_query, max_results=5)
+        seen_urls = {ev.url for ev in new_evidence if ev.url}
+        for item in web_results:
+            url = item.get("url", "")
+            if not url or url in seen_urls:
+                continue
+            seen_urls.add(url)
+            new_evidence.append(Evidence(
+                id=f"ev_{ev_id:03d}",
+                source_type="web",
+                title=item.get("title", "Web result"),
+                url=url or None,
+                published_at=item.get("published_date"),
+                retrieved_at=retrieved_at,
+                summary=item.get("content", item.get("title", "")),
+                reliability="medium",
+                related_topics=["web"],
+            ))
+            ev_id += 1
+    except Exception:
+        logger.warning("web search failed for query: %s", web_query, exc_info=True)
 
     # ── Fallback if no ticker or all calls failed ──────────────────────────
     if not new_evidence:
