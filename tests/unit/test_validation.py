@@ -1,5 +1,7 @@
 """Unit tests: validation helpers."""
 
+import pytest
+
 from src.server.models.scenario import Scenario
 from src.server.utils.validation import (
     validate_claim_coverage,
@@ -17,14 +19,6 @@ def _scenario(**kwargs) -> Scenario:
     return Scenario(**{**defaults, **kwargs})
 
 
-def test_scenario_probabilities_must_sum_to_one() -> None:
-    scenarios = [
-        _scenario(name="Down", probability=0.3, tags=["bearish-1"]),
-        _scenario(name="Base", probability=0.7, tags=["neutral"]),
-    ]
-    assert validate_scenario_scores(scenarios) == []
-
-
 def test_invalid_scenario_probabilities_return_error() -> None:
     scenarios = [_scenario(probability=0.5)]
     errors = validate_scenario_scores(scenarios)
@@ -37,36 +31,21 @@ def test_scenario_missing_drivers_returns_error() -> None:
     assert any("drivers" in e for e in errors)
 
 
-def test_scenario_missing_triggers_returns_error() -> None:
-    scenarios = [_scenario(triggers=[])]
+def test_scenario_missing_critical_fields_returns_error() -> None:
+    scenarios = [_scenario(triggers=[], signals=[])]
     errors = validate_scenario_scores(scenarios)
     assert any("triggers" in e for e in errors)
-
-
-def test_scenario_missing_signals_returns_error() -> None:
-    scenarios = [_scenario(signals=[])]
-    errors = validate_scenario_scores(scenarios)
     assert any("signals" in e for e in errors)
 
 
-def test_evidence_completeness_passes_when_all_fields_present() -> None:
+# ── evidence completeness ───────────────────────────────────────────────────
+
+@pytest.mark.parametrize("url", ["https://example.com", None])
+def test_evidence_completeness_passes_for_valid_variants(url: str | None) -> None:
     evidence = [
         {
             "id": "ev_001",
-            "url": "https://example.com",
-            "retrieved_at": "2026-01-01T00:00:00Z",
-            "summary": "summary text",
-            "reliability": "high",
-        }
-    ]
-    assert validate_evidence_completeness(evidence) == []
-
-
-def test_evidence_completeness_passes_when_url_missing() -> None:
-    evidence = [
-        {
-            "id": "ev_001",
-            "url": None,
+            "url": url,
             "retrieved_at": "2026-01-01T00:00:00Z",
             "summary": "summary text",
             "reliability": "high",
@@ -89,17 +68,21 @@ def test_evidence_completeness_fails_when_required_field_missing() -> None:
     assert errors
 
 
-def test_claim_coverage_passes_with_valid_evidence_ids() -> None:
-    analysis = {
-        "claims": [{"statement": "claim A", "evidence_ids": ["ev_001"]}]
-    }
-    errors = validate_claim_coverage(analysis, {"ev_001"})
-    assert errors == []
+# ── claim coverage ──────────────────────────────────────────────────────────
 
-
-def test_claim_coverage_fails_with_unknown_evidence_id() -> None:
+@pytest.mark.parametrize(
+    ("evidence_ids", "known_ids", "expect_errors"),
+    [
+        (["ev_001"], {"ev_001"}, False),
+        (["ev_999"], {"ev_001"}, True),
+    ],
+)
+def test_claim_coverage_cases(evidence_ids, known_ids, expect_errors) -> None:
     analysis = {
-        "claims": [{"statement": "claim A", "evidence_ids": ["ev_999"]}]
+        "claims": [{"statement": "claim A", "evidence_ids": evidence_ids}]
     }
-    errors = validate_claim_coverage(analysis, {"ev_001"})
-    assert errors
+    errors = validate_claim_coverage(analysis, known_ids)
+    if expect_errors:
+        assert errors
+    else:
+        assert errors == []

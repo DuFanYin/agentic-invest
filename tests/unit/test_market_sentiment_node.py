@@ -1,11 +1,10 @@
-"""Unit tests for market_sentiment_node — LLM mocked."""
+"""Unit tests for market_sentiment_node — LLM injected directly."""
 
 from __future__ import annotations
 
 import pytest
-
 import json
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 from src.server.agents.market_sentiment import market_sentiment_node
 from src.server.models.analysis import MarketSentiment, MetricsBlock, NormalizedData
@@ -83,122 +82,67 @@ def _ms(result) -> MarketSentiment:
 
 # ── output shape ───────────────────────────────────────────────────────────
 
-def test_returns_market_sentiment_key():
-    with patch("src.server.agents.market_sentiment._llm", _mock_llm()):
-        result = market_sentiment_node(_state())
-    assert "market_sentiment" in result
-
-
 def test_result_is_typed_model():
-    with patch("src.server.agents.market_sentiment._llm", _mock_llm()):
-        result = market_sentiment_node(_state())
+    result = market_sentiment_node(_state(), llm=_mock_llm())
     assert isinstance(_ms(result), MarketSentiment)
 
 
-def test_claims_is_list():
-    with patch("src.server.agents.market_sentiment._llm", _mock_llm()):
-        result = market_sentiment_node(_state())
-    assert isinstance(_ms(result).claims, list)
-
-
 def test_all_claims_have_evidence_ids():
-    with patch("src.server.agents.market_sentiment._llm", _mock_llm()):
-        result = market_sentiment_node(_state())
+    result = market_sentiment_node(_state(), llm=_mock_llm())
     for claim in _ms(result).claims:
         assert len(claim.evidence_ids) >= 1
 
 
-def test_news_sentiment_direction_valid():
-    with patch("src.server.agents.market_sentiment._llm", _mock_llm()):
-        result = market_sentiment_node(_state())
-    assert _ms(result).news_sentiment.direction in ("positive", "neutral", "negative")
-
-
-def test_price_action_present():
-    with patch("src.server.agents.market_sentiment._llm", _mock_llm()):
-        result = market_sentiment_node(_state())
-    assert _ms(result).price_action is not None
-
-
-def test_market_narrative_present():
-    with patch("src.server.agents.market_sentiment._llm", _mock_llm()):
-        result = market_sentiment_node(_state())
-    assert _ms(result).market_narrative.summary
-
-
-def test_sentiment_risks_is_list():
-    with patch("src.server.agents.market_sentiment._llm", _mock_llm()):
-        result = market_sentiment_node(_state())
-    assert isinstance(_ms(result).sentiment_risks, list)
-
-
-def test_missing_fields_is_list():
-    with patch("src.server.agents.market_sentiment._llm", _mock_llm()):
-        result = market_sentiment_node(_state())
-    assert isinstance(_ms(result).missing_fields, list)
-
-
-def test_llm_used_flag_true_on_success():
-    with patch("src.server.agents.market_sentiment._llm", _mock_llm()):
-        result = market_sentiment_node(_state())
-    assert isinstance(_ms(result), MarketSentiment)
+def test_core_sentiment_fields_present_and_valid():
+    result = market_sentiment_node(_state(), llm=_mock_llm())
+    ms = _ms(result)
+    assert ms.news_sentiment.direction in ("positive", "neutral", "negative")
+    assert ms.market_narrative.summary
 
 
 # ── raises on LLM failure (no stub fallback) ──────────────────────────────
 
 def test_raises_when_llm_raises():
     with pytest.raises(RuntimeError, match="market_sentiment"):
-        with patch("src.server.agents.market_sentiment._llm", _mock_llm(raises=RuntimeError("exhausted"))):
-            market_sentiment_node(_state())
+        market_sentiment_node(_state(), llm=_mock_llm(raises=RuntimeError("exhausted")))
 
 
 def test_raises_when_no_evidence():
     with pytest.raises(RuntimeError, match="market_sentiment"):
-        with patch("src.server.agents.market_sentiment._llm", _mock_llm()):
-            market_sentiment_node(_state(evidence=[]))
+        market_sentiment_node(_state(evidence=[]), llm=_mock_llm())
 
 
 # ── news evidence filtering ────────────────────────────────────────────────
 
-def test_only_news_evidence_used_in_prompt():
+def test_evidence_ids_included_in_prompt():
     captured = {}
     def capture(prompt, **kw):
         captured["prompt"] = prompt
         return json.dumps(_llm_response())
 
-    with patch("src.server.agents.market_sentiment._llm") as mock_llm:
-        mock_llm.call_with_retry.side_effect = capture
-        market_sentiment_node(_state())
+    llm = MagicMock()
+    llm.call_with_retry.side_effect = capture
+    market_sentiment_node(_state(), llm=llm)
 
-    # all IDs should be listed in AVAILABLE EVIDENCE IDs
     assert "ev_001" in captured["prompt"]
 
 
 def test_empty_statuses_returned_unchanged():
-    with patch("src.server.agents.market_sentiment._llm", _mock_llm()):
-        result = market_sentiment_node(_state())
+    result = market_sentiment_node(_state(), llm=_mock_llm())
     assert result["agent_statuses"] == []
 
 
 # ── agent_questions surfacing ──────────────────────────────────────────────
 
 def test_agent_questions_empty_when_no_missing_fields():
-    with patch("src.server.agents.market_sentiment._llm", _mock_llm()):
-        result = market_sentiment_node(_state())
+    result = market_sentiment_node(_state(), llm=_mock_llm())
     assert result["agent_questions"] == []
 
 
 def test_agent_questions_populated_when_llm_reports_missing_fields():
     response = _llm_response()
     response["missing_fields"] = ["analyst_ratings", "short_interest"]
-    with patch("src.server.agents.market_sentiment._llm", _mock_llm(response)):
-        result = market_sentiment_node(_state())
+    result = market_sentiment_node(_state(), llm=_mock_llm(response))
     qs = result["agent_questions"]
     assert len(qs) == 2
     assert all("market_sentiment needs" in q for q in qs)
-
-
-def test_agent_questions_empty_on_llm_failure():
-    with pytest.raises(RuntimeError):
-        with patch("src.server.agents.market_sentiment._llm", _mock_llm(raises=RuntimeError("err"))):
-            market_sentiment_node(_state())

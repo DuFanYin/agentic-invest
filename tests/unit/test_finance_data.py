@@ -116,40 +116,46 @@ def _make_ticker_mock(info: dict | None = None, *, no_name: bool = False) -> Mag
 
 # ── _safe / _pct / _growth helpers ────────────────────────────────────────
 
-def test_safe_converts_numpy_float():
-    assert _safe(np.float64(3.14)) == pytest.approx(3.14)
-    assert isinstance(_safe(np.float64(3.14)), float)
+@pytest.mark.parametrize(
+    ("value", "expected", "expected_type"),
+    [
+        (np.float64(3.14), pytest.approx(3.14), float),
+        (np.int64(42), 42, int),
+    ],
+)
+def test_safe_converts_numpy_scalars(value, expected, expected_type):
+    converted = _safe(value)
+    assert converted == expected
+    assert isinstance(converted, expected_type)
 
 
-def test_safe_converts_numpy_int():
-    assert _safe(np.int64(42)) == 42
-    assert isinstance(_safe(np.int64(42)), int)
+@pytest.mark.parametrize("value", [float("nan"), np.float64(float("nan"))])
+def test_safe_returns_none_for_nan(value):
+    assert _safe(value) is None
 
 
-def test_safe_returns_none_for_nan():
-    assert _safe(float("nan")) is None
-    assert _safe(np.float64(float("nan"))) is None
+@pytest.mark.parametrize(
+    ("num", "den", "expected"),
+    [
+        (75.0, 100.0, pytest.approx(75.0)),
+        (75.0, 0.0, None),
+        (None, 100.0, None),
+        (75.0, None, None),
+    ],
+)
+def test_pct_cases(num, den, expected):
+    assert _pct(num, den) == expected
 
 
-def test_pct_basic():
-    assert _pct(75.0, 100.0) == pytest.approx(75.0)
-
-
-def test_pct_zero_denominator():
-    assert _pct(75.0, 0.0) is None
-
-
-def test_pct_none_input():
-    assert _pct(None, 100.0) is None
-    assert _pct(75.0, None) is None
-
-
-def test_growth_basic():
-    assert _growth(130.0, 100.0) == pytest.approx(30.0)
-
-
-def test_growth_zero_prior():
-    assert _growth(100.0, 0.0) is None
+@pytest.mark.parametrize(
+    ("current", "prior", "expected"),
+    [
+        (130.0, 100.0, pytest.approx(30.0)),
+        (100.0, 0.0, None),
+    ],
+)
+def test_growth_cases(current, prior, expected):
+    assert _growth(current, prior) == expected
 
 
 # ── get_info ───────────────────────────────────────────────────────────────

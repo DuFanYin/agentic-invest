@@ -13,7 +13,7 @@ from src.server.utils.status import update_status
 
 logger = logging.getLogger(__name__)
 
-_llm = OpenRouterClient()
+_default_llm = OpenRouterClient()
 _NODE = "scenario_scoring"
 
 _MIN_SCENARIOS = 3
@@ -140,7 +140,7 @@ def _parse_llm_scenarios(raw: str, evidence_ids: list[str]) -> list[Scenario]:
     return scenarios
 
 
-def scenario_scoring_node(state: ResearchState) -> ResearchState:
+def scenario_scoring_node(state: ResearchState, *, llm: OpenRouterClient = _default_llm) -> ResearchState:
     evidence = state.get("evidence") or []
     fundamental_analysis = state.get("fundamental_analysis")
     market_sentiment = state.get("market_sentiment")
@@ -159,7 +159,7 @@ def scenario_scoring_node(state: ResearchState) -> ResearchState:
     if evidence:
         prompt = _build_prompt(fundamental_analysis, market_sentiment, evidence, intent)
         try:
-            raw = _llm.call_with_retry(prompt, system=_SYSTEM)
+            raw = llm.call_with_retry(prompt, system=_SYSTEM)
             parsed = _parse_llm_scenarios(raw, evidence_ids)
             scenarios = _normalise(parsed)
             llm_used = True

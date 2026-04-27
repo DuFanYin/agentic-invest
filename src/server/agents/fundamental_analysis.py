@@ -12,7 +12,7 @@ from src.server.utils.status import update_status
 
 logger = logging.getLogger(__name__)
 
-_llm = OpenRouterClient()
+_default_llm = OpenRouterClient()
 _NODE = "fundamental_analysis"
 
 _SYSTEM = (
@@ -71,7 +71,7 @@ FINANCIAL METRICS:
 MISSING DATA: {', '.join(missing_fields) if missing_fields else 'none reported'}
 """
 
-def fundamental_analysis_node(state: ResearchState) -> ResearchState:
+def fundamental_analysis_node(state: ResearchState, *, llm: OpenRouterClient = _default_llm) -> ResearchState:
     evidence = state.get("evidence") or []
     normalized_data = state.get("normalized_data")
     intent = state.get("intent")
@@ -90,7 +90,7 @@ def fundamental_analysis_node(state: ResearchState) -> ResearchState:
     if evidence:
         prompt = _build_prompt(evidence, metrics, missing_fields, intent)
         try:
-            raw = _llm.call_with_retry(prompt, system=_SYSTEM)
+            raw = llm.call_with_retry(prompt, system=_SYSTEM)
             parsed = json.loads(raw)
             parsed["metrics"] = metrics
             parsed.setdefault("missing_fields", missing_fields)

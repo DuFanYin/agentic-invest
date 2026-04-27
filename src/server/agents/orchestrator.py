@@ -152,11 +152,11 @@ def build_graph(llm_client: OpenRouterClient | None = None) -> StateGraph:
 
     builder.add_node("parse_intent", _make_parse_intent_node(llm_client))
     builder.add_node("research", research_node)
-    builder.add_node("fundamental_analysis", fundamental_analysis_node)
-    builder.add_node("market_sentiment", market_sentiment_node)
+    builder.add_node("fundamental_analysis", lambda s: fundamental_analysis_node(s, llm=llm_client))
+    builder.add_node("market_sentiment", lambda s: market_sentiment_node(s, llm=llm_client))
     builder.add_node("gap_check", _gap_check_node)
-    builder.add_node("scenario_scoring", scenario_scoring_node)
-    builder.add_node("report_verification", report_verification_node)
+    builder.add_node("scenario_scoring", lambda s: scenario_scoring_node(s, llm=llm_client))
+    builder.add_node("report_verification", lambda s: report_verification_node(s, llm=llm_client))
 
     builder.add_edge(START, "parse_intent")
     builder.add_edge("parse_intent", "research")

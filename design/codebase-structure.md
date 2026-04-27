@@ -95,7 +95,6 @@ Exposes typed module-level constants:
 | Constant | Purpose |
 |---|---|
 | `OPENROUTER_API_KEY` | LLM auth |
-| `OPENROUTER_MODEL` | optional model override |
 | `OPENROUTER_BASE_URL` | defaults to `https://openrouter.ai/api/v1` |
 | `OPENROUTER_HTTP_REFERER` | optional ranking header |
 | `OPENROUTER_APP_TITLE` | optional ranking header |
@@ -205,8 +204,8 @@ External dependency wrappers — agents do not call third-party APIs directly.
 
 #### `openrouter.py`
 
-OpenRouter LLM client with a three-model free-tier chain:
-`openai/gpt-oss-120b:free → openai/gpt-oss-20b:free → nvidia/nemotron-3-super-120b-a12b:free`
+OpenRouter LLM client with a four-model free-tier chain:
+`openai/gpt-oss-120b:free → qwen/qwen3-next-80b-a3b-instruct:free → meta-llama/llama-3.3-70b-instruct:free → google/gemma-3-27b-it:free`
 
 Per-model retry with exponential backoff on 429/5xx. Two internal error classes:
 - `_RetryableError`: retry this model

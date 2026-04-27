@@ -4,7 +4,7 @@ OpenRouter LLM client.
 Strategy
 ────────
 - Primary model: openai/gpt-oss-120b:free  (higher quality default)
-- Fallback chain: openai/gpt-oss-20b:free → nvidia/nemotron-3-super-120b-a12b:free
+- Fallback chain: qwen/qwen3-next-80b-a3b-instruct:free → meta-llama/llama-3.3-70b-instruct:free → google/gemma-3-27b-it:free
 - Per-model: up to 2 retries with 2 s exponential backoff on 429 / 5xx
 - complete()      — enforces response_format json_object; validates JSON before returning
 - complete_text() — free-form text (Markdown reports); skips JSON mode and validation
@@ -25,15 +25,15 @@ from src.server.config import (
     OPENROUTER_APP_TITLE,
     OPENROUTER_BASE_URL,
     OPENROUTER_HTTP_REFERER,
-    OPENROUTER_MODEL,
 )
 
 logger = logging.getLogger(__name__)
 
 _FREE_MODELS = [
     "openai/gpt-oss-120b:free",
-    "openai/gpt-oss-20b:free",
-    "nvidia/nemotron-3-super-120b-a12b:free",
+    "qwen/qwen3-next-80b-a3b-instruct:free",
+    "meta-llama/llama-3.3-70b-instruct:free",
+    "google/gemma-3-27b-it:free",
 ]
 
 _RETRYABLE_CODES = {429, 500, 502, 503, 504}
@@ -60,8 +60,6 @@ class OpenRouterClient:
         self.api_key = api_key or OPENROUTER_API_KEY
         if model:
             self._models = [model]
-        elif OPENROUTER_MODEL and OPENROUTER_MODEL not in _FREE_MODELS:
-            self._models = [OPENROUTER_MODEL]
         else:
             self._models = _FREE_MODELS
         self.base_url = base_url.rstrip("/")

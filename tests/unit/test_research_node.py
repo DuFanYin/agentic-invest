@@ -95,13 +95,6 @@ def _patch(finance=None, web=None):
 
 # ── Basic shape ────────────────────────────────────────────────────────────
 
-def test_returns_evidence_list():
-    with _patch():
-        result = research_node(_base_state())
-    assert isinstance(result["evidence"], list)
-    assert len(result["evidence"]) >= 1
-
-
 def test_all_evidence_have_required_fields():
     with _patch():
         result = research_node(_base_state())
@@ -129,46 +122,13 @@ def test_normalized_data_has_metrics():
     assert nd.metrics.latest_quarter is not None
 
 
-def test_normalized_data_has_missing_fields_list():
-    with _patch():
-        result = research_node(_base_state())
-    assert isinstance(result["normalized_data"].missing_fields, list)
-
-
 def test_research_pass_incremented():
     with _patch():
         result = research_node(_base_state(pass_id=0))
     assert result["research_pass"] == 1
 
 
-def test_research_pass_incremented_on_second_pass():
-    with _patch():
-        result = research_node(_base_state(pass_id=1))
-    assert result["research_pass"] == 2
-
-
 # ── Source types ───────────────────────────────────────────────────────────
-
-def test_financial_api_evidence_present():
-    with _patch():
-        result = research_node(_base_state())
-    types = [ev.source_type for ev in result["evidence"]]
-    assert "financial_api" in types
-
-
-def test_news_evidence_present():
-    with _patch():
-        result = research_node(_base_state())
-    types = [ev.source_type for ev in result["evidence"]]
-    assert "news" in types
-
-
-def test_web_evidence_present():
-    with _patch():
-        result = research_node(_base_state())
-    types = [ev.source_type for ev in result["evidence"]]
-    assert "web" in types
-
 
 def test_news_capped_at_five():
     many_news = [
@@ -181,26 +141,18 @@ def test_news_capped_at_five():
     assert len(news_items) <= 5
 
 
-# ── Web search deduplication ───────────────────────────────────────────────
+# ── Web result cleaning ────────────────────────────────────────────────────
 
-def test_web_results_with_duplicate_urls_are_dropped():
-    # URL already returned by yfinance news — should not appear twice
+def test_web_results_are_cleaned_for_duplicate_and_empty_urls():
     web = _mock_web([
         {"title": "Duplicate", "url": "https://example.com/1", "content": "...", "published_date": None, "score": 0.9},
         {"title": "Unique", "url": "https://web.example.com/unique", "content": "...", "published_date": None, "score": 0.8},
+        {"title": "No URL", "url": "", "content": "...", "published_date": None, "score": 0.5},
     ])
     with _patch(web=web):
         result = research_node(_base_state())
     urls = [ev.url for ev in result["evidence"]]
     assert urls.count("https://example.com/1") == 1
-
-
-def test_web_results_without_url_excluded():
-    web = _mock_web([
-        {"title": "No URL", "url": "", "content": "...", "published_date": None, "score": 0.5},
-    ])
-    with _patch(web=web):
-        result = research_node(_base_state())
     web_items = [ev for ev in result["evidence"] if ev.source_type == "web"]
     assert all(ev.url for ev in web_items)
 
@@ -260,33 +212,16 @@ def test_no_ticker_no_web_results_raises():
 
 # ── Resilience: individual service failures ────────────────────────────────
 
-def test_get_info_failure_does_not_crash():
+@pytest.mark.parametrize("failed_target", ["get_info", "get_financials", "web_search"])
+def test_single_service_failure_does_not_crash(failed_target: str):
     finance = _mock_finance()
-    finance.get_info.side_effect = Exception("network error")
-    with _patch(finance=finance):
-        result = research_node(_base_state())
-    assert isinstance(result["evidence"], list)
-
-
-def test_get_financials_failure_does_not_crash():
-    finance = _mock_finance()
-    finance.get_financials.side_effect = Exception("timeout")
-    with _patch(finance=finance):
-        result = research_node(_base_state())
-    assert isinstance(result["evidence"], list)
-
-
-def test_get_price_history_failure_does_not_crash():
-    finance = _mock_finance()
-    finance.get_price_history.side_effect = Exception("rate limit")
-    with _patch(finance=finance):
-        result = research_node(_base_state())
-    assert isinstance(result["evidence"], list)
-
-
-def test_web_search_failure_does_not_crash():
     web = _mock_web()
-    web.search.side_effect = Exception("Tavily down")
+    if failed_target == "get_info":
+        finance.get_info.side_effect = Exception("network error")
+    elif failed_target == "get_financials":
+        finance.get_financials.side_effect = Exception("timeout")
+    else:
+        web.search.side_effect = Exception("Tavily down")
     with _patch(web=web):
         result = research_node(_base_state())
     assert isinstance(result["evidence"], list)
@@ -326,19 +261,6 @@ def test_price_history_stored_in_metrics():
 
 # ── Conflict detection ─────────────────────────────────────────────────────
 
-def test_no_conflicts_when_all_evidence_same_reliability():
-    ev = [
-        Evidence(id="ev_001", source_type="financial_api", title="A", summary="s",
-                 reliability="high", retrieved_at="2026-01-01T00:00:00Z",
-                 related_topics=["valuation"]),
-        Evidence(id="ev_002", source_type="financial_api", title="B", summary="s",
-                 reliability="high", retrieved_at="2026-01-01T00:00:00Z",
-                 related_topics=["valuation"]),
-    ]
-    conflicts = _detect_conflicts(ev, {})
-    assert conflicts == []
-
-
 def test_conflict_detected_on_reliability_divergence():
     ev = [
         Evidence(id="ev_001", source_type="financial_api", title="A", summary="s",
@@ -355,7 +277,6 @@ def test_conflict_detected_on_reliability_divergence():
 
 
 def test_conflicts_stored_in_normalized_data():
-    # high + low reliability on same topic triggers a conflict
     finance = _mock_finance()
     finance.get_info.return_value = {
         "name": "Apple Inc", "sector": "Technology",

@@ -12,7 +12,7 @@ from src.server.utils.status import update_status
 
 logger = logging.getLogger(__name__)
 
-_llm = OpenRouterClient()
+_default_llm = OpenRouterClient()
 _NODE = "market_sentiment"
 
 _SYSTEM = (
@@ -63,7 +63,7 @@ PRICE / MARKET DATA:
 {price_str}
 """
 
-def market_sentiment_node(state: ResearchState) -> ResearchState:
+def market_sentiment_node(state: ResearchState, *, llm: OpenRouterClient = _default_llm) -> ResearchState:
     evidence = state.get("evidence") or []
     normalized_data = state.get("normalized_data")
     statuses = list(state.get("agent_statuses") or [])
@@ -82,7 +82,7 @@ def market_sentiment_node(state: ResearchState) -> ResearchState:
     if evidence:
         prompt = _build_prompt(news_evidence, price_history, all_evidence_ids)
         try:
-            raw = _llm.call_with_retry(prompt, system=_SYSTEM)
+            raw = llm.call_with_retry(prompt, system=_SYSTEM)
             parsed = json.loads(raw)
             result = MarketSentiment.model_validate(parsed)
         except Exception as exc:

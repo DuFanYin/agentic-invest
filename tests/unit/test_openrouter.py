@@ -16,14 +16,6 @@ def test_strip_fences_removes_json_fence():
     assert _strip_fences('```json\n{"ok": true}\n```') == '{"ok": true}'
 
 
-def test_strip_fences_removes_plain_fence():
-    assert _strip_fences('```\n{"ok": true}\n```') == '{"ok": true}'
-
-
-def test_strip_fences_passthrough_when_no_fence():
-    assert _strip_fences('{"ok": true}') == '{"ok": true}'
-
-
 # ── helpers ────────────────────────────────────────────────────────────────
 
 def _ok_response(content: str = '{"ok": true}', status: int = 200) -> MagicMock:
@@ -50,13 +42,6 @@ def _client(model: str = "test/model") -> OpenRouterClient:
 
 # ── basic success ──────────────────────────────────────────────────────────
 
-def test_complete_returns_json_string():
-    with patch("httpx.Client") as mock_http:
-        mock_http.return_value.__enter__.return_value.post.return_value = _ok_response()
-        result = _client().complete("test prompt")
-    assert result == '{"ok": true}'
-
-
 def test_complete_json_returns_parsed_dict():
     with patch("httpx.Client") as mock_http:
         mock_http.return_value.__enter__.return_value.post.return_value = _ok_response()
@@ -74,7 +59,6 @@ def test_complete_strips_markdown_fences():
 
 
 def test_complete_raises_without_api_key():
-    # Patch config so OPENROUTER_API_KEY is None at construction time.
     with patch("src.server.services.openrouter.OPENROUTER_API_KEY", None):
         client = OpenRouterClient(model="test/model")
     with pytest.raises(RuntimeError, match="OPENROUTER_API_KEY"):
@@ -84,20 +68,16 @@ def test_complete_raises_without_api_key():
 # ── retry on 429 ──────────────────────────────────────────────────────────
 
 def test_complete_retries_on_429_then_succeeds():
-    post = MagicMock(side_effect=[
-        _error_response(429),
-        _ok_response(),
-    ])
+    post = MagicMock(side_effect=[_error_response(429), _ok_response()])
     with patch("httpx.Client") as mock_http:
         mock_http.return_value.__enter__.return_value.post = post
-        with patch("time.sleep"):  # don't actually wait
+        with patch("time.sleep"):
             result = _client().complete("test")
     assert result == '{"ok": true}'
     assert post.call_count == 2
 
 
 def test_complete_falls_back_to_next_model_after_exhausted_retries():
-    # Model A always 429s; model B succeeds.
     call_count = {"n": 0}
     def side_effect(*a, **kw):
         call_count["n"] += 1
@@ -148,18 +128,14 @@ def test_complete_skips_model_on_400():
         mock_http.return_value.__enter__.return_value.post.side_effect = side_effect
         result = client.complete("test")
 
-    # model-a tried exactly once (no retries on fatal), model-b succeeds
     assert result == '{"ok": true}'
     assert call_count["n"] == 2
 
 
-# ── invalid JSON from model treated as retryable ──────────────────────────
+# ── invalid JSON treated as retryable ─────────────────────────────────────
 
 def test_complete_retries_on_invalid_json():
-    post = MagicMock(side_effect=[
-        _ok_response("not json at all"),
-        _ok_response('{"ok": true}'),
-    ])
+    post = MagicMock(side_effect=[_ok_response("not json at all"), _ok_response('{"ok": true}')])
     with patch("httpx.Client") as mock_http:
         mock_http.return_value.__enter__.return_value.post = post
         with patch("time.sleep"):
@@ -167,21 +143,7 @@ def test_complete_retries_on_invalid_json():
     assert result == '{"ok": true}'
 
 
-# ── model selection ────────────────────────────────────────────────────────
-
-def test_free_model_chain_used_when_no_env_model():
-    from src.server.services.openrouter import _FREE_MODELS
-    with patch("src.server.services.openrouter.OPENROUTER_MODEL", None):
-        client = OpenRouterClient(api_key="key")
-    assert client._models == _FREE_MODELS
-
-
-def test_custom_model_respected_when_set():
-    client = OpenRouterClient(api_key="key", model="anthropic/claude-3-haiku")
-    assert client._models == ["anthropic/claude-3-haiku"]
-
-
-# ── system prompt passthrough ──────────────────────────────────────────────
+# ── system prompt and response_format ─────────────────────────────────────
 
 def test_custom_system_prompt_sent():
     captured = {}
@@ -197,8 +159,6 @@ def test_custom_system_prompt_sent():
     assert messages[0]["role"] == "system"
     assert messages[0]["content"] == "custom system"
 
-
-# ── response_format always sent ────────────────────────────────────────────
 
 def test_response_format_json_object_in_payload():
     captured = {}

@@ -19,9 +19,9 @@ from src.server.utils.validation import (
 
 logger = logging.getLogger(__name__)
 
-_llm = OpenRouterClient()
+_default_llm = OpenRouterClient()
+_default_llm.max_retries = 1  # report is long; limit retries to avoid timeout cascades
 _NODE = "report_verification"
-_llm.max_retries = 1  # report is long; limit retries to avoid timeout cascades
 
 _SYSTEM = (
     "You are a senior investment analyst writing a structured research report. "
@@ -129,7 +129,7 @@ INSTRUCTIONS:
 """
 
 
-def report_verification_node(state: ResearchState) -> ResearchState:
+def report_verification_node(state: ResearchState, *, llm: OpenRouterClient = _default_llm) -> ResearchState:
     intent = state.get("intent")
     evidence = state.get("evidence") or []
     fundamental_analysis = state.get("fundamental_analysis") or {}
@@ -166,7 +166,7 @@ def report_verification_node(state: ResearchState) -> ResearchState:
     if evidence:
         prompt = _build_prompt(intent, evidence_dump, fundamental_analysis, market_sentiment, scenarios)
         try:
-            raw = _llm.complete_text(prompt, system=_SYSTEM)
+            raw = llm.complete_text(prompt, system=_SYSTEM)
             if raw and len(raw.strip()) > 100:
                 report_markdown = raw.strip()
                 if errors:

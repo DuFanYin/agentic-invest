@@ -31,7 +31,6 @@ def _load_env() -> None:
 _load_env()
 
 OPENROUTER_API_KEY: str | None = os.getenv("OPENROUTER_API_KEY")
-OPENROUTER_MODEL: str | None = os.getenv("OPENROUTER_MODEL") or None
 OPENROUTER_BASE_URL: str = os.getenv("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1")
 OPENROUTER_HTTP_REFERER: str | None = os.getenv("OPENROUTER_HTTP_REFERER") or None
 OPENROUTER_APP_TITLE: str | None = os.getenv("OPENROUTER_APP_TITLE") or None
