@@ -33,19 +33,15 @@ MACRO_TICKERS: dict[str, str] = {
 }
 
 
-def _fred_url(series_id: str, api_key: str) -> str:
-    return (
-        f"https://api.stlouisfed.org/fred/series/observations"
-        f"?series_id={series_id}&api_key={api_key}&file_type=json"
-        f"&observation_start={(datetime.now(UTC) - timedelta(days=400)).strftime('%Y-%m-%d')}"
-        f"&sort_order=desc&limit=13"
-    )
-
-
 def _fetch_fred_series(series_id: str, label: str, api_key: str) -> dict[str, Any]:
     import httpx
     try:
-        url = _fred_url(series_id, api_key)
+        url = (
+            f"https://api.stlouisfed.org/fred/series/observations"
+            f"?series_id={series_id}&api_key={api_key}&file_type=json"
+            f"&observation_start={(datetime.now(UTC) - timedelta(days=400)).strftime('%Y-%m-%d')}"
+            f"&sort_order=desc&limit=13"
+        )
         resp = httpx.get(url, timeout=10)
         resp.raise_for_status()
         observations = resp.json().get("observations", [])

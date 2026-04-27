@@ -560,6 +560,7 @@ function App() {
     let buffer = '';
     let gotFinal = false;
     let gotError = false;
+    let gotDone = false;
 
     const processBlock = (block) => {
       const lines = block.split('\n');
@@ -619,6 +620,11 @@ function App() {
         revealSections(setSections);
         return;
       }
+
+      if (eventName === 'done') {
+        gotDone = true;
+        return;
+      }
     };
 
     while (true) {
@@ -635,7 +641,13 @@ function App() {
     }
 
     if (!gotFinal && !gotError) {
-      throw new Error('Stream ended without final report.');
+      const err = new Error(
+        gotDone
+          ? 'Research stream finished before final report (likely cancelled/interrupted).'
+          : 'Stream ended without final report.'
+      );
+      if (gotDone) err.code = 'STREAM_DONE_WITHOUT_FINAL';
+      throw err;
     }
   }, [applyAgentStatuses]);
   streamResearchRef.current = streamResearch;
@@ -655,7 +667,10 @@ function App() {
       await streamResearch(trimmed);
     } catch (error) {
       setAppState('error');
-      setLogLines((prev) => [...prev, { time: NOW(), agentId: null, msg: `run failed: ${error.message || 'Unknown stream error'}` }]);
+      const msg = error?.code === 'STREAM_DONE_WITHOUT_FINAL'
+        ? `run cancelled: ${error.message}`
+        : `run failed: ${error.message || 'Unknown stream error'}`;
+      setLogLines((prev) => [...prev, { time: NOW(), agentId: null, msg }]);
     }
   }, [query, streamResearch]);
 

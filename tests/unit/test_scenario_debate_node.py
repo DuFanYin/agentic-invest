@@ -79,25 +79,13 @@ def _state(scenarios=None):
 
 # ── output shape ───────────────────────────────────────────────────────────
 
-def test_result_is_typed_model():
+def test_result_shape_and_core_fields():
     result = _run(scenario_debate_node(_state(), llm=_mock_llm()))
-    assert isinstance(result["scenario_debate"], ScenarioDebate)
-
-
-def test_debate_summary_present():
-    result = _run(scenario_debate_node(_state(), llm=_mock_llm()))
-    assert isinstance(result["scenario_debate"].debate_summary, str)
-    assert len(result["scenario_debate"].debate_summary) > 0
-
-
-def test_calibrated_scenarios_present():
-    result = _run(scenario_debate_node(_state(), llm=_mock_llm()))
-    assert len(result["scenario_debate"].calibrated_scenarios) == 3
-
-
-def test_confidence_valid():
-    result = _run(scenario_debate_node(_state(), llm=_mock_llm()))
-    assert result["scenario_debate"].confidence in ("high", "medium", "low")
+    debate = result["scenario_debate"]
+    assert isinstance(debate, ScenarioDebate)
+    assert isinstance(debate.debate_summary, str) and debate.debate_summary
+    assert len(debate.calibrated_scenarios) == 3
+    assert debate.confidence in ("high", "medium", "low")
 
 
 # ── probability constraints ────────────────────────────────────────────────

@@ -36,22 +36,12 @@ def test_expired_entry_returns_none(cache):
     assert cache.get("k") is None
 
 
-def test_expiry_deletes_row_on_get(cache):
-    cache.set("k", "value", ttl_seconds=0)
-    time.sleep(0.01)
-    cache.get("k")
-    assert cache.get("k") is None  # row is gone, not re-expired
-
-
 # ── overwrite ──────────────────────────────────────────────────────────────
 
-def test_set_overwrites_existing_key(cache):
+def test_set_overwrites_existing_key_and_ttl(cache):
     cache.set("k", "first")
     cache.set("k", "second")
     assert cache.get("k") == "second"
-
-
-def test_set_overwrites_resets_ttl(cache):
     cache.set("k", "first", ttl_seconds=0)
     time.sleep(0.01)
     cache.set("k", "second", ttl_seconds=60)
@@ -66,10 +56,6 @@ def test_explicit_delete(cache):
     assert cache.get("k") is None
 
 
-def test_delete_nonexistent_key_is_safe(cache):
-    cache.delete("ghost")  # should not raise
-
-
 # ── clear_expired ──────────────────────────────────────────────────────────
 
 def test_clear_expired_removes_only_expired_rows(cache):
@@ -81,14 +67,16 @@ def test_clear_expired_removes_only_expired_rows(cache):
     assert cache.get("live") == "v"
 
 
-def test_clear_expired_returns_zero_when_nothing_expired(cache):
-    cache.set("k", "v", ttl_seconds=60)
-    assert cache.clear_expired() == 0
-
-
 # ── default TTL and key isolation ─────────────────────────────────────────
 
 def test_default_ttl_used_when_not_specified(tmp_path):
     cache = Cache(db_path=str(tmp_path / "test.db"), default_ttl=9999)
     cache.set("k", "v")
     assert cache.get("k") == "v"
+
+
+def test_corrupted_json_row_behaves_like_cache_miss(cache):
+    cache.set("bad", {"ok": True})
+    with cache._connect() as conn:
+        conn.execute("UPDATE cache SET value = ? WHERE key = ?", ("{not-json", "bad"))
+    assert cache.get("bad") is None

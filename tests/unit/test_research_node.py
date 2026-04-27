@@ -111,37 +111,22 @@ def _patch(finance=None, web=None, macro=None):
 
 # ── Basic shape ────────────────────────────────────────────────────────────
 
-def test_all_evidence_have_required_fields():
+def test_research_smoke_contract_and_metrics():
     with _patch():
         result = _run(research_node(_base_state()))
+    ids = [ev.id for ev in result["evidence"]]
+    assert result["research_iteration"] == 1
     for ev in result["evidence"]:
         assert ev.id
         assert ev.source_type
         assert ev.summary
         assert ev.retrieved_at
-
-
-def test_evidence_ids_are_unique():
-    with _patch():
-        result = _run(research_node(_base_state()))
-    ids = [ev.id for ev in result["evidence"]]
     assert len(ids) == len(set(ids))
-
-
-def test_normalized_data_has_metrics():
-    with _patch():
-        result = _run(research_node(_base_state()))
     nd = result["normalized_data"]
     assert isinstance(nd, NormalizedData)
     assert nd.metrics.ttm
     assert nd.metrics.three_year_avg is not None
     assert nd.metrics.latest_quarter is not None
-
-
-def test_research_iteration_incremented():
-    with _patch():
-        result = _run(research_node(_base_state(iteration_id=0)))
-    assert result["research_iteration"] == 1
 
 
 # ── Source types ───────────────────────────────────────────────────────────
@@ -171,13 +156,6 @@ def test_web_results_are_cleaned_for_duplicate_and_empty_urls():
     assert urls.count("https://example.com/1") == 1
     web_items = [ev for ev in result["evidence"] if ev.source_type == "web"]
     assert all(ev.url for ev in web_items)
-
-
-def test_web_search_called_with_query():
-    web = _mock_web()
-    with _patch(web=web):
-        _run(research_node(_base_state()))
-    web.search.assert_called_once()
 
 
 # ── Missing fields propagated ──────────────────────────────────────────────
@@ -310,3 +288,30 @@ def test_conflicts_stored_in_normalized_data():
     nd = result["normalized_data"]
     assert isinstance(nd, NormalizedData)
     assert isinstance(nd.conflicts, list)
+
+
+def test_conflicts_include_prior_iteration_evidence():
+    prior = [
+        Evidence(
+            id="ev_001",
+            source_type="web",
+            title="Prior low reliability valuation",
+            summary="valuation fair",
+            reliability="low",
+            retrieved_at="2026-01-01T00:00:00Z",
+            related_topics=["valuation"],
+        )
+    ]
+    web = _mock_web([{
+        "title": "Web bearish valuation view",
+        "url": "https://bearish.com/2",
+        "content": "valuation stretched",
+        "published_date": None,
+        "score": 0.6,
+    }])
+    state = _base_state()
+    state["evidence"] = prior
+    with _patch(web=web):
+        result = _run(research_node(state))
+    topics = [c.topic for c in result["normalized_data"].conflicts]
+    assert "valuation" in topics

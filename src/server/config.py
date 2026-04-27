@@ -9,9 +9,7 @@ import os
 from pathlib import Path
 
 
-def _load_env() -> None:
-    if os.getenv("LLM_API_KEY"):
-        return
+if not os.getenv("LLM_API_KEY"):
     try:
         from dotenv import load_dotenv  # type: ignore[import]
         directory = Path(__file__).resolve().parent
@@ -19,16 +17,13 @@ def _load_env() -> None:
             candidate = directory / ".env"
             if candidate.is_file():
                 load_dotenv(candidate)
-                return
+                break
             parent = directory.parent
             if parent == directory:
                 break
             directory = parent
     except ImportError:
         pass
-
-
-_load_env()
 
 # Required
 LLM_PROVIDER: str = (os.getenv("LLM_PROVIDER") or "openrouter").strip().lower()

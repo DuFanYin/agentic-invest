@@ -155,7 +155,7 @@ def test_lifespan_clears_then_sets_shutdown_flag() -> None:
 # ── research endpoint ──────────────────────────────────────────────────────
 
 def test_research_endpoint_returns_valid_response() -> None:
-    with patch("src.server.routes.research._new_orchestrator", return_value=_patched_orchestrator()):
+    with patch("src.server.routes.research.OrchestratorAgent", return_value=_patched_orchestrator()):
         client = TestClient(app)
         response = client.post("/research", json={"query": "Analyse NVDA long-term"})
 
@@ -168,3 +168,36 @@ def test_research_endpoint_returns_valid_response() -> None:
     assert abs(total - 1.0) < 1e-5
     assert data["validation_result"]["is_valid"] is True
     assert data["validation_result"]["errors"] == []
+
+
+def test_research_stream_emits_final_and_done() -> None:
+    with patch("src.server.routes.research.OrchestratorAgent", return_value=_patched_orchestrator()):
+        client = TestClient(app)
+        response = client.post("/research/stream", json={"query": "Analyse NVDA long-term"})
+
+    assert response.status_code == 200
+    text = response.text
+    assert "event: agent_status" in text
+    assert "event: final" in text
+    assert "event: done" in text
+
+
+def test_research_stream_shutdown_emits_error_then_done() -> None:
+    orchestrator = MagicMock()
+
+    async def _run_stream(_request):
+        yield {"type": "agent_status", "payload": []}
+        yield {"type": "final", "payload": {"report_markdown": "ok"}}
+
+    orchestrator.run_stream = _run_stream
+
+    with patch("src.server.routes.research.OrchestratorAgent", return_value=orchestrator):
+        with patch("src.server.routes.research.shutdown.is_set", return_value=True):
+            client = TestClient(app)
+            response = client.post("/research/stream", json={"query": "Analyse NVDA long-term"})
+
+    assert response.status_code == 200
+    text = response.text
+    assert "event: error" in text
+    assert "server shutting down" in text
+    assert "event: done" in text

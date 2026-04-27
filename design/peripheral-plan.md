@@ -30,10 +30,10 @@ This document defines the peripheral specification for the investment research s
 
 - Backend: Python + FastAPI
 - Frontend: React-in-HTML (`index.html` inline Babel + React/ReactDOM CDN)
-- Agent orchestration: LangGraph or equivalent custom orchestrator
+- Agent orchestration: LangGraph `StateGraph` orchestrator
 - LLM adapter: OpenRouter API client
-- Data sources: public financial APIs + news sources
-- Storage: SQLite/Postgres (task/result cache)
+- Data sources: public financial APIs + macro data + news/web sources
+- Storage: SQLite (task/result cache)
 - Report format: Markdown + JSON
 
 ## 4) API and UI Specification
@@ -41,13 +41,13 @@ This document defines the peripheral specification for the investment research s
 ### FastAPI Endpoints
 - `POST /research`
   - request: `{ "query": "..." }`
-  - note: frontend submits only `query`; `ticker`, `horizon`, and `risk_level` are inferred by the Orchestrator
-  - response: typed `ResearchResponse` JSON (includes `report_markdown`, `report_json`, `intent`, `evidence`, `fundamental_analysis`, `market_sentiment`, `scenarios`, `agent_statuses`, `validation_result`, `llm_calls`)
+  - note: only `query` is accepted by the API request model; planning derives fields such as ticker/time_horizon/risk_level into `intent`
+  - response: typed `ResearchResponse` JSON with fields `report_markdown`, `report_json`, `intent`, `evidence`, `fundamental_analysis`, `macro_analysis`, `market_sentiment`, `scenarios`, `scenario_debate`, `agent_statuses`, `validation_result`, `llm_calls`
 - `POST /research/stream`
   - request: `{ "query": "..." }`
   - response: `text/event-stream`
   - events:
-    - `agent_status`: each agent's `status/action/details`
+    - `agent_status`: full agent-status list snapshots (`agent`, `lifecycle`, `phase`, `action`, `details`, timestamps, wait/progress/retry/error fields)
     - `llm_call`: real-time LLM call telemetry (`calling/success/retry/failed`)
     - `final`: final full report object (same shape as `POST /research`)
     - `error`: terminal error payload when stream execution fails
@@ -62,10 +62,11 @@ This document defines the peripheral specification for the investment research s
 - Frontend uses native `fetch` to call `POST /research/stream` for real-time progress
 - UI includes:
   - Global status (`Idle/Running/Complete/Error`)
-  - Agent Status panel (each agent's current status and action)
+  - Agent Status panel (derived from streamed `lifecycle/phase/action/waiting_on/progress_hint/last_update_at`)
   - Model-call log stream (event history + timestamps)
-  - Final result area (Summary, Intent, Evidence, Fundamental Analysis, Market Sentiment, Scenarios, Validation)
-- UI performs probability validation: if scenario `probability` sum is not 1, show error and mark result for review
+  - Final result area (Summary, Intent, Fundamental Analysis, Macro Analysis, Market Sentiment, Scenarios, Scenario Debate, Evidence, Validation badge)
+- UI displays scenario probability sum (`∑ probability`) and relies on backend `validation_result` for `VALID/REVIEW` status
+- UI handles stream interruptions explicitly: `done` without `final/error` is treated as interrupted execution
 
 ## 5) Quality and Evaluation Mapping
 
@@ -78,18 +79,20 @@ This document defines the peripheral specification for the investment research s
 ## 6) Testing and Validation Requirements
 
 ### Unit Tests
-- Query parser
+- Planning/query parser
 - Financial metric calculator
+- Retry gate routing
+- Scenario debate calibration
 - Schema validators
 - Scenario normalization and `sum=1` validator
 
 ### Integration Tests
 - Use mocked API responses to verify end-to-end flow
-- Verify timeout and retry behavior
-- Verify multi-scenario output shape (at least 3 scenarios + probability sum equals 1)
+- Verify SSE contract (`agent_status`, `final`, `error`, `done`) and `/research` response contract
+- Verify multi-scenario output shape (at least 3 scenarios + probability sum equals 1 in mocked flow)
 
 ### Regression Tests
-- Compare outputs of typical queries against golden snapshots
+- No dedicated golden-snapshot regression suite is currently implemented
 
 ## 7) Risk Control Principles
 

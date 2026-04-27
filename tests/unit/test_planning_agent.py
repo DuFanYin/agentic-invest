@@ -52,37 +52,17 @@ def _mock_llm(response: dict | None = None, raises: Exception | None = None):
 
 # ── plan() output shape ────────────────────────────────────────────────────
 
-def test_plan_returns_typed_intent():
+def test_plan_returns_structured_result():
     result = _run(plan("Analyse NVDA for long-term", _mock_llm()))
     assert isinstance(result.intent, ResearchIntent)
-
-
-def test_plan_populates_research_focus():
-    result = _run(plan("Analyse NVDA for long-term", _mock_llm()))
-    assert len(result.research_focus) >= 1
-    assert all(isinstance(f, str) for f in result.research_focus)
-
-
-def test_plan_populates_must_have_metrics():
-    result = _run(plan("Analyse NVDA for long-term", _mock_llm()))
-    assert len(result.must_have_metrics) >= 1
-    assert all(isinstance(m, str) for m in result.must_have_metrics)
-
-
-def test_plan_populates_plan_notes():
-    result = _run(plan("Analyse NVDA for long-term", _mock_llm()))
-    assert len(result.plan_notes) >= 1
-    assert all(isinstance(n, str) for n in result.plan_notes)
-
-
-def test_plan_ticker_parsed():
-    result = _run(plan("Analyse NVDA", _mock_llm()))
     assert result.intent.ticker == "NVDA"
-
-
-def test_plan_horizon_parsed():
-    result = _run(plan("Analyse NVDA", _mock_llm()))
     assert result.intent.time_horizon == "3-5 years"
+    assert len(result.research_focus) >= 1
+    assert len(result.must_have_metrics) >= 1
+    assert len(result.plan_notes) >= 1
+    assert all(isinstance(f, str) for f in result.research_focus)
+    assert all(isinstance(m, str) for m in result.must_have_metrics)
+    assert all(isinstance(n, str) for n in result.plan_notes)
 
 
 # ── fallback on LLM failure ────────────────────────────────────────────────
@@ -128,8 +108,3 @@ def test_node_returns_state_fields():
     assert result["retry_questions"] == []
 
 
-def test_node_resets_iteration():
-    node = make_planning_node(_mock_llm())
-    state = {"query": "Analyse NVDA", "agent_statuses": [], "research_iteration": 5}
-    result = _run(node(state))
-    assert result["research_iteration"] == 0

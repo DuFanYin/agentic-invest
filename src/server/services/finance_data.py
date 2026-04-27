@@ -41,11 +41,11 @@ def _safe(value: Any) -> Any:
 def _row(df, name: str, col_pos: int = 0) -> float | None:
     """Extract a single scalar from a yfinance DataFrame row, safely."""
     try:
-        if name in df.index:
-            val = df.loc[name].iloc[col_pos]
-            return _safe(val)
-    except Exception:
-        pass
+        if name not in df.index:
+            return None
+        return _safe(df.loc[name].iloc[col_pos])
+    except (AttributeError, KeyError, IndexError, TypeError, ValueError):
+        return None
     return None
 
 
@@ -53,12 +53,6 @@ def _pct(numerator: float | None, denominator: float | None) -> float | None:
     if numerator is None or denominator is None or denominator == 0:
         return None
     return round(numerator / denominator * 100, 2)
-
-
-def _growth(current: float | None, prior: float | None) -> float | None:
-    if current is None or prior is None or prior == 0:
-        return None
-    return round((current - prior) / abs(prior) * 100, 2)
 
 
 class FinanceDataClient:
@@ -147,7 +141,11 @@ class FinanceDataClient:
             # ── derived metrics ─────────────────────────────────────────
             ttm = {
                 "revenue":              rev_latest,
-                "revenue_growth_yoy_pct": _growth(rev_latest, rev_prior),
+                "revenue_growth_yoy_pct": (
+                    round((rev_latest - rev_prior) / abs(rev_prior) * 100, 2)
+                    if rev_latest is not None and rev_prior not in (None, 0)
+                    else None
+                ),
                 "gross_margin_pct":     _pct(gp_latest, rev_latest),
                 "operating_margin_pct": _pct(op_latest, rev_latest),
                 "net_margin_pct":       _pct(ni_latest, rev_latest),
@@ -177,7 +175,11 @@ class FinanceDataClient:
 
             latest_quarter = {
                 "revenue":              q_rev,
-                "revenue_growth_yoy_pct": _growth(q_rev, q_rev_prior),
+                "revenue_growth_yoy_pct": (
+                    round((q_rev - q_rev_prior) / abs(q_rev_prior) * 100, 2)
+                    if q_rev is not None and q_rev_prior not in (None, 0)
+                    else None
+                ),
                 "gross_margin_pct":     _pct(q_gp, q_rev),
                 "operating_margin_pct": _pct(q_op, q_rev),
             }

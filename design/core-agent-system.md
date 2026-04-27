@@ -4,24 +4,29 @@
 
 The goal is to build a multi-agent investment research system. Given any investment query, it should infer intent, collect evidence, run analysis, and output a traceable and verifiable report.
 
-The system is not a fixed linear pipeline. The Orchestrator maintains a shared state and dynamically schedules agents based on gaps and progress.
+The system is not a fixed linear pipeline. The Orchestrator runs a shared-state graph with parallel analysis stages and conditional retry routing based on gaps and progress.
 
 ```text
 Shared Research State
 ├── query
 ├── intent
-├── evidence[]               ← appended across passes (operator.add)
+├── research_focus[]         ← planning output
+├── must_have_metrics[]      ← planning output
+├── plan_notes[]             ← planning output
+├── evidence[]               ← appended across iterations (operator.add)
 ├── normalized_data
 ├── fundamental_analysis
+├── macro_analysis
 ├── market_sentiment
 ├── agent_questions[]        ← appended from parallel analysis nodes (_accumulate_or_reset)
+├── retry_questions[]        ← replaced each cycle (plain assign)
+├── research_iteration       ← incremented by Research Agent; read by retry_gate/report router
 ├── scenarios[]
-├── open_questions[]         ← replaced each cycle (plain assign, not accumulated)
-├── research_pass            ← incremented by Research Agent; read by gap_check
+├── scenario_debate
 ├── report_markdown
 ├── report_json
 ├── validation_result
-└── agent_statuses[]         ← _last_list reducer (handles parallel writes)
+└── agent_statuses[]         ← _last_list reducer (merges per-agent parallel writes)
 ```
 
 Core principles:
@@ -41,7 +46,7 @@ Input:
 Other fields are not required user inputs. They are inferred from `query` by the Orchestrator:
 
 - `ticker`: stock ticker; nullable if not identifiable
-- `horizon`: investment horizon, e.g. `6 months`, `3 years`, `5 years`
+- `time_horizon`: investment horizon, e.g. `6 months`, `3 years`, `5 years`
 - `risk_level`: risk preference, e.g. `low`, `medium`, `high`
 
 Output:
@@ -51,9 +56,12 @@ Output:
 - `intent`: inferred research intent and scope
 - `evidence[]`: core evidence used by the system
 - `fundamental_analysis`: business quality, financial performance, valuation, and fundamental risk analysis
+- `macro_analysis`: macro regime, drivers, risks, and signals
 - `market_sentiment`: news, market narrative, price action, and investor sentiment analysis
 - `scenarios[]`: forward-looking scenarios; all `probability` values must sum to 1
+- `scenario_debate`: post-scoring probability calibration and adjustment rationale
 - `validation_result`: final validation summary, including missing fields, citation coverage, and probability checks
+- `report_json.quality_metrics`: final quality snapshot (citation coverage, probability validity, debate applied, unresolved issues, confidence)
 
 ## 3) Core Data Objects
 
@@ -83,7 +91,7 @@ Each evidence item follows a unified schema for consistent downstream references
   "title": "...",
   "url": "...",            ← optional (nullable)
   "published_at": "...",  ← optional
-  "retrieved_at": "...",  ← required
+  "retrieved_at": "...",  ← optional (present on collected evidence)
   "summary": "...",       ← required
   "reliability": "high|medium|low",  ← required
   "related_topics": ["revenue", "margin", "risk"]
@@ -111,36 +119,39 @@ Each analysis agent outputs a structured result with explicit evidence bindings.
 
 ## 4) Collaboration Model and Topology
 
-The system uses a LangGraph `StateGraph` with a shared `ResearchState`. The graph has two conditional retry checks: one after `gap_check`, and one after `report_verification` (for citation integrity gaps).
+The system uses a LangGraph `StateGraph` with a shared `ResearchState`. The graph has two conditional retry checks: one after `retry_gate` (evidence adequacy) and one after `report_finalize` (delivery citation integrity).
 
 Core flow:
 
-- `parse_intent` extracts a `ResearchIntent` from the raw query (ticker, scope, horizon, required outputs).
-- `research` collects evidence from financial APIs, yfinance news, and Tavily web search. Runs again on retry passes.
-- `fundamental_analysis` and `market_sentiment` run **in parallel** after each research pass.
-- `gap_check` merges structural gaps (e.g. missing ticker/horizon), analysis-node `agent_questions`, and research conflict signals (`normalized_data.conflicts`) to decide whether to retry.
-- If gaps remain and `research_pass < 2`, the graph loops back to `research` for a supplementary pass.
-- `scenario_scoring` runs once gaps are resolved; probabilities are normalised in Python before constructing `Scenario` objects.
-- `report_verification` generates the Markdown report via LLM, then runs pure-Python validation. Validation errors are appended as `## Validation Warnings`.
-- If validation detects unsupported/missing evidence references and retry budget remains (`research_pass < 2`), the graph re-routes to `research`; otherwise it terminates.
-- Scenario/report nodes do not use synthetic success fallbacks: if LLM output is unavailable/invalid for those nodes, they raise runtime errors instead of producing stub "successful" artifacts.
+- `parse_intent` (implemented by planning agent) extracts `ResearchIntent` and planning fields from raw query.
+- `research` collects evidence from financial APIs, macro sources, yfinance news, and Tavily web search. Runs again on retry iterations.
+- `fundamental_analysis`, `macro_analysis`, and `market_sentiment` run **in parallel** after each research iteration.
+- `retry_gate` merges structural gaps (for company scope), analysis-node `agent_questions`, and research conflict signals (`normalized_data.conflicts`) to decide whether to retry.
+- If gaps remain and retry budget exists, the graph loops back to `research` for a supplementary iteration.
+- `scenario_scoring` runs once evidence gaps are resolved; probabilities are normalised in Python before constructing `Scenario` objects.
+- `scenario_debate` calibrates scenario probabilities and can fallback to baseline probabilities when debate output is invalid.
+- `report_finalize` generates Markdown via LLM, runs pure-Python validation, and computes quality metrics.
+- If final delivery validation detects citation-integrity issues and retry budget remains, the graph re-routes to `research`; otherwise it terminates.
 
 ```text
                               ┌─────────────────────────────────────────┐
-                              │ retry: open_questions detected,         │
-                              │ research_pass < 2                       │
+                              │ retry: retry_questions detected,        │
+                              │ research_iteration < 2                  │
                               ▼                                          │
 START → parse_intent → research → fundamental_analysis ──┐              │
-                                → market_sentiment    ───┴─→ gap_check ─┤
+                                → macro_analysis       ───┼─→ retry_gate ┤
+                                → market_sentiment    ───┘              │
                                                                          │
                                                           (no gaps) ─────┘
                                                                ↓
                                                       scenario_scoring
                                                                ↓
-                                                    report_verification
+                                                      scenario_debate
+                                                               ↓
+                                                     report_finalize
                                                                │
                ┌───────────────────────────────────────────────┴──────────────────────────────┐
-               │ retry: unsupported/missing evidence claims detected, research_pass < 2       │
+               │ retry: unsupported/missing evidence claims detected, research_iteration < 2  │
                └───────────────────────────────────────────────┬──────────────────────────────┘
                                                                ▼
                                                             research
@@ -151,41 +162,43 @@ START → parse_intent → research → fundamental_analysis ──┐          
 ```
 
 State mutation rules:
-- `evidence[]`: `operator.add` — each research pass appends; never overwritten.
-- `agent_questions[]`: `_accumulate_or_reset` — parallel analysis nodes append missing-field questions; `gap_check` drains and resets via sentinel for the next cycle.
-- `open_questions[]`: plain replace — `gap_check` resets to the current cycle's list; accumulation would break the termination check.
-- `agent_statuses[]`: `_last_list` custom reducer — both parallel analysis nodes write this field in the same graph step; plain LastValue would raise `InvalidUpdateError`. The reducer merges per-agent updates and prefers newer `last_update_at` snapshots.
+- `evidence[]`: `operator.add` — each research iteration appends; never overwritten.
+- `agent_questions[]`: `_accumulate_or_reset` — parallel analysis nodes append missing-field questions; `retry_gate` drains and resets via sentinel for the next cycle.
+- `retry_questions[]`: plain replace — `retry_gate` (and later `report_finalize`) reset to current cycle list; accumulation would break retry termination.
+- `agent_statuses[]`: `_last_list` custom reducer — parallel nodes can write this field in the same graph step; plain LastValue would raise `InvalidUpdateError`. The reducer merges per-agent updates and prefers newer `last_update_at` snapshots.
 
 ## 5) Agent Responsibilities
 
 ### Orchestrator Agent
 
 - Parse user queries and produce an execution plan
-- Dynamically infer intent, subjects, horizon, and expected outputs
-- Dispatch tasks to specialized agents
-- Handle retries, timeouts, and failure states
+- Infer intent, subjects, horizon, and expected outputs
+- Execute the LangGraph workflow (fan-out/fan-in + conditional retry routing)
+- Handle retry routing and failure surfacing
 - Input: `query`
 - Output: `Research State`, task plan, execution status, and final aggregated context
 - Key strategies:
   - Support mixed intent without hardcoded query classes
   - Extract subjects automatically and select modules by intent
-  - Run independent tasks in parallel
-  - Retry failures and route all outputs through final verification
+  - Run analysis nodes in parallel after each research pass
+  - Route retries through `retry_gate` (evidence adequacy) and `report_finalize` (citation-integrity delivery checks)
 
 ### Research Agent
 
 - Retrieve public finance data (`finance_data`: company info, financials, price history, yfinance news) and web sources (`web_research`: Tavily)
+- Retrieve macro data (`macro_data`: FRED + market signal proxies)
 - Assign reliability levels to sources
-- Remove duplicate sources and repeated facts
+- Deduplicate web results by URL within each pass
 - Organize output as `evidence[]`
 - Convert heterogeneous data into normalized `normalized_data`
 - Input: research plan, subjects, keywords, and horizon
 - Output: `evidence[]` + `normalized_data`
 - Key strategies:
   - Prioritize high-quality sources (`financial_api` → `news` → `web`)
-  - Required evidence fields: `retrieved_at`, `summary`, `reliability`; `url` is optional
+  - Evidence schema carries `summary`/`reliability`; collectors populate `retrieved_at`; `url` remains optional
   - Normalize fields and units; mark `missing_fields` when data is absent
-  - Deduplicate by URL; if no usable evidence can be collected, raise a runtime error (no synthetic low-reliability fallback)
+  - Include conflict signals (`normalized_data.conflicts`) from cumulative evidence across iterations
+  - If no usable evidence can be collected, raise a runtime error (no synthetic low-reliability fallback)
 
 ### Fundamental Analysis Agent
 
@@ -197,9 +210,9 @@ State mutation rules:
 - Input: `evidence[]` + `normalized_data`
 - Output: `fundamental_analysis` (`business_quality`, `financials`, `valuation`, `fundamental_risks`)
 - Key strategies:
-  - Cover at least 3 time slices (TTM / latest 3 years / latest quarter)
+  - Use normalized metrics context (TTM / three-year average / latest quarter when available)
   - Bind key judgments to `evidence_ids`
-  - Write `missing_fields[]` when data is absent; `gap_check` reads this to decide retries
+  - Write `missing_fields[]` when data is absent; `retry_gate` reads this to decide retries
   - Cross-check valuation and attach observable risk signals
 
 ### Market Sentiment Agent
@@ -214,7 +227,7 @@ State mutation rules:
   - Separate long-term fundamental change from short-term sentiment
   - Bind sentiment conclusions to market evidence
   - Downweight noisy signals
-  - Write `missing_fields[]` when coverage is insufficient; `gap_check` reads this to decide retries
+  - Write `missing_fields[]` when coverage is insufficient; `retry_gate` reads this to decide retries
 
 ### Scenario Scoring Agent
 
@@ -226,37 +239,57 @@ State mutation rules:
 - Output: `scenarios[]` (`name/description/probability/triggers/signals/evidence_ids`)
 - Key strategies:
   - Keep at least 3 mutually exclusive scenarios
-  - Enforce `abs(sum(probabilities) - 1) < 1e-6`
+  - Normalize probabilities in Python to sum to 1 (post-LLM parsing)
   - Recompute when core assumptions change
   - State assumptions, triggers, and validation signals
 
-### Report & Verification Agent
+### Macro Analysis Agent
+
+- Analyze macro environment: growth/rates regime, key drivers, and macro risks
+- Input: `evidence[]` (especially `macro_api`) + intent context
+- Output: `macro_analysis` (`macro_view`, `macro_drivers`, `macro_risks`, `macro_signals`, regime tags)
+- Key strategies:
+  - Keep output concise and decision-relevant
+  - Surface missing macro fields via `missing_fields[]` for retry routing
+
+### Scenario Debate Agent
+
+- Revisit scenario probabilities through structured bull/bear/judge calibration
+- Input: baseline `scenarios[]` + fundamental/macro/sentiment context
+- Output: `scenario_debate` (`debate_summary`, `probability_adjustments`, `calibrated_scenarios`, `debate_flags`)
+- Key strategies:
+  - Enforce bounded per-scenario shifts and full scenario coverage
+  - Fallback to baseline probabilities on invalid debate output
+
+### Report Finalize Agent
 
 - Organize scenario implications and decision-relevant contrasts across the generated futures
 - Generate the user-facing research report
 - Check whether every key conclusion is evidence-backed
 - Check scenario probabilities sum to 1
 - Check for obvious internal contradictions
-- Input: `evidence[]` + `normalized_data` + `fundamental_analysis` + `market_sentiment` + `scenarios[]`
-- Output: `report_markdown` + `report_json` + `validation_result`
+- Input: `evidence[]` + `normalized_data` + `fundamental_analysis` + `macro_analysis` + `market_sentiment` + `scenarios[]` + `scenario_debate`
+- Output: `report_markdown` + `report_json` + `validation_result` + `quality_metrics`
 - Key strategies:
   - Require evidence references for key conclusions
   - Show "what we know / uncertainty / what to watch"
-  - Validation always runs in pure Python (no LLM); errors appended inline as `## Validation Warnings`
-- Unsupported/missing-evidence claim errors are surfaced as `open_questions`; the graph may re-route to `research` when retry budget remains
+  - Validation always runs in pure Python (no LLM); errors/warnings appended inline
+- Unsupported/missing-evidence claim errors are surfaced as `retry_questions`; the graph may re-route to `research` when retry budget remains
 
 ## 6) Final Report Structure
 
 The final report follows a fixed structure for easier comparison, testing, and frontend rendering.
 
 - Executive Summary
-- Company / Theme Overview
+- Company Overview
 - Key Evidence
 - Fundamental Analysis
+- Macro Environment
 - Market Sentiment
 - Valuation View
 - Risk Analysis
 - Future Scenarios
+- Scenario Debate & Calibration
 - Scenario Implications
 - What To Watch Next
 - Sources

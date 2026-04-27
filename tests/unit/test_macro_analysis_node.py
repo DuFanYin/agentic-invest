@@ -70,33 +70,15 @@ def _state(evidence=None, intent=None):
 
 # ── output shape ───────────────────────────────────────────────────────────
 
-def test_result_is_typed_model():
-    result = _run(macro_analysis_node(_state(), llm=_mock_llm()))
-    assert isinstance(result["macro_analysis"], MacroAnalysis)
-
-
-def test_macro_view_present():
+def test_macro_result_shape_and_core_fields():
     result = _run(macro_analysis_node(_state(), llm=_mock_llm()))
     ma = result["macro_analysis"]
-    assert isinstance(ma.macro_view, str)
-    assert len(ma.macro_view) > 0
-
-
-def test_rate_and_growth_environment_valid():
-    result = _run(macro_analysis_node(_state(), llm=_mock_llm()))
-    ma = result["macro_analysis"]
+    assert isinstance(ma, MacroAnalysis)
+    assert isinstance(ma.macro_view, str) and ma.macro_view
     assert ma.rate_environment in ("tightening", "easing", "stable")
     assert ma.growth_environment in ("expanding", "contracting", "stable")
-
-
-def test_macro_drivers_populated():
-    result = _run(macro_analysis_node(_state(), llm=_mock_llm()))
-    assert len(result["macro_analysis"].macro_drivers) >= 1
-
-
-def test_macro_risks_have_valid_impact():
-    result = _run(macro_analysis_node(_state(), llm=_mock_llm()))
-    for risk in result["macro_analysis"].macro_risks:
+    assert len(ma.macro_drivers) >= 1
+    for risk in ma.macro_risks:
         assert risk.impact in ("high", "medium", "low")
 
 

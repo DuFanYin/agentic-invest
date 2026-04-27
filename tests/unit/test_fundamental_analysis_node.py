@@ -89,30 +89,18 @@ def _fa(result) -> FundamentalAnalysis:
 
 # ── output shape ───────────────────────────────────────────────────────────
 
-def test_result_is_typed_model():
+def test_result_shape_and_core_fields():
     result = _run(fundamental_analysis_node(_state(), llm=_mock_llm()))
-    assert isinstance(_fa(result), FundamentalAnalysis)
-
-
-def test_claims_have_required_fields():
-    result = _run(fundamental_analysis_node(_state(), llm=_mock_llm()))
-    claims = _fa(result).claims
+    fa = _fa(result)
+    assert isinstance(fa, FundamentalAnalysis)
+    claims = fa.claims
     assert len(claims) >= 1
     valid = {"high", "medium", "low"}
     for claim in claims:
         assert isinstance(claim.evidence_ids, list)
         assert len(claim.evidence_ids) >= 1
         assert claim.confidence in valid
-
-
-def test_business_quality_present():
-    result = _run(fundamental_analysis_node(_state(), llm=_mock_llm()))
-    assert _fa(result).business_quality.view in {"strong", "stable", "weak", "deteriorating"}
-
-
-def test_metrics_attached_from_state():
-    result = _run(fundamental_analysis_node(_state(), llm=_mock_llm()))
-    fa = _fa(result)
+    assert fa.business_quality.view in {"strong", "stable", "weak", "deteriorating"}
     raw = _metrics()
     assert fa.metrics.get("ttm") == raw["ttm"]
     assert fa.metrics.get("three_year_avg") == raw["three_year_avg"]

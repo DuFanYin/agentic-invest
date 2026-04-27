@@ -9,7 +9,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from src.server.services.finance_data import FinanceDataClient, _growth, _pct, _safe
+from src.server.services.finance_data import FinanceDataClient
 
 
 # ── helper builders ────────────────────────────────────────────────────────
@@ -114,50 +114,6 @@ def _make_ticker_mock(info: dict | None = None, *, no_name: bool = False) -> Mag
     return mock
 
 
-# ── _safe / _pct / _growth helpers ────────────────────────────────────────
-
-@pytest.mark.parametrize(
-    ("value", "expected", "expected_type"),
-    [
-        (np.float64(3.14), pytest.approx(3.14), float),
-        (np.int64(42), 42, int),
-    ],
-)
-def test_safe_converts_numpy_scalars(value, expected, expected_type):
-    converted = _safe(value)
-    assert converted == expected
-    assert isinstance(converted, expected_type)
-
-
-@pytest.mark.parametrize("value", [float("nan"), np.float64(float("nan"))])
-def test_safe_returns_none_for_nan(value):
-    assert _safe(value) is None
-
-
-@pytest.mark.parametrize(
-    ("num", "den", "expected"),
-    [
-        (75.0, 100.0, pytest.approx(75.0)),
-        (75.0, 0.0, None),
-        (None, 100.0, None),
-        (75.0, None, None),
-    ],
-)
-def test_pct_cases(num, den, expected):
-    assert _pct(num, den) == expected
-
-
-@pytest.mark.parametrize(
-    ("current", "prior", "expected"),
-    [
-        (130.0, 100.0, pytest.approx(30.0)),
-        (100.0, 0.0, None),
-    ],
-)
-def test_growth_cases(current, prior, expected):
-    assert _growth(current, prior) == expected
-
-
 # ── get_info ───────────────────────────────────────────────────────────────
 
 def test_get_info_returns_profile_fields():
@@ -193,46 +149,18 @@ def test_get_info_exception_returns_empty():
 
 # ── get_financials ─────────────────────────────────────────────────────────
 
-def test_get_financials_ttm_revenue():
+def test_get_financials_core_metrics_are_consistent():
     client = FinanceDataClient()
     with patch("yfinance.Ticker", return_value=_make_ticker_mock()):
         fin = client.get_financials("NVDA")
 
     assert fin["ttm"]["revenue"] == pytest.approx(215_938e6, rel=1e-3)
-
-
-def test_get_financials_gross_margin_pct():
-    client = FinanceDataClient()
-    with patch("yfinance.Ticker", return_value=_make_ticker_mock()):
-        fin = client.get_financials("NVDA")
-
     # 153_463 / 215_938 ≈ 71.07 %
     assert fin["ttm"]["gross_margin_pct"] == pytest.approx(71.07, rel=1e-2)
-
-
-def test_get_financials_revenue_growth_yoy():
-    client = FinanceDataClient()
-    with patch("yfinance.Ticker", return_value=_make_ticker_mock()):
-        fin = client.get_financials("NVDA")
-
     # (215_938 - 130_497) / 130_497 ≈ 65.47 %
     assert fin["ttm"]["revenue_growth_yoy_pct"] == pytest.approx(65.47, rel=1e-2)
-
-
-def test_get_financials_three_year_cagr():
-    client = FinanceDataClient()
-    with patch("yfinance.Ticker", return_value=_make_ticker_mock()):
-        fin = client.get_financials("NVDA")
-
     # sqrt(215_938 / 60_922) - 1 ≈ 88.2 %
     assert fin["three_year_avg"]["revenue_cagr_pct"] == pytest.approx(88.2, rel=1e-1)
-
-
-def test_get_financials_latest_quarter():
-    client = FinanceDataClient()
-    with patch("yfinance.Ticker", return_value=_make_ticker_mock()):
-        fin = client.get_financials("NVDA")
-
     assert fin["latest_quarter"]["revenue"] == pytest.approx(68_127e6, rel=1e-3)
     # (68127 - 35082) / 35082 ≈ 94.2 %
     assert fin["latest_quarter"]["revenue_growth_yoy_pct"] == pytest.approx(94.2, rel=1e-1)

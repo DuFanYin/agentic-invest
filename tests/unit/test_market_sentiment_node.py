@@ -87,20 +87,12 @@ def _ms(result) -> MarketSentiment:
 
 # ── output shape ───────────────────────────────────────────────────────────
 
-def test_result_is_typed_model():
-    result = _run(market_sentiment_node(_state(), llm=_mock_llm()))
-    assert isinstance(_ms(result), MarketSentiment)
-
-
-def test_all_claims_have_evidence_ids():
-    result = _run(market_sentiment_node(_state(), llm=_mock_llm()))
-    for claim in _ms(result).claims:
-        assert len(claim.evidence_ids) >= 1
-
-
-def test_core_sentiment_fields_present_and_valid():
+def test_result_shape_and_core_fields():
     result = _run(market_sentiment_node(_state(), llm=_mock_llm()))
     ms = _ms(result)
+    assert isinstance(ms, MarketSentiment)
+    for claim in ms.claims:
+        assert len(claim.evidence_ids) >= 1
     assert ms.news_sentiment.direction in ("positive", "neutral", "negative")
     assert ms.market_narrative.summary
 

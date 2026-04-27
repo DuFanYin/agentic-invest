@@ -8,13 +8,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from src.server.services.openrouter import OpenRouterClient, _strip_fences
-
-
-# ── _strip_fences ──────────────────────────────────────────────────────────
-
-def test_strip_fences_removes_json_fence():
-    assert _strip_fences('```json\n{"ok": true}\n```') == '{"ok": true}'
+from src.server.services.openrouter import OpenRouterClient
 
 
 # ── helpers ────────────────────────────────────────────────────────────────
@@ -134,20 +128,42 @@ def test_complete_skips_model_on_400():
     assert call_count["n"] == 2
 
 
-# ── invalid JSON treated as retryable ─────────────────────────────────────
+# ── invalid payloads treated as retryable ──────────────────────────────────
 
-def test_complete_retries_on_invalid_json():
-    post = AsyncMock(side_effect=[_ok_response("not json at all"), _ok_response('{"ok": true}')])
+@pytest.mark.parametrize("first_response", [
+    _ok_response("not json at all"),
+    MagicMock(status_code=200, text="<html>gateway error</html>"),
+])
+def test_complete_retries_on_invalid_payloads(first_response):
+    if getattr(first_response, "text", "").startswith("<html>"):
+        first_response.json.side_effect = ValueError("bad json")
+    post = AsyncMock(side_effect=[first_response, _ok_response('{"ok": true}')])
     with patch("httpx.AsyncClient") as mock_http:
         mock_http.return_value.__aenter__.return_value.post = post
         result = _run(_client().complete("test"))
     assert result == '{"ok": true}'
 
 
-# ── system prompt and response_format ─────────────────────────────────────
-
-def test_custom_system_prompt_sent():
+def test_constructor_base_url_argument_is_respected():
     captured = {}
+
+    def capture(*a, **kw):
+        captured["url"] = a[0] if a else kw.get("url")
+        return _ok_response()
+
+    client = OpenRouterClient(api_key="test-key", model="test/model", base_url="https://example.test/v1")
+    with patch("httpx.AsyncClient") as mock_http:
+        mock_http.return_value.__aenter__.return_value.post.side_effect = capture
+        _run(client.complete("test"))
+
+    assert captured["url"].startswith("https://example.test/v1/")
+
+
+# ── request payload shape ───────────────────────────────────────────────────
+
+def test_complete_sends_expected_payload_shape():
+    captured = {}
+
     def capture(*a, **kw):
         captured["payload"] = kw.get("json", {})
         return _ok_response()
@@ -159,16 +175,4 @@ def test_custom_system_prompt_sent():
     messages = captured["payload"]["messages"]
     assert messages[0]["role"] == "system"
     assert messages[0]["content"] == "custom system"
-
-
-def test_response_format_json_object_in_payload():
-    captured = {}
-    def capture(*a, **kw):
-        captured["payload"] = kw.get("json", {})
-        return _ok_response()
-
-    with patch("httpx.AsyncClient") as mock_http:
-        mock_http.return_value.__aenter__.return_value.post.side_effect = capture
-        _run(_client().complete("test"))
-
     assert captured["payload"]["response_format"] == {"type": "json_object"}

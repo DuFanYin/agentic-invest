@@ -26,23 +26,19 @@ def _scenario(**kwargs) -> Scenario:
     return Scenario(**{**defaults, **kwargs})
 
 
-def test_invalid_scenario_probabilities_return_error() -> None:
-    scenarios = [_scenario(probability=0.5)]
+@pytest.mark.parametrize(
+    ("scenario_kwargs", "expected_markers"),
+    [
+        ({"probability": 0.5}, ["sum"]),
+        ({"drivers": []}, ["drivers"]),
+        ({"triggers": [], "signals": []}, ["triggers", "signals"]),
+    ],
+)
+def test_scenario_validation_errors(scenario_kwargs, expected_markers) -> None:
+    scenarios = [_scenario(**scenario_kwargs)]
     errors = validate_scenario_scores(scenarios)
-    assert any("sum" in e for e in errors)
-
-
-def test_scenario_missing_drivers_returns_error() -> None:
-    scenarios = [_scenario(drivers=[])]
-    errors = validate_scenario_scores(scenarios)
-    assert any("drivers" in e for e in errors)
-
-
-def test_scenario_missing_critical_fields_returns_error() -> None:
-    scenarios = [_scenario(triggers=[], signals=[])]
-    errors = validate_scenario_scores(scenarios)
-    assert any("triggers" in e for e in errors)
-    assert any("signals" in e for e in errors)
+    for marker in expected_markers:
+        assert any(marker in e for e in errors)
 
 
 # ── evidence completeness ───────────────────────────────────────────────────

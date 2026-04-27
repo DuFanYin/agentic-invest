@@ -37,7 +37,12 @@ class Cache:
             if time.time() > expires_at:
                 self._delete(key)
                 return None
-            return json.loads(value_json)
+            try:
+                return json.loads(value_json)
+            except json.JSONDecodeError:
+                # Corrupted cache row should degrade to miss, not break callers.
+                self._delete(key)
+                return None
 
     def set(self, key: str, value: object, ttl_seconds: int | None = None) -> None:
         """Store value under key, expiring after ttl_seconds (default: default_ttl)."""

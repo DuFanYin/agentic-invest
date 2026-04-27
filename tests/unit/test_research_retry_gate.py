@@ -3,6 +3,7 @@ from src.server.agents.retry_gate import (
     retry_gate_node,
     retry_router,
 )
+from src.server.models.analysis import NormalizedData
 from src.server.models.intent import ResearchIntent
 
 
@@ -66,3 +67,22 @@ def test_gate_skips_ticker_horizon_checks_for_macro_scope():
         )
     )
     assert result["retry_questions"] == []
+
+
+def test_gate_handles_typed_conflicts_without_crashing():
+    normalized = NormalizedData.model_validate({
+        "query": "Analyse AAPL",
+        "intent": {},
+        "metrics": {},
+        "missing_fields": [],
+        "conflicts": [
+            {"topic": "valuation", "type": "reliability_divergence", "evidence_ids": ["ev_001"], "note": "x"},
+            {"topic": "demand", "type": "reliability_divergence", "evidence_ids": ["ev_002"], "note": "y"},
+        ],
+        "open_question_context": [],
+        "pass_id": 0,
+    })
+    result = retry_gate_node(_state(normalized_data=normalized, research_iteration=0))
+    joined = " | ".join(result["retry_questions"]).lower()
+    assert "valuation" in joined
+    assert "demand" in joined

@@ -54,11 +54,6 @@ _OPENAI_MODELS = [
 ]
 
 _RETRYABLE_CODES = {429, 500, 502, 503, 504}
-def _strip_fences(text: str) -> str:
-    """Remove ```json ... ``` or ``` ... ``` wrapping that some models emit."""
-    text = text.strip()
-    match = re.match(r"^```(?:json)?\s*(.*?)\s*```$", text, re.DOTALL)
-    return match.group(1).strip() if match else text
 
 
 class OpenRouterClient:
@@ -76,7 +71,7 @@ class OpenRouterClient:
         self.provider = LLM_PROVIDER if LLM_PROVIDER in {"openrouter", "openai"} else "openrouter"
         self.api_key = api_key or LLM_API_KEY
         self._models = [model] if model else self._default_models()
-        resolved_base_url = (LLM_BASE_URL or base_url).rstrip("/")
+        resolved_base_url = (base_url or LLM_BASE_URL).rstrip("/")
         self.base_url = resolved_base_url
         self.timeout_seconds = timeout_seconds
         self.max_retries = max_retries
@@ -221,6 +216,29 @@ class OpenRouterClient:
                     ))
                     logger.warning("model %s fatal error: %s — skipping", model_id, exc)
                     break
+                except Exception as exc:
+                    # Unexpected provider/client exceptions should not bypass failover.
+                    last_error = _RetryableError(f"unexpected client error: {exc}")
+                    finished_at = datetime.now(UTC).isoformat()
+                    self._emit(LLMCall(
+                        id=call_id, node=node,
+                        agent_tag=AGENT_TAG_BY_NODE.get(node, "?"),
+                        model=model_id, attempt=attempt,
+                        status="retry",
+                        latency_ms=_latency_ms(started_at, finished_at),
+                        started_at=started_at, finished_at=finished_at,
+                        error=str(exc)[:200],
+                    ))
+                    if attempt <= self.max_retries:
+                        wait = self.retry_backoff ** attempt
+                        logger.warning(
+                            "model %s attempt %d/%d unexpected error (%s) — retrying in %.1fs",
+                            model_id, attempt, self.max_retries + 1, exc, wait,
+                        )
+                        if await shutdown.wait_or_timeout(wait):
+                            raise RuntimeError("server shutting down")
+                    else:
+                        logger.warning("model %s exhausted retries after unexpected error, trying next", model_id)
 
         raise RuntimeError(f"All models exhausted. Last error: {last_error}") from last_error
 
@@ -255,7 +273,10 @@ class OpenRouterClient:
         if response.status_code >= 400:
             raise _FatalError(f"HTTP {response.status_code}: {response.text[:200]}")
 
-        data = response.json()
+        try:
+            data = response.json()
+        except ValueError as exc:
+            raise _RetryableError(f"invalid JSON response body: {exc}") from exc
         if "error" in data and "choices" not in data:
             code = data["error"].get("code", 0)
             msg = data["error"].get("message", "unknown")
@@ -279,7 +300,9 @@ class OpenRouterClient:
         content = content.strip()
 
         if json_mode:
-            content = _strip_fences(content)
+            # Remove ```json ... ``` or ``` ... ``` wrapping that some models emit.
+            match = re.match(r"^```(?:json)?\s*(.*?)\s*```$", content, re.DOTALL)
+            content = match.group(1).strip() if match else content
             try:
                 json.loads(content)
             except json.JSONDecodeError as exc:
@@ -297,7 +320,7 @@ def _latency_ms(started_at: str, finished_at: str) -> int:
             - datetime.fromisoformat(started_at.replace("Z", "+00:00"))
         ).total_seconds()
         return max(0, int(delta * 1000))
-    except Exception:
+    except (TypeError, ValueError):
         return 0
 
 

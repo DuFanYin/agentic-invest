@@ -3,23 +3,18 @@
 ## 1) Goal
 
 The repository is organised by backend services, frontend pages, core agent system, shared models, tests, and docs.
-The architecture is layered: routes → agents → services, with a shared model and utils layer beneath them all.
+The architecture is layered: routes -> agents -> services, with shared models/utils beneath them.
 
 ## 2) Folder Structure
 
 ```text
 agentic-invest/
 ├── design/
-│   ├── core-agent-system.md
-│   ├── implementation-plan.md
-│   ├── test-suite.md
-│   ├── frontend.md
-│   ├── peripheral-plan.md
-│   └── codebase-structure.md
 ├── src/
 │   ├── server/
-│   │   ├── config.py                  ← central env/config (loaded once)
+│   │   ├── config.py
 │   │   ├── main.py
+│   │   ├── shutdown.py
 │   │   ├── routes/
 │   │   │   ├── __init__.py
 │   │   │   ├── health.py
@@ -30,27 +25,33 @@ agentic-invest/
 │   │   │   ├── response.py
 │   │   │   ├── analysis.py
 │   │   │   ├── finance.py
-│   │   │   ├── state.py               ← LangGraph shared state
+│   │   │   ├── state.py
 │   │   │   ├── evidence.py
 │   │   │   ├── intent.py
 │   │   │   └── scenario.py
 │   │   ├── agents/
 │   │   │   ├── __init__.py
 │   │   │   ├── orchestrator.py
+│   │   │   ├── planning_agent.py
 │   │   │   ├── research.py
 │   │   │   ├── fundamental_analysis.py
+│   │   │   ├── macro_analysis.py
 │   │   │   ├── market_sentiment.py
+│   │   │   ├── retry_gate.py
 │   │   │   ├── scenario_scoring.py
+│   │   │   ├── scenario_debate.py
 │   │   │   └── report_finalize.py
 │   │   ├── services/
 │   │   │   ├── __init__.py
 │   │   │   ├── openrouter.py
 │   │   │   ├── finance_data.py
+│   │   │   ├── macro_data.py
 │   │   │   ├── web_research.py
-│   │   │   └── cache.py
+│   │   │   ├── cache.py
+│   │   │   └── collector.py
 │   │   └── utils/
 │   │       ├── __init__.py
-│   │       ├── status.py              ← AgentStatus mutation helpers
+│   │       ├── status.py
 │   │       └── validation.py
 │   └── frontend/
 │       ├── index.html
@@ -58,18 +59,6 @@ agentic-invest/
 │           └── styles.css
 ├── tests/
 │   ├── unit/
-│   │   ├── test_cache.py
-│   │   ├── test_finance_data.py
-│   │   ├── test_fundamental_analysis_node.py
-│   │   ├── test_intent.py
-│   │   ├── test_market_sentiment_node.py
-│   │   ├── test_openrouter.py
-│   │   ├── test_report_node.py
-│   │   ├── test_research_node.py
-│   │   ├── test_scenario_scoring.py
-│   │   ├── test_scenario_scoring_node.py
-│   │   ├── test_validation.py
-│   │   └── test_web_research.py
 │   └── integration/
 │       └── test_research_api.py
 └── outputs/
@@ -83,10 +72,10 @@ agentic-invest/
 Design documentation only — not imported at runtime.
 
 - `core-agent-system.md`: multi-agent architecture, graph topology, data contracts
-- `implementation-plan.md`: phased delivery plan with completion status
 - `test-suite.md`: per-file test coverage summary and run commands
 - `frontend.md`: React-in-HTML UI layout, SSE wiring, and section reveal behavior
 - `peripheral-plan.md`: peripheral architecture and integration planning
+- `llm-callpoints-and-expected-formats.md`: all LLM callsites and expected payload formats
 - `codebase-structure.md`: this file
 
 ### `src/server/config.py`
@@ -102,6 +91,7 @@ Exposes typed module-level constants:
 | `LLM_HTTP_REFERER` | optional OpenRouter ranking header |
 | `LLM_APP_TITLE` | optional OpenRouter ranking header |
 | `TAVILY_API_KEY` | web search auth |
+| `FRED_API_KEY` | FRED macro indicator auth |
 
 All services import from here — no scattered `os.getenv` calls elsewhere.
 
@@ -109,6 +99,16 @@ All services import from here — no scattered `os.getenv` calls elsewhere.
 
 Creates the FastAPI application, mounts static files, and registers route blueprints.
 Exposes: `/` (frontend), `/health`, `/research`, `/research/stream`.
+Manages app lifespan by initializing and clearing the process-wide shutdown signal used by streaming and retry backoff paths.
+
+### `src/server/shutdown.py`
+
+Process-wide shutdown signaling used across async/sync contexts.
+
+- `init_async_event()`: enables shutdown signaling for active server lifecycle
+- `set()` / `clear()` / `is_set()`: shared signal helpers for graceful stream/retry interruption
+- `wait_or_timeout(timeout)`: interruptible sleep primitive used by retry backoff
+- `disable()`: deactivates signaling outside active app lifecycle
 
 ### `src/server/routes/`
 
@@ -126,7 +126,7 @@ Pydantic models shared across all layers.
 |---|---|
 | `request.py` | `ResearchRequest` |
 | `response.py` | `ResearchResponse`, `AgentStatus`, `ValidationResult` |
-| `analysis.py` | typed analysis payloads (`FundamentalAnalysis`, `MarketSentiment`, `NormalizedData`) |
+| `analysis.py` | typed analysis payloads (`FundamentalAnalysis`, `MacroAnalysis`, `MarketSentiment`, `ScenarioDebate`, `NormalizedData`) |
 | `finance.py` | typed finance service payload contracts |
 | `state.py` | `ResearchState` (LangGraph `TypedDict`) with annotated reducers |
 | `evidence.py` | `Evidence` — `url` is `Optional[str]` |
@@ -136,7 +136,7 @@ Pydantic models shared across all layers.
 `ResearchState` reducer notes:
 - `evidence`: `operator.add` — parallel passes accumulate items
 - `agent_questions`: `_accumulate_or_reset` — parallel analysis nodes append missing-field questions; `retry_gate` clears via sentinel
-- `retry_questions`: plain replace — `retry_gate` resets each cycle
+- `retry_questions`: plain replace — `retry_gate` and `report_finalize` update this cycle-by-cycle
 - `agent_statuses`: `_last_list` custom reducer — merges concurrent writes by agent and prefers newer `last_update_at` snapshots
 
 ### `src/server/agents/`
@@ -148,14 +148,15 @@ LangGraph node functions and the graph wiring.
 Builds and owns the `StateGraph`. Graph topology:
 
 ```
-START → parse_intent → research → [parallel] → retry_gate ─(gaps?)─→ research (retry, ≤2 iterations)
-                                   fundamental_analysis              └─(no gaps)─→ scenario_scoring
-                                   market_sentiment                                → report_finalize
-                                                                                └─(unsupported claims + retry budget)→ research
-                                                                                └─(otherwise)→ END
+START → parse_intent(planning_agent) → research → [parallel] → retry_gate ─(gaps?)─→ research (retry, ≤2 iterations)
+                                        fundamental_analysis               └─(no gaps)─→ scenario_scoring
+                                        macro_analysis                                   → scenario_debate
+                                        market_sentiment                                 → report_finalize
+                                                                                    └─(unsupported claims + retry budget)→ research
+                                                                                    └─(otherwise)→ END
 ```
 
-- `_make_parse_intent_node(llm_client)`: calls `_parse_intent()` to extract `ResearchIntent` from the raw query
+- `make_planning_node(llm_client)`: delegates parsing/planning to `planning_agent`
 - `retry_gate_node`: merges structural gaps (ticker/horizon), agent-raised questions, and research conflict signals; clears `retry_questions` after `MAX_RESEARCH_ITERATIONS = 2`
 - `retry_router`: returns `"research"` or `"scenario_scoring"`
 - `build_graph(llm_client)`: compiles the graph per request execution
@@ -164,16 +165,17 @@ START → parse_intent → research → [parallel] → retry_gate ─(gaps?)─�
 
 #### `research.py`
 
-Collects evidence from two external sources with in-process SQLite caching:
+Collects evidence from finance, macro, and web sources with in-process SQLite caching:
 
 | Source | TTL | Data |
 |---|---|---|
 | `FinanceDataClient` | 3600 s | company info, financials, price history, yfinance news |
+| `MacroDataClient` | 21600 s (FRED), 900 s (market signals) | FRED indicators + macro market signals (VIX/rates/USD) |
 | `WebResearchClient` | 900 s | Tavily web search results |
 
-Cache keys are `sha256(prefix + parts)[:16]`. Deduplicates web URLs. If no usable evidence can be collected, the node raises a runtime error (no synthetic evidence fallback).
+Cache keys are `<prefix>:sha256(":".join(parts))[:16]`. Deduplicates web URLs. If no usable evidence can be collected, the node raises a runtime error (no synthetic evidence fallback).
 
-Returns: `evidence` (list appended via reducer), `normalized_data` (metrics, missing_fields, open_question_context), incremented `research_iteration`.
+Returns: `evidence` (list appended via reducer), `normalized_data` (metrics, missing_fields, conflict signals), incremented `research_iteration`.
 
 #### `fundamental_analysis.py`
 
@@ -196,12 +198,30 @@ LLM returns raw weights (`raw_probability`); Python normalises to `sum(probabili
 Requires 3-5 scenarios from the model; out-of-range counts are treated as invalid output.
 If scenario generation fails, the node raises a runtime error (no stub scenario fallback).
 
+#### `planning_agent.py`
+
+Converts raw query into `ResearchIntent` plus planning fields (`research_focus`, `must_have_metrics`, `plan_notes`).
+
+#### `macro_analysis.py`
+
+LLM node (parallel with fundamental/sentiment), producing macro regime and driver/risk analysis.
+Consumes `macro_api` evidence generated by `research` (`MacroDataClient`) plus supplemental context from other evidence.
+
+#### `retry_gate.py`
+
+Consolidates evidence-adequacy retry questions from structural checks, analysis missing fields, and conflict signals.
+
+#### `scenario_debate.py`
+
+Calibrates scenario probabilities and validates full scenario coverage.
+On invalid/missing debate output, falls back to baseline probabilities with `debate_flags=["fallback_to_baseline"]`.
+
 #### `report_finalize.py`
 
 Final node — two responsibilities:
 
 1. **Pure-Python validation** (always runs): scenario probability sum, evidence field completeness (`retrieved_at`, `summary`, `reliability` required; `url` optional), claim-to-evidence citation coverage.
-2. **LLM Markdown report** via `_llm.complete_text()` (free-form, not JSON mode). Requires all 12 named sections. If generation fails, the node raises a runtime error (no template fallback). Validation errors are appended as `## Validation Warnings`, and unsupported-claim errors are surfaced as `retry_questions` to trigger a supplementary research retry when budget remains.
+2. **LLM Markdown report** via `_llm.complete_text()` (free-form, not JSON mode). Validation errors are appended, and unsupported-claim errors are surfaced as `retry_questions` to trigger a supplementary research retry when budget remains.
 
 ### `src/server/services/`
 
@@ -232,6 +252,14 @@ Public interface:
 yfinance wrapper. Provides: `get_info()`, `get_financials()`, `get_price_history()`, `get_news()`.
 `_safe()` converts numpy scalars to Python primitives. `_row()` extracts DataFrame rows safely.
 
+#### `macro_data.py`
+
+Macro data wrapper for FRED + yfinance macro tickers.
+
+- `get_fred_indicators()`: fetches latest FRED series with direction tags; cached 6h
+- `get_market_signals()`: fetches VIX/10Y/USD market signals with direction; cached 15m
+- `get_all()`: concurrent fetch of both data groups
+
 #### `web_research.py`
 
 Tavily search via httpx. Degrades gracefully (returns `[]`) when `TAVILY_API_KEY` is absent.
@@ -239,8 +267,16 @@ Tavily search via httpx. Degrades gracefully (returns `[]`) when `TAVILY_API_KEY
 #### `cache.py`
 
 SQLite-backed TTL cache with `threading.Lock` and WAL mode.
-Operations: `get(key) → dict | None`, `set(key, value, ttl_seconds)`, `delete(key)`, `clear_expired()`.
+Operations: `get(key) → object | None`, `set(key, value, ttl_seconds)`, `delete(key)`, `clear_expired()`.
 TTL is enforced on read (expired entries return `None`).
+
+#### `collector.py`
+
+Per-request LLM telemetry collector used by `OrchestratorAgent` and `OpenRouterClient`.
+
+- `record(call)`: append + enqueue `LLMCall` events
+- `wait_next()`: async dequeue for streaming `llm_call` events
+- `all()`: snapshot for final `ResearchResponse.llm_calls`
 
 ### `src/server/utils/`
 

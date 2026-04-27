@@ -98,31 +98,20 @@ def _run(coro):
 
 # ── output shape ───────────────────────────────────────────────────────────
 
-def test_at_least_three_scenarios():
+def test_scenarios_shape_probability_and_sorting():
     result = _run(scenario_scoring_node(_state(), llm=_mock_llm()))
-    assert len(result["scenarios"]) >= 3
-
-
-def test_probabilities_sum_to_one():
-    result = _run(scenario_scoring_node(_state(), llm=_mock_llm()))
-    total = sum(s.probability for s in result["scenarios"])
+    scenarios = result["scenarios"]
+    assert len(scenarios) >= 3
+    total = sum(s.probability for s in scenarios)
     assert abs(total - 1.0) < 1e-5
-
-
-def test_all_scenarios_have_required_shape():
-    result = _run(scenario_scoring_node(_state(), llm=_mock_llm()))
-    for s in result["scenarios"]:
+    probs = [s.probability for s in scenarios]
+    assert probs == sorted(probs, reverse=True)
+    for s in scenarios:
         assert s.id
         assert s.name
         assert s.description
         assert len(s.evidence_ids) >= 1
         assert len(s.tags) >= 1
-
-
-def test_scenarios_sorted_by_probability_descending():
-    result = _run(scenario_scoring_node(_state(), llm=_mock_llm()))
-    probs = [s.probability for s in result["scenarios"]]
-    assert probs == sorted(probs, reverse=True)
 
 
 # ── probability normalisation ──────────────────────────────────────────────

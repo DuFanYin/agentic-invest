@@ -55,32 +55,6 @@ _SECTIONS = (
 _SECTION_LIST = "\n".join(f"- {s}" for s in _SECTIONS)
 
 
-def _scenario_probability_sum(
-    scenarios: list[Scenario],
-    debate: ScenarioDebate | None,
-) -> float:
-    """Return probability sum, preferring calibrated debate scenarios when available."""
-    if (
-        isinstance(debate, ScenarioDebate)
-        and debate.calibrated_scenarios
-        and "fallback_to_baseline" not in debate.debate_flags
-    ):
-        return sum(float(s.get("probability", 0.0)) for s in debate.calibrated_scenarios)
-    return sum(s.probability for s in scenarios)
-
-
-def _delivery_retry_questions(errors: list[str]) -> list[str]:
-    """Return retry questions for delivery-quality failures only.
-
-    Boundary with retry gate:
-    - retry_gate handles evidence adequacy.
-    - report_finalize only requests retry for final delivery issues
-      (e.g. unsupported claims / broken evidence citation linkage).
-    """
-    citation_errors = [e for e in errors if "unknown evidence" in e or "missing evidence" in e]
-    return [f"report_finalize: {e}" for e in citation_errors]
-
-
 def _build_prompt(intent, evidence, fundamental_analysis, macro_analysis, market_sentiment, scenarios, debate) -> str:
     subjects = ", ".join(intent.subjects) if intent and intent.subjects else "unknown"
     ticker = intent.ticker if intent else "N/A"
@@ -294,7 +268,14 @@ async def report_finalize_node(
         if any(eid in available_evidence_ids for eid in c.evidence_ids)
     )
     citation_coverage = valid_citations / len(cited_claims) if cited_claims else 0.0
-    prob_sum = _scenario_probability_sum(scenarios, debate)
+    if (
+        isinstance(debate, ScenarioDebate)
+        and debate.calibrated_scenarios
+        and "fallback_to_baseline" not in debate.debate_flags
+    ):
+        prob_sum = sum(float(s.get("probability", 0.0)) for s in debate.calibrated_scenarios)
+    else:
+        prob_sum = sum(s.probability for s in scenarios)
     debate_applied = (
         isinstance(debate, ScenarioDebate)
         and len(debate.probability_adjustments) > 0
@@ -328,7 +309,8 @@ async def report_finalize_node(
     }
 
     # Report finalizer emits retry only for delivery-quality citation failures.
-    retry_questions = _delivery_retry_questions(errors)
+    citation_errors = [e for e in errors if "unknown evidence" in e or "missing evidence" in e]
+    retry_questions = [f"report_finalize: {e}" for e in citation_errors]
     stop_reason = "" if retry_questions else "complete"
 
     if statuses:

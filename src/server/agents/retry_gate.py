@@ -14,14 +14,6 @@ from src.server.utils.status import update_status
 MAX_RESEARCH_ITERATIONS = 2
 
 
-def _requires_ticker(scope: str | None) -> bool:
-    return (scope or "").lower() == "company"
-
-
-def _requires_time_horizon(scope: str | None) -> bool:
-    return (scope or "").lower() == "company"
-
-
 def retry_gate_node(state: ResearchState) -> ResearchState:
     intent = state.get("intent")
     normalized_data = state.get("normalized_data")
@@ -30,10 +22,10 @@ def retry_gate_node(state: ResearchState) -> ResearchState:
 
     # Structural checks
     new_questions: list[str] = []
-    scope = intent.scope if intent else None
-    if intent and _requires_ticker(scope) and not intent.ticker:
+    scope = (intent.scope if intent else "").lower()
+    if intent and scope == "company" and not intent.ticker:
         new_questions.append("Need clearer company/ticker mapping from query context")
-    if intent and _requires_time_horizon(scope) and not intent.time_horizon:
+    if intent and scope == "company" and not intent.time_horizon:
         new_questions.append("Need explicit investment horizon to refine scenario assumptions")
 
     # Agent-sourced questions from parallel analysis nodes
@@ -45,7 +37,7 @@ def retry_gate_node(state: ResearchState) -> ResearchState:
     if conflicts:
         new_questions.append(
             f"Conflicting evidence detected across {len(conflicts)} topic(s): "
-            + ", ".join(c["topic"] for c in conflicts)
+            + ", ".join(getattr(c, "topic", str(c)) for c in conflicts)
             + ". Supplementary research may resolve these."
         )
 

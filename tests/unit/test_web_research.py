@@ -62,10 +62,14 @@ def test_result_has_required_fields():
 
 # ── missing API key ────────────────────────────────────────────────────────
 
-def test_search_returns_empty_when_no_api_key():
+@pytest.mark.parametrize("method,args", [
+    ("search", ("Apple",)),
+    ("search_news", ("AAPL",)),
+])
+def test_methods_return_empty_when_no_api_key(method, args):
     with patch("src.server.services.web_research.TAVILY_API_KEY", None):
         client = WebResearchClient()
-    assert client.search("Apple") == []
+    assert getattr(client, method)(*args) == []
 
 
 # ── HTTP error responses ───────────────────────────────────────────────────
@@ -123,9 +127,3 @@ def test_search_news_calls_search_with_ticker_in_query():
         _client().search_news("AAPL", days=30)
 
     assert "AAPL" in captured["payload"]["query"]
-
-
-def test_search_news_returns_empty_when_no_api_key():
-    with patch("src.server.services.web_research.TAVILY_API_KEY", None):
-        client = WebResearchClient()
-    assert client.search_news("AAPL") == []

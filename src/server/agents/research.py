@@ -334,7 +334,9 @@ async def research_node(state: ResearchState) -> ResearchState:
             )
         raise RuntimeError(msg)
 
-    raw_conflicts = _detect_conflicts(new_evidence)
+    # Detect conflicts on cumulative evidence (cross-iteration contradictions matter).
+    all_evidence = (state.get("evidence") or []) + new_evidence
+    raw_conflicts = _detect_conflicts(all_evidence)
     conflicts = [Conflict.model_validate(c) for c in raw_conflicts]
 
     metrics_block = MetricsBlock(
