@@ -123,6 +123,7 @@ Core flow:
 - `scenario_scoring` runs once gaps are resolved; scores are normalised in Python before constructing Scenario objects.
 - `report_verification` generates the Markdown report via LLM, then runs pure-Python validation. Validation errors are appended as `## Validation Warnings`.
 - If validation detects unsupported/missing evidence references and retry budget remains (`research_pass < 2`), the graph re-routes to `research`; otherwise it terminates.
+- Scenario/report nodes do not use synthetic success fallbacks: if LLM output is unavailable/invalid for those nodes, they raise runtime errors instead of producing stub "successful" artifacts.
 
 ```text
                               ┌─────────────────────────────────────────┐
@@ -153,7 +154,7 @@ State mutation rules:
 - `evidence[]`: `operator.add` — each research pass appends; never overwritten.
 - `agent_questions[]`: `operator.add` — parallel analysis nodes append missing-field questions; `gap_check` drains and resets for the next cycle.
 - `open_questions[]`: plain replace — `gap_check` resets to the current cycle's list; accumulation would break the termination check.
-- `agent_statuses[]`: `_last_list` custom reducer — both parallel analysis nodes write this field in the same graph step; plain LastValue would raise `InvalidUpdateError`.
+- `agent_statuses[]`: `_last_list` custom reducer — both parallel analysis nodes write this field in the same graph step; plain LastValue would raise `InvalidUpdateError`. The reducer merges per-agent updates and prefers newer `last_update_at` snapshots.
 
 ## 5) Agent Responsibilities
 
@@ -184,7 +185,7 @@ State mutation rules:
   - Prioritize high-quality sources (`financial_api` → `news` → `web`)
   - Required evidence fields: `retrieved_at`, `summary`, `reliability`; `url` is optional
   - Normalize fields and units; mark `missing_fields` when data is absent
-  - Deduplicate by URL; fall back to a single low-reliability item if all sources fail
+  - Deduplicate by URL; if no usable evidence can be collected, raise a runtime error (no synthetic low-reliability fallback)
 
 ### Fundamental Analysis Agent
 

@@ -80,10 +80,10 @@ def research_node(state: ResearchState) -> ResearchState:
     new_evidence: list[Evidence] = []
     metrics: dict = {}
     missing_fields: list[str] = []
+    ev_id = id_offset + 1
 
     # ── Finance API data ───────────────────────────────────────────────────
     if ticker:
-        ev_id = id_offset + 1
 
         # Company info
         try:
@@ -258,16 +258,18 @@ def research_node(state: ResearchState) -> ResearchState:
 
     # ── Fallback if no ticker or all calls failed ──────────────────────────
     if not new_evidence:
-        new_evidence.append(Evidence(
-            id=f"ev_{id_offset + 1:03d}",
-            source_type="web",
-            title=f"General research — {query}",
-            url=None,
-            retrieved_at=retrieved_at,
-            summary=f"No ticker identified; general research context for: {query}",
-            reliability="low",
-            related_topics=["general"],
-        ))
+        msg = "[research] no usable evidence collected from finance/news/web sources"
+        logger.error(msg)
+        if statuses:
+            statuses = update_status(
+                statuses,
+                "research",
+                lifecycle="failed",
+                phase="collecting_evidence",
+                action="evidence collection failed",
+                last_error=msg,
+            )
+        raise RuntimeError(msg)
 
     conflicts = _detect_conflicts(new_evidence, metrics)
 
@@ -284,16 +286,21 @@ def research_node(state: ResearchState) -> ResearchState:
     if statuses:
         statuses = update_status(
             statuses, "research",
-            status="completed", action="evidence collected",
+            lifecycle="active", phase="collecting_evidence", action="collecting evidence",
+        )
+        statuses = update_status(
+            statuses, "research",
+            lifecycle="standby", phase="collecting_evidence", action="evidence collected",
             details=[f"evidence={len(new_evidence)}", f"pass={pass_id}"],
+            progress_hint=f"{len(new_evidence)} evidence",
         )
         statuses = update_status(
             statuses, "fundamental_analysis",
-            status="running", action="analysing fundamentals",
+            lifecycle="active", phase="analyzing_fundamentals", action="analysing fundamentals",
         )
         statuses = update_status(
             statuses, "market_sentiment",
-            status="running", action="analysing sentiment",
+            lifecycle="active", phase="analyzing_sentiment", action="analysing sentiment",
         )
 
     return {

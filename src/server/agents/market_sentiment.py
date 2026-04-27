@@ -12,6 +12,7 @@ from src.server.utils.status import update_status
 logger = logging.getLogger(__name__)
 
 _llm = OpenRouterClient()
+_NODE = "market_sentiment"
 
 _SYSTEM = (
     "You are a market analyst specialising in sentiment and price action. "
@@ -61,31 +62,15 @@ PRICE / MARKET DATA:
 {price_str}
 """
 
-
-def _fallback(evidence) -> dict:
-    evidence_ids = [ev.id for ev in evidence]
-    return {
-        "agent": "market_sentiment",
-        "claims": [
-            {
-                "statement": "Insufficient news data for a grounded sentiment view.",
-                "confidence": "low",
-                "evidence_ids": evidence_ids[:1],
-            }
-        ],
-        "news_sentiment": {"direction": "neutral", "confidence": "low"},
-        "price_action": {"trend": "unknown", "return_30d_pct": None, "volatility": "unknown"},
-        "market_narrative": {"summary": "Insufficient data.", "crowding_risk": "unknown"},
-        "sentiment_risks": [],
-        "missing_fields": ["news", "price_history"],
-        "_llm_used": False,
-    }
-
-
 def market_sentiment_node(state: ResearchState) -> ResearchState:
     evidence = state.get("evidence") or []
     normalized_data = state.get("normalized_data") or {}
     statuses = list(state.get("agent_statuses") or [])
+    if statuses:
+        statuses = update_status(
+            statuses, "market_sentiment",
+            lifecycle="active", phase="analyzing_sentiment", action="building sentiment view",
+        )
 
     news_evidence = [ev for ev in evidence if ev.source_type in ("news", "web")]
     all_evidence_ids = [ev.id for ev in evidence]
@@ -106,8 +91,18 @@ def market_sentiment_node(state: ResearchState) -> ResearchState:
             logger.warning("market_sentiment LLM failed: %s", exc)
 
     if result is None:
-        logger.warning("market_sentiment falling back to stub output")
-        result = _fallback(evidence)
+        msg = f"[{_NODE}] unable to generate grounded sentiment analysis from LLM output"
+        logger.error(msg)
+        if statuses:
+            statuses = update_status(
+                statuses,
+                "market_sentiment",
+                lifecycle="failed",
+                phase="analyzing_sentiment",
+                action="sentiment analysis failed",
+                last_error=msg,
+            )
+        raise RuntimeError(msg)
 
     # Surface missing fields as open questions so gap_check has agent-sourced signal
     agent_questions: list[str] = []
@@ -119,7 +114,7 @@ def market_sentiment_node(state: ResearchState) -> ResearchState:
     if statuses:
         statuses = update_status(
             statuses, "market_sentiment",
-            status="completed", action="sentiment ready",
+            lifecycle="standby", phase="analyzing_sentiment", action="sentiment ready",
             details=[
                 f"claims={len(result.get('claims', []))}",
                 f"direction={result.get('news_sentiment', {}).get('direction', 'unknown')}",
@@ -129,7 +124,7 @@ def market_sentiment_node(state: ResearchState) -> ResearchState:
         )
         statuses = update_status(
             statuses, "gap_check",
-            status="running", action="checking for gaps",
+            lifecycle="active", phase="evaluating_gaps", action="checking for gaps",
         )
 
     return {

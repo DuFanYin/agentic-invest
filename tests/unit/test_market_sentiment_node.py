@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import pytest
+
 import json
 from unittest.mock import MagicMock, patch
 
@@ -129,28 +131,18 @@ def test_llm_used_flag_true_on_success():
     assert result["market_sentiment"]["_llm_used"] is True
 
 
-# ── fallback ───────────────────────────────────────────────────────────────
+# ── raises on LLM failure (no stub fallback) ──────────────────────────────
 
-def test_fallback_when_llm_raises():
-    with patch("src.server.agents.market_sentiment._llm", _mock_llm(raises=RuntimeError("exhausted"))):
-        result = market_sentiment_node(_state())
-    ms = result["market_sentiment"]
-    assert ms["_llm_used"] is False
-    assert ms["news_sentiment"]["direction"] == "neutral"
+def test_raises_when_llm_raises():
+    with pytest.raises(RuntimeError, match="market_sentiment"):
+        with patch("src.server.agents.market_sentiment._llm", _mock_llm(raises=RuntimeError("exhausted"))):
+            market_sentiment_node(_state())
 
 
-def test_fallback_has_required_keys():
-    with patch("src.server.agents.market_sentiment._llm", _mock_llm(raises=Exception("err"))):
-        result = market_sentiment_node(_state())
-    ms = result["market_sentiment"]
-    for key in ("claims", "news_sentiment", "price_action", "market_narrative", "sentiment_risks", "missing_fields"):
-        assert key in ms
-
-
-def test_fallback_when_no_evidence():
-    with patch("src.server.agents.market_sentiment._llm", _mock_llm()):
-        result = market_sentiment_node(_state(evidence=[]))
-    assert result["market_sentiment"]["_llm_used"] is False
+def test_raises_when_no_evidence():
+    with pytest.raises(RuntimeError, match="market_sentiment"):
+        with patch("src.server.agents.market_sentiment._llm", _mock_llm()):
+            market_sentiment_node(_state(evidence=[]))
 
 
 # ── news evidence filtering ────────────────────────────────────────────────
@@ -194,7 +186,7 @@ def test_agent_questions_populated_when_llm_reports_missing_fields():
     assert all("market_sentiment needs" in q for q in qs)
 
 
-def test_agent_questions_empty_on_fallback():
-    with patch("src.server.agents.market_sentiment._llm", _mock_llm(raises=RuntimeError("err"))):
-        result = market_sentiment_node(_state())
-    assert result["agent_questions"] == []
+def test_agent_questions_empty_on_llm_failure():
+    with pytest.raises(RuntimeError):
+        with patch("src.server.agents.market_sentiment._llm", _mock_llm(raises=RuntimeError("err"))):
+            market_sentiment_node(_state())

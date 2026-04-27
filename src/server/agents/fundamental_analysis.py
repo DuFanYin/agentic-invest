@@ -12,6 +12,7 @@ from src.server.utils.status import update_status
 logger = logging.getLogger(__name__)
 
 _llm = OpenRouterClient()
+_NODE = "fundamental_analysis"
 
 _SYSTEM = (
     "You are a senior equity analyst. "
@@ -69,33 +70,16 @@ FINANCIAL METRICS:
 MISSING DATA: {', '.join(missing_fields) if missing_fields else 'none reported'}
 """
 
-
-def _fallback(evidence, normalized_data) -> dict:
-    evidence_ids = [ev.id for ev in evidence]
-    return {
-        "agent": "fundamental_analysis",
-        "claims": [
-            {
-                "statement": "Insufficient data for a grounded fundamental view.",
-                "confidence": "low",
-                "evidence_ids": evidence_ids[:1],
-            }
-        ],
-        "business_quality": {"view": "unknown", "drivers": []},
-        "financials": {"profitability_trend": "unknown", "cash_flow_quality": "unknown"},
-        "valuation": {"relative_multiple_view": "unknown", "simplified_dcf_view": "unknown"},
-        "fundamental_risks": [],
-        "missing_fields": normalized_data.get("missing_fields", []),
-        "metrics": normalized_data.get("metrics", {}),
-        "_llm_used": False,
-    }
-
-
 def fundamental_analysis_node(state: ResearchState) -> ResearchState:
     evidence = state.get("evidence") or []
     normalized_data = state.get("normalized_data") or {}
     intent = state.get("intent")
     statuses = list(state.get("agent_statuses") or [])
+    if statuses:
+        statuses = update_status(
+            statuses, "fundamental_analysis",
+            lifecycle="active", phase="analyzing_fundamentals", action="building analysis",
+        )
 
     metrics = normalized_data.get("metrics", {})
     missing_fields = normalized_data.get("missing_fields", [])
@@ -116,8 +100,18 @@ def fundamental_analysis_node(state: ResearchState) -> ResearchState:
             logger.warning("fundamental_analysis LLM failed: %s", exc)
 
     if result is None:
-        logger.warning("fundamental_analysis falling back to stub output")
-        result = _fallback(evidence, normalized_data)
+        msg = f"[{_NODE}] unable to generate grounded fundamental analysis from LLM output"
+        logger.error(msg)
+        if statuses:
+            statuses = update_status(
+                statuses,
+                "fundamental_analysis",
+                lifecycle="failed",
+                phase="analyzing_fundamentals",
+                action="fundamental analysis failed",
+                last_error=msg,
+            )
+        raise RuntimeError(msg)
 
     # Surface missing fields as open questions so gap_check has agent-sourced signal
     agent_questions: list[str] = []
@@ -129,12 +123,16 @@ def fundamental_analysis_node(state: ResearchState) -> ResearchState:
     if statuses:
         statuses = update_status(
             statuses, "fundamental_analysis",
-            status="completed", action="fundamentals ready",
+            lifecycle="standby", phase="analyzing_fundamentals", action="fundamentals ready",
             details=[
                 f"claims={len(result.get('claims', []))}",
                 f"llm={'yes' if result.get('_llm_used') else 'no'}",
                 f"questions={len(agent_questions)}",
             ],
+        )
+        statuses = update_status(
+            statuses, "gap_check",
+            lifecycle="active", phase="evaluating_gaps", action="checking for gaps",
         )
 
     return {

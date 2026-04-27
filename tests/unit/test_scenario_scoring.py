@@ -1,5 +1,8 @@
 """Unit tests: scenario scoring node produces valid, normalised probabilities."""
 
+import json
+from unittest.mock import MagicMock, patch
+
 from src.server.agents.scenario_scoring import scenario_scoring_node
 from src.server.models.evidence import Evidence
 from src.server.models.scenario import Scenario
@@ -21,13 +24,24 @@ def _make_evidence() -> list[Evidence]:
     ]
 
 
+def _mock_llm():
+    llm = MagicMock()
+    llm.call_with_retry.return_value = json.dumps([
+        {"name": "Bull case", "description": "Upside.", "raw_score": 0.3, "triggers": [], "signals": [], "evidence_ids": ["ev_001"]},
+        {"name": "Base case", "description": "Base.", "raw_score": 0.5, "triggers": [], "signals": [], "evidence_ids": ["ev_001"]},
+        {"name": "Bear case", "description": "Downside.", "raw_score": 0.2, "triggers": [], "signals": [], "evidence_ids": ["ev_001"]},
+    ])
+    return llm
+
+
 def test_scenario_scores_sum_to_one() -> None:
     state = {
         "evidence": _make_evidence(),
         "fundamental_analysis": {"business_quality": {"view": "stable"}},
         "market_sentiment": {"news_sentiment": {"direction": "neutral_to_positive"}},
     }
-    result = scenario_scoring_node(state)
+    with patch("src.server.agents.scenario_scoring._llm", _mock_llm()):
+        result = scenario_scoring_node(state)
     scenarios: list[Scenario] = result["scenarios"]
 
     assert validate_scenario_scores(scenarios) == []
@@ -41,5 +55,6 @@ def test_at_least_three_scenarios() -> None:
         "fundamental_analysis": {},
         "market_sentiment": {},
     }
-    result = scenario_scoring_node(state)
+    with patch("src.server.agents.scenario_scoring._llm", _mock_llm()):
+        result = scenario_scoring_node(state)
     assert len(result["scenarios"]) >= 3

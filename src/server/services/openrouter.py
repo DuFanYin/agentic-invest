@@ -3,8 +3,8 @@ OpenRouter LLM client.
 
 Strategy
 ────────
-- Primary model: openai/gpt-oss-20b:free  (fast, reliable JSON)
-- Fallback chain: openai/gpt-oss-120b:free → nvidia/nemotron-3-super-120b-a12b:free
+- Primary model: openai/gpt-oss-120b:free  (higher quality default)
+- Fallback chain: openai/gpt-oss-20b:free → nvidia/nemotron-3-super-120b-a12b:free
 - Per-model: up to 2 retries with 2 s exponential backoff on 429 / 5xx
 - complete()      — enforces response_format json_object; validates JSON before returning
 - complete_text() — free-form text (Markdown reports); skips JSON mode and validation
@@ -31,8 +31,8 @@ from src.server.config import (
 logger = logging.getLogger(__name__)
 
 _FREE_MODELS = [
-    "openai/gpt-oss-20b:free",
     "openai/gpt-oss-120b:free",
+    "openai/gpt-oss-20b:free",
     "nvidia/nemotron-3-super-120b-a12b:free",
 ]
 

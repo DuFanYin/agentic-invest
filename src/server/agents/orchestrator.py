@@ -30,7 +30,7 @@ from src.server.agents.scenario_scoring import scenario_scoring_node
 from src.server.models.intent import ResearchIntent
 from src.server.models.request import ResearchRequest
 from src.server.models.response import AgentStatus, ResearchResponse, ValidationResult
-from src.server.models.state import ResearchState
+from src.server.models.state import ResearchState, _RESET
 from src.server.services.openrouter import OpenRouterClient
 from src.server.utils.status import initial_agent_statuses, update_status
 
@@ -45,12 +45,12 @@ def _make_parse_intent_node(llm_client: OpenRouterClient):
         intent = _parse_intent(state["query"], llm_client)
         statuses = update_status(
             statuses, "parse_intent",
-            status="completed", action="intent parsed",
+            lifecycle="active", phase="dispatching", action="intent parsed",
             details=[f"intent={intent.intent}", f"scope={intent.scope}"],
         )
         statuses = update_status(
             statuses, "research",
-            status="running", action="collecting evidence",
+            lifecycle="active", phase="collecting_evidence", action="collecting evidence",
         )
         return {
             "intent": intent,
@@ -79,9 +79,8 @@ def _gap_check_node(state: ResearchState) -> ResearchState:
         new_questions.append("Need explicit investment horizon to refine scenario assumptions")
 
     # ── Agent-sourced questions (surfaced by analysis nodes) ───────────────
-    # operator.add accumulates across the parallel step; gap_check drains and
-    # resets the list by returning agent_questions=[] (plain replace via _last_list
-    # logic doesn't apply here — we just reset via overwrite after reading).
+    # _accumulate_or_reset appends normal writes; returning [_RESET] clears the
+    # list. gap_check reads accumulated questions then resets for the next cycle.
     agent_questions: list[str] = list(state.get("agent_questions") or [])
     new_questions.extend(agent_questions)
 
@@ -103,7 +102,8 @@ def _gap_check_node(state: ResearchState) -> ResearchState:
     if statuses:
         statuses = update_status(
             statuses, "gap_check",
-            status="completed",
+            lifecycle="waiting" if will_retry else "standby",
+            phase="gap_retry_required" if will_retry else "gap_resolved",
             action="retrying research" if will_retry else "gaps resolved",
             details=[
                 f"open_questions={len(new_questions)}",
@@ -114,17 +114,17 @@ def _gap_check_node(state: ResearchState) -> ResearchState:
         if will_retry:
             statuses = update_status(
                 statuses, "research",
-                status="running", action="supplementary evidence collection",
+                lifecycle="active", phase="retrying_evidence", action="supplementary evidence collection",
             )
         else:
             statuses = update_status(
                 statuses, "scenario_scoring",
-                status="running", action="scoring scenarios",
+                lifecycle="active", phase="scoring_scenarios", action="scoring scenarios",
             )
 
     return {
         "open_questions": new_questions,
-        "agent_questions": [],   # reset for the next cycle
+        "agent_questions": [_RESET],  # sentinel: reducer clears the list for the next cycle
         "agent_statuses": statuses,
     }
 

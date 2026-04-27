@@ -148,27 +148,18 @@ def test_padding_when_llm_returns_one_scenario():
     assert len(result["scenarios"]) >= 3
 
 
-# ── fallback ───────────────────────────────────────────────────────────────
+# ── raises on LLM failure (no stub fallback) ──────────────────────────────
 
-def test_fallback_when_llm_raises():
-    with patch("src.server.agents.scenario_scoring._llm", _mock_llm(raises=RuntimeError("exhausted"))):
-        result = scenario_scoring_node(_state())
-    assert len(result["scenarios"]) >= 3
-    total = sum(s.score for s in result["scenarios"])
-    assert abs(total - 1.0) < 1e-5
+def test_raises_when_llm_raises():
+    with pytest.raises(RuntimeError, match="scenario_scoring"):
+        with patch("src.server.agents.scenario_scoring._llm", _mock_llm(raises=RuntimeError("exhausted"))):
+            scenario_scoring_node(_state())
 
 
-def test_fallback_when_no_evidence():
-    with patch("src.server.agents.scenario_scoring._llm", _mock_llm()):
-        result = scenario_scoring_node(_state(evidence=[]))
-    assert len(result["scenarios"]) >= 3
-
-
-def test_fallback_scores_sum_to_one():
-    with patch("src.server.agents.scenario_scoring._llm", _mock_llm(raises=Exception("err"))):
-        result = scenario_scoring_node(_state())
-    total = sum(s.score for s in result["scenarios"])
-    assert abs(total - 1.0) < 1e-5
+def test_raises_when_no_evidence():
+    with pytest.raises(RuntimeError, match="scenario_scoring"):
+        with patch("src.server.agents.scenario_scoring._llm", _mock_llm()):
+            scenario_scoring_node(_state(evidence=[]))
 
 
 # ── agent_statuses ─────────────────────────────────────────────────────────

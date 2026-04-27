@@ -19,6 +19,7 @@ from src.server.utils.validation import (
 logger = logging.getLogger(__name__)
 
 _llm = OpenRouterClient()
+_NODE = "report_verification"
 _llm.max_retries = 1  # report is long; limit retries to avoid timeout cascades
 
 _SYSTEM = (
@@ -117,60 +118,6 @@ INSTRUCTIONS:
 """
 
 
-def _fallback_report(intent, evidence, fundamental_analysis, market_sentiment, scenarios) -> str:
-    subjects = ", ".join(intent.subjects) if intent and intent.subjects else "N/A"
-    lines = [
-        "# Executive Summary",
-        f"Research on {subjects} ({intent.ticker if intent else 'N/A'}).",
-        "",
-        "## Company Overview",
-        fundamental_analysis.get("business_quality", {}).get("view", "See evidence below."),
-        "",
-        "## Key Evidence",
-    ]
-    for e in evidence:
-        lines.append(f"- [{e['id']}] {e['title']}")
-    lines += [
-        "",
-        "## Fundamental Analysis",
-        f"Business quality: {fundamental_analysis.get('business_quality', {}).get('view', 'N/A')}",
-        f"Valuation: {fundamental_analysis.get('valuation', {}).get('relative_multiple_view', 'N/A')}",
-        "",
-        "## Market Sentiment",
-        f"Direction: {market_sentiment.get('news_sentiment', {}).get('direction', 'N/A')}",
-        "",
-        "## Valuation View",
-        fundamental_analysis.get("valuation", {}).get("relative_multiple_view", "N/A"),
-        "",
-        "## Risk Analysis",
-    ]
-    for r in fundamental_analysis.get("fundamental_risks", []):
-        lines.append(f"- {r.get('name')}: {r.get('signal','')}")
-    for r in market_sentiment.get("sentiment_risks", []):
-        lines.append(f"- {r.get('name')}: {r.get('signal','')}")
-    lines += ["", "## Future Scenarios"]
-    for s in scenarios:
-        lines.append(f"- {s.name} ({s.score:.0%}): {s.description}")
-    lines += [
-        "",
-        "## Bull / Base / Bear Thesis",
-        "- Bull: Execution upside with improving demand signals.",
-        "- Base: Growth normalisation with stable margins.",
-        "- Bear: Demand weakness and multiple compression.",
-        "",
-        "## What To Watch Next",
-        "- Revenue growth trajectory",
-        "- Gross margin direction",
-        "- External demand signals",
-        "",
-        "## Sources",
-    ]
-    for e in evidence:
-        lines.append(f"- {e['title']} | {e.get('url','N/A')}")
-    lines += ["", "## Disclaimer", "Not financial advice."]
-    return "\n".join(lines)
-
-
 def report_verification_node(state: ResearchState) -> ResearchState:
     intent = state.get("intent")
     evidence = state.get("evidence") or []
@@ -178,6 +125,11 @@ def report_verification_node(state: ResearchState) -> ResearchState:
     market_sentiment = state.get("market_sentiment") or {}
     scenarios: list[Scenario] = state.get("scenarios") or []
     statuses = list(state.get("agent_statuses") or [])
+    if statuses:
+        statuses = update_status(
+            statuses, "report_verification",
+            lifecycle="active", phase="generating_report", action="running validation and report generation",
+        )
 
     evidence_dump = [item.model_dump() for item in evidence]
     available_evidence_ids = {item["id"] for item in evidence_dump}
@@ -212,10 +164,18 @@ def report_verification_node(state: ResearchState) -> ResearchState:
             logger.warning("report_verification LLM failed: %s", exc)
 
     if report_markdown is None:
-        logger.warning("report_verification falling back to template report")
-        report_markdown = _fallback_report(intent, evidence_dump, fundamental_analysis, market_sentiment, scenarios)
-        if errors:
-            report_markdown += "\n\n## Validation Warnings\n" + "\n".join(f"- {e}" for e in errors)
+        msg = f"[{_NODE}] unable to generate report markdown from LLM"
+        logger.error(msg)
+        if statuses:
+            statuses = update_status(
+                statuses,
+                "report_verification",
+                lifecycle="failed",
+                phase="generating_report",
+                action="report generation failed",
+                last_error=msg,
+            )
+        raise RuntimeError(msg)
 
     report_json = {
         "intent": intent.model_dump() if intent else {},
@@ -236,12 +196,16 @@ def report_verification_node(state: ResearchState) -> ResearchState:
     if statuses:
         statuses = update_status(
             statuses, "report_verification",
-            status="completed", action="report published",
+            lifecycle="standby", phase="generating_report", action="report published",
             details=[
                 f"is_valid={not errors}",
                 f"errors={len(errors)}",
                 f"retry_questions={len(open_questions)}",
             ],
+        )
+        statuses = update_status(
+            statuses, "parse_intent",
+            lifecycle="standby", phase="workflow_complete", action="workflow complete",
         )
 
     return {

@@ -1,75 +1,134 @@
-# Frontend Layout (Aligned with Current Code)
+# Frontend Layout (Source of Truth: `Investment Research Agent.html`)
 
-## 1) Overall Structure
+## 1) Overview
 
-The page uses a three-part layout:
+This frontend design is a single-page React prototype mounted into `#root`, with a dense two-pane workstation layout:
 
-1. Top information area (Header)
-2. Main content area (Main, two columns)
-3. Bottom information area (Footer)
+1. Top command bar (`top-bar`)
+2. Main workspace (`main-area`) split into left operations panel and right report panel
+3. Conditional report footer (shown when run completes)
 
----
-
-## 2) Header Layout
-
-The Header is a three-column horizontal layout:
-
-- Left: product identity (`Investment Research` + `Research Agent`)
-- Middle: query summary (single-line display of current input)
-- Right: global runtime status (`Idle/Running/Complete/Error`)
+The interface is intentionally operator-style: compact typography, status-driven UI, and progressive reveal of report sections.
 
 ---
 
-## 3) Main Layout
+## 2) Visual Variants
 
-Main uses a two-column layout (fixed-width sidebar on the left, primary content on the right):
+The design supports two visual themes via `body[data-variant]`:
 
-- Left column (Sidebar)
-  - Input card
-    - Input: `query` (single input field)
-    - `ticker`, `horizon`, and `risk_level` are not shown in UI and are inferred by the Orchestrator
-    - Action button: `Run Research`
-  - Navigation card
-    - `Summary / Intent / Evidence / Analysis / Scenarios / Validation`
-  - Agent Status card
-    - Current status per agent (`idle/running/completed/failed`)
-    - Current action (`action`)
-    - Details (`details`)
-    - Timeline (event timeline)
-- Right column (Content)
-  - Result card (main reading area)
-  - Validation badge in top-right (`Not run/Valid/Needs review`)
+- `console` (default): terminal-like, JetBrains Mono dominant, CRT-like scanline overlay on report pane
+- `dispatch`: editorial style, DM Serif + DM Sans mixed typography
+
+Theme is tokenized with CSS variables (`--bg`, `--surface`, `--accent`, `--agent-*`, fonts, radius), so all components inherit a consistent palette and type system.
 
 ---
 
-## 4) Result Section Order
+## 3) Layout Structure
 
-Inside the Result panel, content is rendered in this order:
+### Top Command Bar (`top-bar`)
 
-1. Summary (`report_markdown`)
-2. Intent
-3. Evidence
-4. Fundamental Analysis
-5. Market Sentiment
-6. Scenarios
-7. Validation (`errors/warnings`)
+Single horizontal control strip:
+
+- Left: wordmark (`Investment Research`)
+- Center: query input + run button
+  - `top-query-input`: single-line input
+  - `run-btn`: `RUN RESEARCH` / `RUNNING...`
+- Right: global runtime `StatusPill` (`idle/running/complete/error`)
+
+### Main Workspace (`main-area`)
+
+Two columns:
+
+- Left panel (`left-panel`, fixed `30%` width)
+  - Agent header (`Agents`, active/waiting counters)
+  - Agent list (`agent-list`): six agent rows
+    - Orchestrator, Research, Fundamental, Sentiment, Scenarios, Verification
+    - each row shows dot, agent name, current action, status tag
+  - Output log area
+    - timeline-like event stream (`log-box`)
+    - shows agent-tagged messages and section-reveal system messages
+- Right panel (`right-panel`, fluid width)
+  - idle state: centered placeholder icon + state text
+  - active state: report sections in a single vertical reading flow (`report-wrap`)
+  - complete state: bottom `report-footer` with source count and disclaimer
 
 ---
 
-## 5) Streaming Status Display
+## 4) Report Information Architecture
 
-The frontend updates status in real time through streaming events:
+Report content is progressively revealed by sections (not rendered all at once).
 
-- Receive `agent_status`: refresh the Agent Status panel
-- Receive `state_update`: update in-progress hints (e.g. open questions)
-- Receive `timeline`: append timeline entries (timestamp, event type, action)
-- Receive `final`: render final report content
+Section keys and render order:
+
+1. `summary` -> Executive Summary
+2. `intent` -> Research Intent tags
+3. `evidence` -> Key Sources cards (with reliability badges)
+4. `fundamental` -> Business/financial narrative + metric groups
+5. `sentiment` -> Sentiment/price/narrative/risk blocks
+6. `scenarios` -> Bull/Base/Bear cards with probability bars and trigger lines
+
+Validation badge (`VALID`) is attached to summary block when summary section is revealed.
 
 ---
 
-## 6) Footer Layout
+## 5) Interaction and State Model
 
-Footer has two blocks:
+Core UI state variables:
 
-- Left: source count (`Sources: N`)
-- Right: fixed disclaimer (for research use only, not financial advice)
+- `appState`: `idle | running | complete | error`
+- `query`: current input text
+- `agentStatuses`: per-agent runtime lifecycle/phase/action map
+- `logLines`: chronological event log
+- `sections`: set of currently revealed report sections
+
+Run behavior:
+
+- `runResearch()` resets lifecycle/phase logs/sections and starts a real backend stream request to `/research/stream`
+- each SSE event updates one or more of:
+  - agent row status/action
+  - output log line
+  - section reveal
+  - global app state
+- log auto-scrolls to latest entry
+
+Current implementation no longer relies on local mock `STREAM`/`REPORT`; report content is rendered from backend `final` payload.
+
+---
+
+## 6) Component Model
+
+Main components in the prototype:
+
+- `App` (state owner + orchestration)
+- `StatusPill`
+- `AgentRow`
+- `LogLine`
+- report section components:
+  - `SummarySection`
+  - `IntentSection`
+  - `EvidenceSection`
+  - `FundamentalSection`
+  - `SentimentSection`
+  - `ScenariosSection`
+
+Shared UI helpers:
+
+- `SectionLabel`
+- CSS utility classes for badges, cards, metric rows, scenario bars, and sentiment blocks
+
+Runtime mapping and stream helpers:
+
+- `AGENT_ID_BY_NAME`: backend agent name -> UI row ID (`O/R/F/M/S/V`)
+- `applyAgentStatuses`: applies backend lifecycle/phase/action updates from `agent_status`
+- `processBlock`: parses SSE blocks (`event:` + `data:`) and dispatches to state handlers
+
+---
+
+## 7) Production Alignment Notes
+
+The running frontend is `src/frontend/index.html` + `src/frontend/static/styles.css`.
+
+- The app script is currently inline in `index.html` (`type="text/babel"`)
+- `tweaks-panel.jsx` is prototype design tooling and is not included in runtime frontend
+- Agent rows consume backend two-layer state (`lifecycle` + `phase`) instead of a single `completed`-style enum
+- Tag semantics are execution-oriented (`ACTIVE/WAITING/STALLED/FAILED/STANDBY`) while `action` carries fine-grained task detail

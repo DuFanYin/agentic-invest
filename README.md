@@ -11,6 +11,12 @@ What I really want to know is: is the company fundamentally doing well? What are
 The system is designed around that workflow. It searches for sources, builds a shared research state, runs fundamental and sentiment analysis, formulates future scenarios with likelihood scores, and finally produces a validated report. 
 
 
+## Key Features
+
+- Multi-agent feedback cycle (not a one-pass pipeline): the graph can re-enter research when open questions remain.
+- Two-layer agent status model: `lifecycle` (`standby/active/waiting/blocked/failed`) + `phase` (task semantics such as `collecting_evidence`, `generating_report`).
+- Real-time SSE streaming for UI observability (`agent_status`, `state_update`, `timeline`, `final`).
+
 
 ## Structure
 
@@ -39,3 +45,24 @@ LLM-based intent parsing:
 ```bash
 cp .env.example .env
 ```
+
+
+## TODO
+
+Define explicit conditions for agent-generated questions that trigger another research round.
+Potential improvements:
+- Add dynamic thresholds for retry decisions.
+- Attach confidence scores to intermediate outputs.
+- Automatically retry or re-verify when confidence is below threshold.
+
+
+fix: more robust json output format from model
+
+strong typed results between agents
+
+failaure qurentine
+
+async flow? find a way to share research state so model work concurretnly
+
+
+more ovservability

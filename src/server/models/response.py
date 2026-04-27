@@ -1,4 +1,30 @@
+from typing import Literal, TypeAlias
+
 from pydantic import BaseModel, Field
+AgentLifecycle: TypeAlias = Literal[
+    "standby",
+    "active",
+    "waiting",
+    "blocked",
+    "failed",
+]
+
+AgentPhase: TypeAlias = Literal[
+    "idle",
+    "planning",
+    "dispatching",
+    "collecting_evidence",
+    "retrying_evidence",
+    "analyzing_fundamentals",
+    "analyzing_sentiment",
+    "evaluating_gaps",
+    "gap_retry_required",
+    "gap_resolved",
+    "scoring_scenarios",
+    "generating_report",
+    "workflow_complete",
+]
+
 
 from src.server.models.evidence import Evidence
 from src.server.models.intent import ResearchIntent
@@ -13,9 +39,17 @@ class ValidationResult(BaseModel):
 
 class AgentStatus(BaseModel):
     agent: str
-    status: str = "idle"
+    lifecycle: AgentLifecycle = "standby"
+    phase: AgentPhase = "idle"
     action: str = "waiting"
     details: list[str] = Field(default_factory=list)
+    entered_at: str | None = None
+    last_update_at: str | None = None
+    waiting_on: str | None = None
+    progress_hint: str | None = None
+    retry_count: int = 0
+    max_retries: int = 0
+    last_error: str | None = None
 
 
 class ResearchResponse(BaseModel):

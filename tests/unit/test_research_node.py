@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import pytest
 from unittest.mock import MagicMock, patch
 
 from src.server.agents.research import research_node, _detect_conflicts
@@ -63,12 +64,14 @@ def _mock_finance(
     return client
 
 
+_WEB_DEFAULTS = [
+    {"title": "Web result 1", "url": "https://web.example.com/1", "content": "Analysis...", "published_date": None, "score": 0.8},
+    {"title": "Web result 2", "url": "https://web.example.com/2", "content": "More analysis...", "published_date": None, "score": 0.7},
+]
+
 def _mock_web(results: list | None = None):
     client = MagicMock()
-    client.search.return_value = results or [
-        {"title": "Web result 1", "url": "https://web.example.com/1", "content": "Analysis...", "published_date": None, "score": 0.8},
-        {"title": "Web result 2", "url": "https://web.example.com/2", "content": "More analysis...", "published_date": None, "score": 0.7},
-    ]
+    client.search.return_value = _WEB_DEFAULTS if results is None else results
     return client
 
 
@@ -237,9 +240,10 @@ def test_no_ticker_web_search_still_runs():
         result = research_node(state)
     web.search.assert_called_once()
     assert len(result["evidence"]) >= 1
+    assert all(ev.source_type == "web" for ev in result["evidence"])
 
 
-def test_no_ticker_no_web_results_produces_fallback():
+def test_no_ticker_no_web_results_raises():
     web = _mock_web([])
     state = {
         "query": "What are good ETFs?",
@@ -248,10 +252,9 @@ def test_no_ticker_no_web_results_produces_fallback():
         "open_questions": [],
         "agent_statuses": [],
     }
-    with _patch(finance=_mock_finance(), web=web):
-        result = research_node(state)
-    assert len(result["evidence"]) >= 1
-    assert result["evidence"][0].source_type == "web"
+    with pytest.raises(RuntimeError, match="research"):
+        with _patch(finance=_mock_finance(), web=web):
+            research_node(state)
 
 
 # ── Resilience: individual service failures ────────────────────────────────
@@ -288,7 +291,7 @@ def test_web_search_failure_does_not_crash():
     assert isinstance(result["evidence"], list)
 
 
-def test_all_services_fail_produces_fallback():
+def test_all_services_fail_raises():
     finance = _mock_finance()
     finance.get_info.side_effect = Exception("err")
     finance.get_financials.side_effect = Exception("err")
@@ -296,9 +299,9 @@ def test_all_services_fail_produces_fallback():
     finance.get_news.side_effect = Exception("err")
     web = _mock_web()
     web.search.side_effect = Exception("err")
-    with _patch(finance=finance, web=web):
-        result = research_node(_base_state())
-    assert len(result["evidence"]) >= 1
+    with pytest.raises(RuntimeError, match="research"):
+        with _patch(finance=finance, web=web):
+            research_node(_base_state())
 
 
 # ── Id offset on multi-pass ────────────────────────────────────────────────

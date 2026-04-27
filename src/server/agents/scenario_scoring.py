@@ -13,6 +13,7 @@ from src.server.utils.status import update_status
 logger = logging.getLogger(__name__)
 
 _llm = OpenRouterClient()
+_NODE = "scenario_scoring"
 
 _MIN_SCENARIOS = 3
 
@@ -138,22 +139,17 @@ def _parse_llm_scenarios(raw: str, evidence_ids: list[str]) -> list[Scenario]:
     return scenarios
 
 
-def _fallback(evidence) -> list[Scenario]:
-    evidence_ids = [ev.id for ev in evidence][:1]
-    raw = [
-        Scenario(name="Bull case", description="Upside scenario.", score=0.25, evidence_ids=evidence_ids),
-        Scenario(name="Base case", description="Base scenario.", score=0.50, evidence_ids=evidence_ids),
-        Scenario(name="Bear case", description="Downside scenario.", score=0.25, evidence_ids=evidence_ids),
-    ]
-    return _normalise(raw)
-
-
 def scenario_scoring_node(state: ResearchState) -> ResearchState:
     evidence = state.get("evidence") or []
     fundamental_analysis = state.get("fundamental_analysis") or {}
     market_sentiment = state.get("market_sentiment") or {}
     intent = state.get("intent")
     statuses = list(state.get("agent_statuses") or [])
+    if statuses:
+        statuses = update_status(
+            statuses, "scenario_scoring",
+            lifecycle="active", phase="scoring_scenarios", action="building scenarios",
+        )
 
     evidence_ids = [ev.id for ev in evidence]
     scenarios: list[Scenario] | None = None
@@ -171,15 +167,25 @@ def scenario_scoring_node(state: ResearchState) -> ResearchState:
             logger.warning("scenario_scoring LLM failed: %s", exc)
 
     if scenarios is None:
-        logger.warning("scenario_scoring falling back to stub output")
-        scenarios = _fallback(evidence)
+        msg = f"[{_NODE}] unable to generate scenarios from LLM output"
+        logger.error(msg)
+        if statuses:
+            statuses = update_status(
+                statuses,
+                "scenario_scoring",
+                lifecycle="failed",
+                phase="scoring_scenarios",
+                action="scenario generation failed",
+                last_error=msg,
+            )
+        raise RuntimeError(msg)
 
     score_sum = round(sum(s.score for s in scenarios), 6)
 
     if statuses:
         statuses = update_status(
             statuses, "scenario_scoring",
-            status="completed", action="scenarios ready",
+            lifecycle="standby", phase="scoring_scenarios", action="scenarios ready",
             details=[
                 f"scenarios={len(scenarios)}",
                 f"score_sum={score_sum}",
@@ -188,7 +194,7 @@ def scenario_scoring_node(state: ResearchState) -> ResearchState:
         )
         statuses = update_status(
             statuses, "report_verification",
-            status="running", action="generating report",
+            lifecycle="active", phase="generating_report", action="generating report",
         )
 
     return {"scenarios": scenarios, "agent_statuses": statuses}

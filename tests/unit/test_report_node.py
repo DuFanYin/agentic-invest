@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import pytest
+
 from unittest.mock import MagicMock, patch, PropertyMock
 
 from src.server.agents.report_verification import report_verification_node
@@ -172,30 +174,18 @@ def test_missing_fields_produce_warnings():
     assert len(result["validation_result"].warnings) >= 1
 
 
-# ── fallback on LLM failure ────────────────────────────────────────────────
+# ── raises on LLM failure (no stub fallback) ──────────────────────────────
 
-def test_fallback_when_llm_raises():
-    with _mock_llm_markdown(raises=RuntimeError("all models failed")):
-        result = report_verification_node(_state())
-    md = result["report_markdown"]
-    assert "# Executive Summary" in md
-    assert "## Disclaimer" in md
-    assert "Not financial advice" in md
+def test_raises_when_llm_raises():
+    with pytest.raises(RuntimeError, match="report_verification"):
+        with _mock_llm_markdown(raises=RuntimeError("all models failed")):
+            report_verification_node(_state())
 
 
-def test_fallback_has_all_required_sections():
-    with _mock_llm_markdown(raises=Exception("err")):
-        result = report_verification_node(_state())
-    md = result["report_markdown"]
-    for section in _REQUIRED_SECTIONS:
-        assert section in md, f"Fallback missing section: {section}"
-
-
-def test_fallback_when_no_evidence():
-    with _mock_llm_markdown():
-        result = report_verification_node(_state(evidence=[]))
-    assert "report_markdown" in result
-    assert len(result["report_markdown"]) > 0
+def test_raises_when_no_evidence():
+    with pytest.raises(RuntimeError, match="report_verification"):
+        with _mock_llm_markdown():
+            report_verification_node(_state(evidence=[]))
 
 
 # ── report_json structure ──────────────────────────────────────────────────

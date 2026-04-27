@@ -1,73 +1,617 @@
-<!doctype html>
-<html lang="zh-CN">
-  <head>
-    <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Investment Research Agent</title>
-    <link rel="stylesheet" href="/static/styles.css" />
-  </head>
-  <body>
-    <header class="header">
-      <div>
-        <p class="eyebrow">Investment Research</p>
-        <h1>Research Agent</h1>
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Investment Research Agent</title>
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;500;600&family=DM+Serif+Display:ital@0;1&family=DM+Sans:opsz,wght@9..40,300;9..40,400;9..40,500&display=swap" rel="stylesheet">
+<script src="https://unpkg.com/react@18.3.1/umd/react.development.js" integrity="sha384-hD6/rw4ppMLGNu3tX5cjIb+uRZ7UkRJ6BPkLpg4hAu/6onKUg4lLsHAs9EBPT82L" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" integrity="sha384-u6aeetuaXnQ38mYT8rp6sbXaQe3NL9t+IBXmnYxwkUI2Hw4bsp2Wvmx4yRQF1uAm" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" integrity="sha384-m08KidiNqLdpJqLq95G/LEi8Qvjl/xUYll3QILypMoQ65QorJ9Lvtp2RXYGBFj1y" crossorigin="anonymous"></script>
+<link rel="stylesheet" href="/static/styles.css">
+
+</head>
+<body data-variant="console">
+<div id="root"></div>
+
+<script type="text/babel">
+const { useState, useEffect, useRef, useCallback } = React;
+
+const NOW = () => {
+  const d = new Date();
+  return `${String(d.getHours()).padStart(2,'0')}:${String(d.getMinutes()).padStart(2,'0')}:${String(d.getSeconds()).padStart(2,'0')}`;
+};
+
+const AGENTS = [
+  { id:'O', name:'Orchestrator', color:'var(--agent-O)' },
+  { id:'R', name:'Research',     color:'var(--agent-R)' },
+  { id:'F', name:'Fundamental',  color:'var(--agent-F)' },
+  { id:'M', name:'Sentiment',    color:'var(--agent-M)' },
+  { id:'S', name:'Scenarios',    color:'var(--agent-S)' },
+  { id:'V', name:'Verification', color:'var(--agent-V)' },
+];
+
+const AGENT_ID_BY_NAME = {
+  parse_intent: 'O',
+  research: 'R',
+  fundamental_analysis: 'F',
+  market_sentiment: 'M',
+  scenario_scoring: 'S',
+  report_verification: 'V',
+};
+
+const isStandbyLifecycle = (lifecycle) => !lifecycle || lifecycle === 'standby';
+const isActiveLifecycle = (lifecycle) => lifecycle === 'active';
+const isWaitingLifecycle = (lifecycle) => lifecycle === 'waiting';
+const isBlockedLifecycle = (lifecycle) => lifecycle === 'blocked';
+const isFailedLifecycle = (lifecycle) => lifecycle === 'failed';
+const ACTIVE_THRESHOLD_MS = 15000;
+const STALLED_THRESHOLD_MS = 60000;
+
+const parseIsoMs = (value) => {
+  if (!value) return 0;
+  const ts = Date.parse(value);
+  return Number.isFinite(ts) ? ts : 0;
+};
+
+const deriveExecutionPhase = (agentState, nowMs) => {
+  const lifecycle = agentState?.lifecycle || 'standby';
+  if (isFailedLifecycle(lifecycle)) return 'FAILED';
+  if (isBlockedLifecycle(lifecycle)) return 'BLOCKED';
+  if (isStandbyLifecycle(lifecycle)) return 'STANDBY';
+  if (isWaitingLifecycle(lifecycle) || agentState?.waiting_on) return 'WAITING';
+  if (!isActiveLifecycle(lifecycle)) return String(lifecycle || 'STANDBY').toUpperCase();
+  const lastUpdateMs = parseIsoMs(agentState?.last_update_at);
+  if (!lastUpdateMs) return 'ACTIVE';
+  const idleForMs = Math.max(0, nowMs - lastUpdateMs);
+  if (idleForMs >= STALLED_THRESHOLD_MS) return 'STALLED';
+  if (idleForMs < ACTIVE_THRESHOLD_MS) return 'ACTIVE';
+  return 'RUNNING';
+};
+
+const formatAgentStatusLog = (s) => {
+  const parts = [];
+  parts.push(`${s.lifecycle || 'unknown'}`);
+  if (s.phase) parts.push(s.phase);
+  if (s.action) parts.push(s.action);
+  if (s.progress_hint) parts.push(`progress ${s.progress_hint}`);
+  if (s.waiting_on) parts.push(`waiting ${s.waiting_on}`);
+  if (typeof s.retry_count === 'number' && typeof s.max_retries === 'number' && s.max_retries > 0) {
+    parts.push(`retry ${s.retry_count}/${s.max_retries}`);
+  }
+  if (s.last_error) parts.push(`error ${s.last_error}`);
+  return parts.join(' · ');
+};
+
+const formatPct = (value) => `${Math.round((Number(value) || 0) * 100)}%`;
+const firstSentence = (text) => {
+  if (!text) return 'N/A';
+  const i = text.indexOf('.');
+  return i === -1 ? text : text.slice(0, i + 1);
+};
+const splitSummary = (markdown) => {
+  if (!markdown) return { lead: 'No summary available.', body: '' };
+  const compact = markdown.replace(/#+\s+/g, '').replace(/\n+/g, ' ').trim();
+  const parts = compact.split('.').map(p => p.trim()).filter(Boolean);
+  const lead = parts.slice(0, 2).join('. ');
+  const body = parts.slice(2).join('. ');
+  return { lead: lead ? `${lead}.` : compact, body };
+};
+const metricGroupsFromAnalysis = (analysis) => {
+  const metrics = analysis?.metrics || {};
+  return Object.entries(metrics).map(([group, value]) => {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+    const items = Object.entries(value).map(([k, v]) => ({ k, v: String(v ?? 'N/A') }));
+    return { group, items };
+  }).filter(Boolean);
+};
+const scenarioTypeByIndex = (idx) => (idx === 0 ? 'bull' : idx === 1 ? 'base' : 'bear');
+const scenarioNameByType = (type) => (type === 'bull' ? 'Bull' : type === 'base' ? 'Base' : 'Bear');
+const revealSections = (setSections) => {
+  const order = ['intent', 'evidence', 'fundamental', 'sentiment', 'scenarios', 'summary'];
+  order.forEach((section, idx) => {
+    setTimeout(() => {
+      setSections((prev) => new Set([...prev, section]));
+    }, idx * 180);
+  });
+};
+
+function AgentRow({ agent, lifecycle, phase, action, waitingOn, progressHint, lastUpdateAt, nowMs }) {
+  const currentLifecycle = lifecycle || 'standby';
+  const label = deriveExecutionPhase({ lifecycle: currentLifecycle, waiting_on: waitingOn, last_update_at: lastUpdateAt }, nowMs);
+  const isEngaged = label === 'ACTIVE' || label === 'RUNNING' || label === 'WAITING';
+  const rowClass = isEngaged ? 'active' : '';
+  const dotClass = label === 'STANDBY' ? 'idle' : label === 'STALLED' || label === 'FAILED' ? 'failed' : 'running';
+  const tagClass =
+    label === 'STANDBY'
+      ? 'tag-standby'
+      : label === 'STALLED' || label === 'FAILED'
+      ? 'tag-stalled'
+      : label === 'WAITING' || label === 'BLOCKED'
+      ? 'tag-waiting'
+      : 'tag-active';
+  const phaseText = phase ? phase.replaceAll('_', ' ') : 'idle';
+  const actionText = waitingOn
+    ? `${action || phaseText} (${waitingOn})`
+    : progressHint
+    ? `${action || phaseText} · ${progressHint}`
+    : action || phaseText;
+  return (
+    <div className={`agent-row ${rowClass}`}>
+      <span className={`agent-dot ${dotClass}`} style={{background: label === 'STANDBY' ? undefined : agent.color}}></span>
+      <span className="agent-name" style={{color: label === 'STANDBY' ? undefined : agent.color}}>{agent.name}</span>
+      <span className="agent-action">{actionText}</span>
+      <span className={`agent-status-tag ${tagClass}`}>{label}</span>
+    </div>
+  );
+}
+
+function LogLine({ time, agentId, msg, isSection }) {
+  const agent = AGENTS.find(a => a.id === agentId);
+  return (
+    <div className="log-line">
+      <span className="log-time">{time}</span>
+      {agent && <span className="log-agent" style={{color: agent.color}}>[{agent.name.slice(0,6).toUpperCase()}]</span>}
+      {!agent && <span className="log-agent" style={{color:'var(--accent)'}}>[SYSTEM]</span>}
+      <span className={`log-msg${isSection ? ' is-section' : ''}`}>{msg}</span>
+    </div>
+  );
+}
+
+function SectionLabel({ children }) {
+  return <div className="section-label">{children}</div>;
+}
+
+function IntentSection({ intent }) {
+  if (!intent) return null;
+  const outputs = Array.isArray(intent.required_outputs) ? intent.required_outputs : [];
+  return (
+    <div className="report-section">
+      <SectionLabel>Intent</SectionLabel>
+      <div className="section-title">Research Intent</div>
+      <div className="intent-grid">
+        <div className="intent-tag"><span className="intent-key">type</span><span className="intent-val">{intent.intent || 'investment_research'}</span></div>
+        <div className="intent-tag"><span className="intent-key">subject</span><span className="intent-val">{intent.subjects?.[0] || 'N/A'}</span></div>
+        <div className="intent-tag"><span className="intent-key">horizon</span><span className="intent-val">{intent.time_horizon || 'unspecified'}</span></div>
+        <div className="intent-tag"><span className="intent-key">risk</span><span className="intent-val">{intent.risk_level || 'N/A'}</span></div>
+        <div className="intent-tag"><span className="intent-key">scope</span><span className="intent-val">{intent.scope}</span></div>
+        {outputs.map(o => (
+          <div key={o} className="intent-tag"><span className="intent-key">output</span><span className="intent-val">{o}</span></div>
+        ))}
       </div>
-      <div class="question-summary">
-        <span id="question-summary">输入一个投资研究问题开始分析</span>
-      </div>
-      <div class="status-pill" id="status">Idle</div>
-    </header>
+    </div>
+  );
+}
 
-    <main class="main">
-      <aside class="sidebar">
-        <section class="card">
-          <h2>Input</h2>
-          <p class="muted">输入公司、行业、宏观事件或任意投资相关问题。</p>
-          <label for="query">Query</label>
-          <textarea
-            id="query"
-            rows="7"
-            placeholder="例如：分析 AI 半导体供应链未来 5 年的投资机会，并给出可能场景和概率。"
-          ></textarea>
-          <button id="run-btn" type="button">Run Research</button>
-        </section>
-
-        <section class="card">
-          <h2>Navigation</h2>
-          <ul class="nav-list">
-            <li>Summary</li>
-            <li>Intent</li>
-            <li>Evidence</li>
-            <li>Analysis</li>
-            <li>Scenarios</li>
-            <li>Validation</li>
-          </ul>
-        </section>
-
-        <section class="card">
-          <h2>Agent Status</h2>
-          <div id="agent-status-panel" class="agent-status-panel"></div>
-          <h3>Timeline</h3>
-          <div id="agent-timeline" class="agent-timeline"></div>
-        </section>
-      </aside>
-
-      <section class="content">
-        <article class="card">
-          <div class="section-title">
-            <h2>Result</h2>
-            <span id="validation-badge" class="badge">Not run</span>
+function EvidenceSection({ evidence }) {
+  const items = Array.isArray(evidence) ? evidence : [];
+  return (
+    <div className="report-section">
+      <SectionLabel>Evidence</SectionLabel>
+      <div className="section-title">Key Sources</div>
+      <div className="evidence-list">
+        {items.map(ev => (
+          <div className="evidence-card" key={ev.id}>
+            <div className={`ev-reliability ${ev.reliability || 'medium'}`}>{(ev.reliability || 'medium').toUpperCase()}</div>
+            <div>
+              <div className="ev-source-title">{ev.title}</div>
+              <div className="ev-source-type">{ev.source_type || 'source'} · {ev.id}</div>
+            </div>
           </div>
-          <div id="result" class="result-empty">等待执行...</div>
-        </article>
-      </section>
-    </main>
+        ))}
+      </div>
+    </div>
+  );
+}
 
-    <footer class="footer">
-      <div id="source-count">Sources: 0</div>
-      <div>Disclaimer: This tool is for research only, not financial advice.</div>
-    </footer>
+function FundamentalSection({ analysis }) {
+  const groups = metricGroupsFromAnalysis(analysis);
+  return (
+    <div className="report-section">
+      <SectionLabel>Fundamental Analysis</SectionLabel>
+      <div className="section-title">Business & Financials</div>
+      <div className="section-body" style={{marginBottom:'16px'}}>{analysis?.business_quality?.view || 'No business quality view.'}</div>
+      {groups.map(g => (
+        <div className="metric-group" key={g.group}>
+          <div className="metric-group-name">{g.group}</div>
+          {g.items.map(m => (
+            <div className="metric-row" key={m.k}>
+              <span className="metric-k">{m.k}</span>
+              <span className="metric-v">{m.v}</span>
+            </div>
+          ))}
+        </div>
+      ))}
+      <div className="section-body" style={{marginTop:'12px', color:'var(--muted)'}}>
+        {(analysis?.fundamental_risks || []).map(r => r.name).join(', ') || 'No major fundamental risks recorded.'}
+      </div>
+    </div>
+  );
+}
 
-    <script src="/static/app.js"></script>
-  </body>
+function SentimentSection({ sentiment }) {
+  return (
+    <div className="report-section">
+      <SectionLabel>Market Sentiment</SectionLabel>
+      <div className="section-title">Sentiment & Price Action</div>
+      <div className="sentiment-grid">
+        <div className="sentiment-block">
+          <div className="sent-name">News Sentiment</div>
+          <div className="sent-val">{sentiment?.news_sentiment?.direction || 'unknown'}.</div>
+        </div>
+        <div className="sentiment-block">
+          <div className="sent-name">Price Action</div>
+          <div className="sent-val">{sentiment?.price_action?.trend || 'unknown'}.</div>
+        </div>
+        <div className="sentiment-block">
+          <div className="sent-name">Market Narrative</div>
+          <div className="sent-val">{firstSentence(sentiment?.market_narrative?.summary)}</div>
+        </div>
+        <div className="sentiment-block">
+          <div className="sent-name">Sentiment Risks</div>
+          <div className="sent-val">{firstSentence((sentiment?.sentiment_risks || []).map(r => r.name).join('. '))}</div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function ScenariosSection({ scenarios }) {
+  const items = Array.isArray(scenarios) ? scenarios : [];
+  const sum = items.reduce((acc, s) => acc + (Number(s.score) || 0), 0);
+  return (
+    <div className="report-section">
+      <SectionLabel>Scenarios</SectionLabel>
+      <div className="section-title">Forward Scenarios</div>
+      <div className="scenario-list">
+        {items.map((s, idx) => {
+          const type = scenarioTypeByIndex(idx);
+          const pct = Number(s.score) || 0;
+          return (
+          <div className={`scenario-card ${type}`} key={`${s.name}-${idx}`}>
+            <div className="scenario-header">
+              <span className={`scenario-name ${type}`}>{scenarioNameByType(type).toUpperCase()} — {s.name}</span>
+              <span className="scenario-pct" style={{color: type==='bull'?'var(--accent)':type==='base'?'var(--warn)':'var(--err)'}}>{formatPct(pct)}</span>
+            </div>
+            <div className="scenario-bar-track">
+              <div className={`scenario-bar-fill ${type}`} style={{width:`${Math.round(pct * 100)}%`}}></div>
+            </div>
+            <div className="scenario-desc">{s.description}</div>
+            <div className="scenario-triggers">Watch: {(s.triggers || []).join(', ') || 'N/A'}</div>
+          </div>
+        )})}
+      </div>
+      <div className="prob-check">∑ probability = {sum.toFixed(3)}</div>
+    </div>
+  );
+}
+
+function SummarySection({ validationBadge, reportMarkdown, intent }) {
+  const summary = splitSummary(reportMarkdown);
+  return (
+    <div className="report-section">
+      {validationBadge}
+      <SectionLabel>Executive Summary</SectionLabel>
+      <div className="section-title">{(intent?.subjects?.[0] || 'Investment Research')} — {(intent?.time_horizon || 'multi-year')} Horizon</div>
+      <div className="summary-lead">{summary.lead}</div>
+      <div className="section-body">{summary.body}</div>
+    </div>
+  );
+}
+
+/* ── Main App ── */
+function App() {
+  const [appState, setAppState] = useState('idle');
+  const [query, setQuery] = useState('');
+  const [agentStatuses, setAgentStatuses] = useState({});
+  const [logLines, setLogLines] = useState([]);
+  const [sections, setSections] = useState(new Set());
+  const [reportData, setReportData] = useState(null);
+  const [streamError, setStreamError] = useState('');
+  const [openQuestionsCount, setOpenQuestionsCount] = useState(0);
+  const [nowMs, setNowMs] = useState(Date.now());
+  const logRef = useRef(null);
+  const lastAgentLogSigRef = useRef({});
+  const appendLog = useCallback((agentId, msg, isSection = false, timestamp = NOW()) => {
+    setLogLines(prev => [...prev, { time: timestamp, agentId, msg, isSection }]);
+  }, []);
+
+  const applyAgentStatuses = useCallback((statuses) => {
+    if (!Array.isArray(statuses)) return;
+    setAgentStatuses(() => {
+      const mapped = {};
+      statuses.forEach((item) => {
+        const id = AGENT_ID_BY_NAME[item.agent];
+        if (!id) return;
+        mapped[id] = {
+          lifecycle: item.lifecycle,
+          phase: item.phase,
+          action: item.action,
+          waiting_on: item.waiting_on || '',
+          progress_hint: item.progress_hint || '',
+          last_update_at: item.last_update_at || '',
+        };
+      });
+      return mapped;
+    });
+  }, []);
+
+  const streamResearch = useCallback(async (q) => {
+    const response = await fetch('/research/stream', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Accept: 'text/event-stream',
+      },
+      body: JSON.stringify({ query: q }),
+    });
+
+    if (!response.ok || !response.body) {
+      let detail = 'Research stream request failed.';
+      try {
+        const payload = await response.json();
+        detail = payload?.detail || detail;
+      } catch (_err) {}
+      throw new Error(detail);
+    }
+
+    const decoder = new TextDecoder();
+    const reader = response.body.getReader();
+    let buffer = '';
+    let gotFinal = false;
+    let gotError = false;
+
+    const processBlock = (block) => {
+      const lines = block.split('\n');
+      let eventName = 'message';
+      let dataPayload = '';
+      for (const line of lines) {
+        if (line.startsWith('event:')) eventName = line.slice(6).trim();
+        else if (line.startsWith('data:')) dataPayload += line.slice(5).trim();
+      }
+      if (!dataPayload) return;
+
+      let parsed;
+      try {
+        parsed = JSON.parse(dataPayload);
+      } catch (_err) {
+        return;
+      }
+
+      if (eventName === 'agent_status') {
+        applyAgentStatuses(parsed);
+        return;
+      }
+
+      if (eventName === 'timeline') {
+        const ts = parsed?.timestamp ? new Date(parsed.timestamp).toTimeString().slice(0, 8) : NOW();
+        if (parsed?.event === 'agent_status' && Array.isArray(parsed.payload)) {
+          parsed.payload.forEach((s) => {
+            const id = AGENT_ID_BY_NAME[s.agent] || null;
+            const key = id || s.agent || 'system';
+            const signature = JSON.stringify({
+              lifecycle: s.lifecycle || '',
+              phase: s.phase || '',
+              action: s.action || '',
+              progress_hint: s.progress_hint || '',
+              waiting_on: s.waiting_on || '',
+              retry_count: typeof s.retry_count === 'number' ? s.retry_count : null,
+              max_retries: typeof s.max_retries === 'number' ? s.max_retries : null,
+              last_error: s.last_error || '',
+            });
+            if (lastAgentLogSigRef.current[key] === signature) return;
+            lastAgentLogSigRef.current[key] = signature;
+            appendLog(id, formatAgentStatusLog(s), false, ts);
+          });
+        } else if (parsed?.event === 'state_update') {
+          const count = parsed?.payload?.research_state?.open_questions?.length || 0;
+          const extra = count > 0 ? ` · awaiting evidence clarification` : '';
+          appendLog(null, `open questions: ${count}${extra}`, false, ts);
+        }
+        return;
+      }
+
+      if (eventName === 'state_update') {
+        const count = parsed?.research_state?.open_questions?.length || 0;
+        setOpenQuestionsCount(count);
+        return;
+      }
+
+      if (eventName === 'error') {
+        const node = parsed?.node || 'unknown';
+        const message = parsed?.message || 'Unknown stream error';
+        gotError = true;
+        setAppState('error');
+        setStreamError(message);
+        appendLog(null, `node ${node} failed: ${message}`);
+        return;
+      }
+
+      if (eventName === 'final') {
+        gotFinal = true;
+        setReportData(parsed);
+        setAppState('complete');
+        appendLog(null, '── Section reveal started ──', true);
+        revealSections(setSections);
+        return;
+      }
+    };
+
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      let boundary = buffer.indexOf('\n\n');
+      while (boundary !== -1) {
+        const block = buffer.slice(0, boundary);
+        buffer = buffer.slice(boundary + 2);
+        processBlock(block);
+        boundary = buffer.indexOf('\n\n');
+      }
+    }
+
+    if (!gotFinal && !gotError) {
+      throw new Error('Stream ended without final report.');
+    }
+  }, [appendLog, applyAgentStatuses]);
+
+  const runResearch = useCallback(async () => {
+    const trimmed = query.trim();
+    if (!trimmed) return;
+
+    setAppState('running');
+    setLogLines([]);
+    setSections(new Set());
+    setAgentStatuses({});
+    setReportData(null);
+    setStreamError('');
+    setOpenQuestionsCount(0);
+    lastAgentLogSigRef.current = {};
+    appendLog(null, 'run started');
+
+    try {
+      await streamResearch(trimmed);
+    } catch (error) {
+      setAppState('error');
+      setStreamError(error.message || 'Unknown stream error');
+      appendLog(null, `run failed: ${error.message || 'Unknown stream error'}`);
+    }
+  }, [appendLog, query, streamResearch]);
+
+  // Auto-scroll log
+  useEffect(() => {
+    if (logRef.current) logRef.current.scrollTop = logRef.current.scrollHeight;
+  }, [logLines]);
+
+  useEffect(() => {
+    const timer = setInterval(() => setNowMs(Date.now()), 2000);
+    return () => clearInterval(timer);
+  }, []);
+
+  const handleKey = (e) => { if (e.key === 'Enter') runResearch(); };
+
+  const activeCount = Object.values(agentStatuses).filter((s) => {
+    const phase = deriveExecutionPhase(s, nowMs);
+    return phase === 'ACTIVE' || phase === 'RUNNING';
+  }).length;
+  const waitingCount = Object.values(agentStatuses).filter((s) => {
+    const phase = deriveExecutionPhase(s, nowMs);
+    return phase === 'WAITING';
+  }).length;
+  const isValid = reportData?.validation_result?.is_valid;
+
+  const validationBadge = sections.has('summary') ? (
+    <div className={`validation-bar ${isValid ? 'valid' : 'review'}`}>
+      <span>{isValid ? '✓' : '!'}</span><span>{isValid ? 'VALID' : 'REVIEW'}</span>
+    </div>
+  ) : null;
+
+  return (
+    <>
+      {/* Top bar */}
+      <div className="top-bar">
+        <div className="top-wordmark">Investment Research</div>
+        <div className="top-divider"></div>
+        <div className="top-query-wrap">
+          <input
+            className="top-query-input"
+            placeholder="Ask any investment question — e.g. Should I invest in NVDA for 5 years?"
+            value={query}
+            onChange={e => setQuery(e.target.value)}
+            onKeyDown={handleKey}
+            disabled={appState === 'running'}
+          />
+          <button
+            className="run-btn"
+            onClick={runResearch}
+            disabled={appState === 'running' || !query.trim()}
+          >
+            {appState === 'running' ? 'RUNNING…' : 'RUN RESEARCH'}
+          </button>
+        </div>
+      </div>
+
+      {/* Main */}
+      <div className="main-area">
+        {/* Left panel */}
+        <div className="left-panel">
+          <div className="panel-header">
+            <span className="panel-label">Agents</span>
+            <span className="panel-count">
+              {appState === 'idle' ? '6 standby' : `${activeCount} active · ${waitingCount} waiting`}
+            </span>
+          </div>
+          <div className="agent-list">
+            {AGENTS.map(ag => (
+              <AgentRow
+                key={ag.id}
+                agent={ag}
+                lifecycle={agentStatuses[ag.id]?.lifecycle}
+                phase={agentStatuses[ag.id]?.phase}
+                action={agentStatuses[ag.id]?.action}
+                waitingOn={agentStatuses[ag.id]?.waiting_on}
+                progressHint={agentStatuses[ag.id]?.progress_hint}
+                lastUpdateAt={agentStatuses[ag.id]?.last_update_at}
+                nowMs={nowMs}
+              />
+            ))}
+          </div>
+          <div className="log-area">
+            <div className="panel-header">
+              <span className="panel-label">Output Log</span>
+              <span className="panel-count">{logLines.length} events</span>
+            </div>
+            <div className="log-box" ref={logRef}>
+              {logLines.length === 0 && (
+                <span className="log-empty">Awaiting query…</span>
+              )}
+              {logLines.map((l, i) => (
+                <LogLine key={i} time={l.time} agentId={l.agentId} msg={l.msg} isSection={l.isSection} />
+              ))}
+              {openQuestionsCount > 0 && (
+                <LogLine time={NOW()} agentId={null} msg={`open questions pending: ${openQuestionsCount}`} />
+              )}
+              {streamError && (
+                <LogLine time={NOW()} agentId={null} msg={`error: ${streamError}`} />
+              )}
+            </div>
+          </div>
+        </div>
+
+        {/* Right panel */}
+        <div className="right-panel">
+          {sections.size === 0 && (
+            <div className="report-idle">
+              <div className="report-idle-icon">◈</div>
+              <div className="report-idle-text">
+                {appState === 'idle' ? 'Enter a query to begin research' : 'Generating report…'}
+              </div>
+            </div>
+          )}
+          {sections.size > 0 && (
+            <div className="report-wrap">
+              {sections.has('summary') && <SummarySection validationBadge={validationBadge} reportMarkdown={reportData?.report_markdown} intent={reportData?.intent} />}
+              {sections.has('intent') && <IntentSection intent={reportData?.intent} />}
+              {sections.has('evidence') && <EvidenceSection evidence={reportData?.evidence} />}
+              {sections.has('fundamental') && <FundamentalSection analysis={reportData?.fundamental_analysis} />}
+              {sections.has('sentiment') && <SentimentSection sentiment={reportData?.market_sentiment} />}
+              {sections.has('scenarios') && <ScenariosSection scenarios={reportData?.scenarios} />}
+            </div>
+          )}
+          {appState === 'complete' && (
+            <div className="report-footer">
+              <span>Sources: {reportData?.evidence?.length || 0}</span>
+              <span>For research use only · Not financial advice</span>
+            </div>
+          )}
+        </div>
+      </div>
+
+    </>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+</script>
+</body>
 </html>

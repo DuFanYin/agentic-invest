@@ -53,7 +53,6 @@ agentic-invest/
 │   └── frontend/
 │       ├── index.html
 │       └── static/
-│           ├── app.js
 │           └── styles.css
 ├── tests/
 │   ├── unit/
@@ -84,7 +83,7 @@ Design documentation only — not imported at runtime.
 - `core-agent-system.md`: multi-agent architecture, graph topology, data contracts
 - `implementation-plan.md`: phased delivery plan with completion status
 - `test-suite.md`: per-file test coverage summary and run commands
-- `frontend.md`: Vanilla HTML/JS UI layout and streaming protocol
+- `frontend.md`: React-in-HTML UI layout, SSE wiring, and section reveal behavior
 - `peripheral-plan.md`: peripheral architecture and integration planning
 - `codebase-structure.md`: this file
 
@@ -134,7 +133,7 @@ Pydantic models shared across all layers.
 - `evidence`: `operator.add` — parallel passes accumulate items
 - `agent_questions`: `operator.add` — parallel analysis nodes surface missing-field questions for `gap_check`
 - `open_questions`: plain replace — gap_check resets each cycle
-- `agent_statuses`: `_last_list` custom reducer — handles concurrent writes from the parallel analysis nodes
+- `agent_statuses`: `_last_list` custom reducer — merges concurrent writes by agent and prefers newer `last_update_at` snapshots
 
 ### `src/server/agents/`
 
@@ -168,7 +167,7 @@ Collects evidence from two external sources with in-process SQLite caching:
 | `FinanceDataClient` | 3600 s | company info, financials, price history, yfinance news |
 | `WebResearchClient` | 900 s | Tavily web search results |
 
-Cache keys are `sha256(prefix + parts)[:16]`. Deduplicates web URLs. Falls back to a single low-reliability evidence item if all calls fail.
+Cache keys are `sha256(prefix + parts)[:16]`. Deduplicates web URLs. If no usable evidence can be collected, the node raises a runtime error (no synthetic evidence fallback).
 
 Returns: `evidence` (list appended via reducer), `normalized_data` (metrics, missing_fields, open_question_context), incremented `research_pass`.
 
@@ -177,28 +176,28 @@ Returns: `evidence` (list appended via reducer), `normalized_data` (metrics, mis
 LLM node (runs in parallel with `market_sentiment`).
 Uses `_llm.call_with_retry()` → `json.loads()`.
 Returns: business quality view, valuation view, claims with evidence citations, fundamental risks, missing fields.
-Falls back to a stub result when the LLM fails.
+If LLM output is unavailable/invalid, the node raises a runtime error (no stub fallback).
 
 #### `market_sentiment.py`
 
 LLM node (runs in parallel with `fundamental_analysis`).
 Filters evidence to `news`/`web` source types for the prompt.
 Returns: news sentiment direction, price action view, market narrative, sentiment risks.
-Falls back to a stub result when the LLM fails.
+If LLM output is unavailable/invalid, the node raises a runtime error (no stub fallback).
 
 #### `scenario_scoring.py`
 
 LLM node (sequential, after gap_check passes).
 LLM returns raw weights (`raw_score`); Python normalises to `sum = 1` before constructing `Scenario` objects (avoids Pydantic `le=1` violation on unnormalised values).
 Pads to minimum 3 scenarios if LLM returns fewer.
-Falls back to a pre-built bull/base/bear triple when the LLM fails.
+If scenario generation fails, the node raises a runtime error (no stub scenario fallback).
 
 #### `report_verification.py`
 
 Final node — two responsibilities:
 
 1. **Pure-Python validation** (always runs): scenario score sum, evidence field completeness (`retrieved_at`, `summary`, `reliability` required; `url` optional), claim-to-evidence citation coverage.
-2. **LLM Markdown report** via `_llm.complete_text()` (free-form, not JSON mode). Requires all 12 named sections. Falls back to a Python template if the LLM fails. Validation errors are appended as `## Validation Warnings`, and unsupported-claim errors are surfaced as `open_questions` to trigger a supplementary research retry when budget remains.
+2. **LLM Markdown report** via `_llm.complete_text()` (free-form, not JSON mode). Requires all 12 named sections. If generation fails, the node raises a runtime error (no template fallback). Validation errors are appended as `## Validation Warnings`, and unsupported-claim errors are surfaced as `open_questions` to trigger a supplementary research retry when budget remains.
 
 ### `src/server/services/`
 
@@ -207,7 +206,7 @@ External dependency wrappers — agents do not call third-party APIs directly.
 #### `openrouter.py`
 
 OpenRouter LLM client with a three-model free-tier chain:
-`openai/gpt-oss-20b:free → openai/gpt-oss-120b:free → nvidia/nemotron-3-super-120b-a12b:free`
+`openai/gpt-oss-120b:free → openai/gpt-oss-20b:free → nvidia/nemotron-3-super-120b-a12b:free`
 
 Per-model retry with exponential backoff on 429/5xx. Two internal error classes:
 - `_RetryableError`: retry this model
@@ -248,10 +247,9 @@ Stateless helpers.
 
 ### `src/frontend/`
 
-Vanilla HTML/JS frontend without a build step.
+React-in-HTML frontend without a build step (React + ReactDOM + Babel loaded from CDN).
 
-- `index.html`: page layout
-- `static/app.js`: submits query, consumes SSE stream (`agent_status`, `state_update`, `final`, `timeline`, `done` events), renders report
+- `index.html`: page layout + inline `type="text/babel"` app logic; submits query and consumes SSE stream (`agent_status`, `state_update`, `final`, `timeline`, `done`)
 - `static/styles.css`: stylesheet
 
 ### `tests/`
