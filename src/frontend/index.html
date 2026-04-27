@@ -46,8 +46,8 @@ const isActiveLifecycle = (lifecycle) => lifecycle === 'active';
 const isWaitingLifecycle = (lifecycle) => lifecycle === 'waiting';
 const isBlockedLifecycle = (lifecycle) => lifecycle === 'blocked';
 const isFailedLifecycle = (lifecycle) => lifecycle === 'failed';
-const ACTIVE_THRESHOLD_MS = 15000;
-const STALLED_THRESHOLD_MS = 60000;
+const ACTIVE_THRESHOLD_MS = 45000;
+const STALLED_THRESHOLD_MS = 120000;
 
 const parseIsoMs = (value) => {
   if (!value) return 0;
@@ -90,13 +90,39 @@ const firstSentence = (text) => {
   const i = text.indexOf('.');
   return i === -1 ? text : text.slice(0, i + 1);
 };
+const _stripMarkdown = (text) => {
+  if (!text) return '';
+  return text
+    .replace(/`([^`]+)`/g, '$1')
+    .replace(/\[([^\]]+)\]\([^)]+\)/g, '$1')
+    .replace(/[*_~>#-]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+};
+
+const _extractExecutiveSummary = (markdown) => {
+  if (!markdown) return '';
+  const m = markdown.match(/(?:^|\n)#\s*Executive Summary\s*\n([\s\S]*?)(?=\n#{1,2}\s|$)/i);
+  if (!m) return '';
+  return m[1].trim();
+};
+
 const splitSummary = (markdown) => {
-  if (!markdown) return { lead: 'No summary available.', body: '' };
-  const compact = markdown.replace(/#+\s+/g, '').replace(/\n+/g, ' ').trim();
-  const parts = compact.split('.').map(p => p.trim()).filter(Boolean);
-  const lead = parts.slice(0, 2).join('. ');
-  const body = parts.slice(2).join('. ');
-  return { lead: lead ? `${lead}.` : compact, body };
+  const section = _extractExecutiveSummary(markdown) || markdown || '';
+  const plain = _stripMarkdown(section);
+  if (!plain) return { lead: 'No summary available.', points: [] };
+
+  const sentences = plain
+    .split(/(?<=[.!?])\s+/)
+    .map((s) => s.trim())
+    .filter(Boolean);
+
+  if (sentences.length === 0) return { lead: 'No summary available.', points: [] };
+
+  const lead = sentences[0];
+  const points = sentences.slice(1);
+
+  return { lead, points };
 };
 const metricGroupsFromAnalysis = (analysis) => {
   const metrics = analysis?.metrics || {};
@@ -116,6 +142,13 @@ const scenarioAccentColor = (tags) => {
   if (tag.startsWith('bullish')) return 'var(--accent)';
   if (tag.startsWith('bearish')) return 'var(--err)';
   return 'var(--warn)';
+};
+const scenarioTagTone = (tag) => {
+  const t = String(tag || '').toLowerCase();
+  if (t.startsWith('bullish')) return 'bullish';
+  if (t.startsWith('bearish')) return 'bearish';
+  if (t.startsWith('neutral')) return 'neutral';
+  return 'generic';
 };
 const revealSections = (setSections) => {
   const order = ['intent', 'evidence', 'fundamental', 'sentiment', 'scenarios', 'summary'];
@@ -140,15 +173,33 @@ const classifyErrorType = (rawError) => {
   return 'UNKNOWN_ERROR';
 };
 
+const LLM_STATUS_PREFIX = {
+  calling:  '→',
+  success:  '✓',
+  retry:    '⚠ RETRY',
+  failed:   '✗ FAILED',
+};
+
 const formatLLMCallLog = (item) => {
-  const status = String(item.status || 'unknown').toUpperCase();
+  const status = item.status || 'unknown';
+  const prefix = LLM_STATUS_PREFIX[status] || status.toUpperCase();
   const model = shortenModel(item.model);
   const attempt = item.attempt || 1;
-  const attemptText = attempt >= 2 ? ` · attempt ${attempt}` : '';
-  const latency = Number.isFinite(item.latency_ms) ? ` · ${item.latency_ms}ms` : '';
+  const attemptText = attempt >= 2 ? ` attempt ${attempt}` : '';
+  const latency = Number.isFinite(item.latency_ms) ? ` ${item.latency_ms}ms` : '';
   const errorType = classifyErrorType(item.error);
   const error = errorType ? ` · ${errorType}` : '';
-  return `[${status}] ${model}${attemptText}${latency}${error}`;
+  return `${prefix} ${model}${attemptText}${latency}${error}`;
+};
+
+const mergeLLMCallById = (prev, nextItem) => {
+  const nextId = nextItem?.id;
+  if (!nextId) return [...prev, nextItem];
+  const idx = prev.findLastIndex((item) => item?.id === nextId);
+  if (idx === -1) return [...prev, nextItem];
+  const next = [...prev];
+  next[idx] = { ...next[idx], ...nextItem };
+  return next;
 };
 
 function AgentRow({ agent, lifecycle, phase, action, waitingOn, progressHint, lastUpdateAt, nowMs }) {
@@ -183,12 +234,16 @@ function AgentRow({ agent, lifecycle, phase, action, waitingOn, progressHint, la
 
 function LogLine({ time, agentId, msg }) {
   const agent = AGENTS.find(a => a.id === agentId);
+  const msgColor = msg.startsWith('✗') || msg.startsWith('error:') ? 'var(--err)'
+    : msg.startsWith('⚠') ? 'var(--warn)'
+    : msg.startsWith('✓') ? 'var(--accent)'
+    : undefined;
   return (
     <div className="log-line">
       <span className="log-time">{time}</span>
       {agent && <span className="log-agent" style={{color: agent.color}}>[{agent.name.slice(0,6).toUpperCase()}]</span>}
       {!agent && <span className="log-agent" style={{color:'var(--accent)'}}>[SYSTEM]</span>}
-      <span className="log-msg">{msg}</span>
+      <span className="log-msg" style={msgColor ? {color: msgColor} : undefined}>{msg}</span>
     </div>
   );
 }
@@ -315,7 +370,12 @@ function ScenariosSection({ scenarios }) {
             </div>
             <div className="scenario-tags">
               {(s.tags || []).map(t => (
-                <span className={`scenario-tag${MAGNITUDE_RE.test(t) ? ' magnitude' : ''}`} key={t}>{t}</span>
+                <span
+                  className={`scenario-tag ${scenarioTagTone(t)}${MAGNITUDE_RE.test(t) ? ' magnitude' : ''}`}
+                  key={t}
+                >
+                  {t}
+                </span>
               ))}
             </div>
             <div className="scenario-desc">{s.description}</div>
@@ -339,7 +399,13 @@ function SummarySection({ validationBadge, reportMarkdown, intent }) {
       <SectionLabel>Executive Summary</SectionLabel>
       <div className="section-title">{(intent?.subjects?.[0] || 'Investment Research')} — {(intent?.time_horizon || 'multi-year')} Horizon</div>
       <div className="summary-lead">{summary.lead}</div>
-      <div className="section-body">{summary.body}</div>
+      {summary.points.length > 0 && (
+        <ul className="summary-points">
+          {summary.points.map((point, idx) => (
+            <li key={`${idx}-${point.slice(0, 20)}`}>{point}</li>
+          ))}
+        </ul>
+      )}
     </div>
   );
 }
@@ -406,11 +472,12 @@ function App() {
     const processBlock = (block) => {
       const lines = block.split('\n');
       let eventName = 'message';
-      let dataPayload = '';
+      const dataParts = [];
       for (const line of lines) {
         if (line.startsWith('event:')) eventName = line.slice(6).trim();
-        else if (line.startsWith('data:')) dataPayload += line.slice(5).trim();
+        else if (line.startsWith('data:')) dataParts.push(line.slice(5));
       }
+      const dataPayload = dataParts.join('\n').trim();
       if (!dataPayload) return;
 
       let parsed;
@@ -434,9 +501,19 @@ function App() {
       }
 
       if (eventName === 'llm_call') {
-        setLlmCalls((prev) => [...prev, parsed]);
+        setLlmCalls((prev) => mergeLLMCallById(prev, parsed));
         const agentId = parsed?.agent_tag || AGENT_ID_BY_NAME[parsed?.node] || null;
-        setLogLines((prev) => [...prev, { time: NOW(), agentId, msg: formatLLMCallLog(parsed) }]);
+        const callId = parsed?.id;
+        const msg = formatLLMCallLog(parsed);
+        setLogLines((prev) => {
+          const idx = callId ? prev.findLastIndex(l => l.callId === callId) : -1;
+          if (idx !== -1) {
+            const next = [...prev];
+            next[idx] = { ...next[idx], msg };
+            return next;
+          }
+          return [...prev, { time: NOW(), agentId, msg, callId }];
+        });
         return;
       }
 
@@ -444,7 +521,7 @@ function App() {
         gotFinal = true;
         setReportData(parsed);
         if (Array.isArray(parsed?.llm_calls) && parsed.llm_calls.length > 0) {
-          setLlmCalls(parsed.llm_calls);
+          setLlmCalls((prev) => parsed.llm_calls.reduce(mergeLLMCallById, prev));
         }
         setAppState('complete');
         revealSections(setSections);
@@ -495,7 +572,7 @@ function App() {
     if (hydratedRef.current) return;
     hydratedRef.current = true;
     try {
-      const raw = localStorage.getItem(STORAGE_KEY);
+      const raw = sessionStorage.getItem(STORAGE_KEY);
       if (!raw) return;
       const snap = JSON.parse(raw);
       if (typeof snap.query === 'string') setQuery(snap.query);
@@ -504,24 +581,9 @@ function App() {
       if (Array.isArray(snap.llmCalls)) setLlmCalls(snap.llmCalls);
       if (snap.reportData && typeof snap.reportData === 'object') setReportData(snap.reportData);
       if (Array.isArray(snap.sections)) setSections(new Set(snap.sections));
-      if (typeof snap.appState === 'string') setAppState(snap.appState);
-
-      // best-effort connection resume: restart stream with prior query
-      if (snap.appState === 'running' && typeof snap.query === 'string' && snap.query.trim()) {
-        setLogLines((prev) => [
-          ...prev,
-          { time: NOW(), agentId: null, msg: 'page refreshed · reconnecting stream' },
-        ]);
-        setTimeout(() => {
-          streamResearchRef.current?.(snap.query.trim()).catch((err) => {
-            setAppState('error');
-            setLogLines((prev) => [
-              ...prev,
-              { time: NOW(), agentId: null, msg: `reconnect failed: ${err?.message || 'unknown error'}` },
-            ]);
-          });
-        }, 100);
-      }
+      // Transient states don't survive a tab close — treat as idle on restore
+      const restoredState = snap.appState === 'complete' ? 'complete' : 'idle';
+      setAppState(restoredState);
     } catch (_e) {
       // ignore bad persisted snapshot
     }
@@ -539,7 +601,7 @@ function App() {
         reportData,
         sections: Array.from(sections),
       };
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(snapshot));
+      sessionStorage.setItem(STORAGE_KEY, JSON.stringify(snapshot));
     } catch (_e) {
       // ignore storage quota / serialization errors
     }
@@ -566,8 +628,9 @@ function App() {
     return phase === 'WAITING';
   }).length;
   const isValid = reportData?.validation_result?.is_valid;
-  const llmCalling = llmCalls.filter(c => c.status === 'calling').length;
-  const llmFailed = llmCalls.filter(c => c.status === 'failed').length;
+  const llmCalling = llmCalls.filter(c => c?.status === 'calling').length;
+  const llmRetry = llmCalls.filter(c => c?.status === 'retry').length;
+  const llmFailed = llmCalls.filter(c => c?.status === 'failed').length;
 
   const validationBadge = sections.has('summary') ? (
     <div className={`validation-bar ${isValid ? 'valid' : 'review'}`}>
@@ -628,7 +691,7 @@ function App() {
           <div className="log-area">
             <div className="panel-header">
               <span className="panel-label">Model Calls</span>
-              <span className="panel-count">{llmCalls.length} calls · {llmCalling} calling · {llmFailed} failed</span>
+              <span className="panel-count">{llmCalls.length} calls · {llmCalling} calling · {llmRetry} retry · {llmFailed} failed</span>
             </div>
             <div className="log-box" ref={logRef}>
               {logLines.length === 0 && (

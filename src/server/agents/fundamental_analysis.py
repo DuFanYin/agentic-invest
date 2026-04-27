@@ -4,6 +4,9 @@ from __future__ import annotations
 
 import json
 import logging
+from json import JSONDecodeError
+
+from pydantic import ValidationError
 
 from src.server.models.analysis import FundamentalAnalysis
 from src.server.models.state import ResearchState
@@ -71,7 +74,9 @@ FINANCIAL METRICS:
 MISSING DATA: {', '.join(missing_fields) if missing_fields else 'none reported'}
 """
 
-def fundamental_analysis_node(state: ResearchState, *, llm: OpenRouterClient = _default_llm) -> ResearchState:
+async def fundamental_analysis_node(
+    state: ResearchState, *, llm: OpenRouterClient = _default_llm
+) -> ResearchState:
     evidence = state.get("evidence") or []
     normalized_data = state.get("normalized_data")
     intent = state.get("intent")
@@ -90,13 +95,19 @@ def fundamental_analysis_node(state: ResearchState, *, llm: OpenRouterClient = _
     if evidence:
         prompt = _build_prompt(evidence, metrics, missing_fields, intent)
         try:
-            raw = llm.call_with_retry(prompt, system=_SYSTEM, node="fundamental_analysis")
+            raw = await llm.call_with_retry(prompt, system=_SYSTEM, node="fundamental_analysis")
             parsed = json.loads(raw)
             parsed["metrics"] = metrics
             parsed.setdefault("missing_fields", missing_fields)
             result = FundamentalAnalysis.model_validate(parsed)
+        except JSONDecodeError as exc:
+            logger.warning("fundamental_analysis: LLM returned invalid JSON — %s", exc)
+        except ValidationError as exc:
+            logger.warning("fundamental_analysis: schema validation failed — %s", exc)
+        except RuntimeError as exc:
+            logger.warning("fundamental_analysis: LLM exhausted all models — %s", exc)
         except Exception as exc:
-            logger.warning("fundamental_analysis LLM failed: %s", exc)
+            logger.warning("fundamental_analysis: unexpected error — %s", exc)
 
     if result is None:
         msg = f"[{_NODE}] unable to generate grounded fundamental analysis from LLM output"

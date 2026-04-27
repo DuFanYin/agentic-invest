@@ -1,10 +1,10 @@
 """
-OpenRouter LLM client.
+OpenAI-compatible LLM client.
 
 Strategy
 ────────
-- Primary model: openai/gpt-oss-120b:free  (higher quality default)
-- Fallback chain: qwen/qwen3-next-80b-a3b-instruct:free → meta-llama/llama-3.3-70b-instruct:free → google/gemma-3-27b-it:free
+- Provider: openrouter (default) or openai (from env)
+- Default model set depends on provider; can be overridden only in code
 - Per-model: up to 2 retries with 2 s exponential backoff on 429 / 5xx
 - complete()       — enforces response_format json_object; validates JSON before returning
 - complete_text()  — free-form text (Markdown reports); skips JSON mode and validation
@@ -21,18 +21,20 @@ from __future__ import annotations
 import json
 import logging
 import re
-import time
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING
+
+from src.server import shutdown
 
 import httpx
 
 from src.server.models.response import LLMCall
 from src.server.config import (
-    OPENROUTER_API_KEY,
-    OPENROUTER_APP_TITLE,
-    OPENROUTER_BASE_URL,
-    OPENROUTER_HTTP_REFERER,
+    LLM_API_KEY,
+    LLM_APP_TITLE,
+    LLM_BASE_URL,
+    LLM_HTTP_REFERER,
+    LLM_PROVIDER,
 )
 
 if TYPE_CHECKING:
@@ -45,6 +47,9 @@ _FREE_MODELS = [
     "qwen/qwen3-next-80b-a3b-instruct:free",
     "meta-llama/llama-3.3-70b-instruct:free",
     "google/gemma-3-27b-it:free",
+]
+_OPENAI_MODELS = [
+    "gpt-4.1",
 ]
 
 _RETRYABLE_CODES = {429, 500, 502, 503, 504}
@@ -71,15 +76,17 @@ class OpenRouterClient:
         *,
         api_key: str | None = None,
         model: str | None = None,
-        base_url: str = OPENROUTER_BASE_URL,
+        base_url: str = LLM_BASE_URL,
         timeout_seconds: float = 30.0,
         max_retries: int = 2,
         retry_backoff: float = 2.0,
         collector: LLMCallCollector | None = None,
     ) -> None:
-        self.api_key = api_key or OPENROUTER_API_KEY
-        self._models = [model] if model else _FREE_MODELS
-        self.base_url = base_url.rstrip("/")
+        self.provider = LLM_PROVIDER if LLM_PROVIDER in {"openrouter", "openai"} else "openrouter"
+        self.api_key = api_key or LLM_API_KEY
+        self._models = [model] if model else self._default_models()
+        resolved_base_url = (LLM_BASE_URL or base_url).rstrip("/")
+        self.base_url = resolved_base_url
         self.timeout_seconds = timeout_seconds
         self.max_retries = max_retries
         self.retry_backoff = retry_backoff
@@ -87,19 +94,19 @@ class OpenRouterClient:
 
     # ── public API ─────────────────────────────────────────────────────────
 
-    def complete(self, prompt: str, *, system: str | None = None, node: str = "unknown") -> str:
+    async def complete(self, prompt: str, *, system: str | None = None, node: str = "unknown") -> str:
         """Send prompt, return validated JSON string. Raises RuntimeError on exhaustion."""
-        return self._run(prompt, system=system, json_mode=True, node=node)
+        return await self._run(prompt, system=system, json_mode=True, node=node)
 
-    def complete_json(self, prompt: str, *, system: str | None = None, node: str = "unknown") -> dict:
+    async def complete_json(self, prompt: str, *, system: str | None = None, node: str = "unknown") -> dict:
         """Convenience wrapper — parse and return the JSON dict directly."""
-        return json.loads(self.complete(prompt, system=system, node=node))
+        return json.loads(await self.complete(prompt, system=system, node=node))
 
-    def complete_text(self, prompt: str, *, system: str | None = None, node: str = "unknown") -> str:
+    async def complete_text(self, prompt: str, *, system: str | None = None, node: str = "unknown") -> str:
         """Send prompt, return raw text (no JSON enforcement). For Markdown reports."""
-        return self._run(prompt, system=system, json_mode=False, node=node)
+        return await self._run(prompt, system=system, json_mode=False, node=node)
 
-    def call_with_retry(
+    async def call_with_retry(
         self,
         prompt: str,
         *,
@@ -114,7 +121,7 @@ class OpenRouterClient:
         last_exc: Exception | None = None
         for attempt in range(1, attempts + 1):
             try:
-                return self.complete(prompt, system=system, node=node)
+                return await self.complete(prompt, system=system, node=node)
             except Exception as exc:
                 last_exc = exc
                 logger.warning("call_with_retry attempt %d/%d failed: %s", attempt, attempts, exc)
@@ -127,11 +134,17 @@ class OpenRouterClient:
             "Authorization": f"Bearer {self.api_key}",
             "Content-Type": "application/json",
         }
-        if OPENROUTER_HTTP_REFERER:
-            h["HTTP-Referer"] = OPENROUTER_HTTP_REFERER
-        if OPENROUTER_APP_TITLE:
-            h["X-Title"] = OPENROUTER_APP_TITLE
+        if self.provider == "openrouter":
+            if LLM_HTTP_REFERER:
+                h["HTTP-Referer"] = LLM_HTTP_REFERER
+            if LLM_APP_TITLE:
+                h["X-Title"] = LLM_APP_TITLE
         return h
+
+    def _default_models(self) -> list[str]:
+        if self.provider == "openai":
+            return list(_OPENAI_MODELS)
+        return list(_FREE_MODELS)
 
     def _emit(self, call: LLMCall) -> None:
         if self._collector is not None:
@@ -142,17 +155,20 @@ class OpenRouterClient:
             return self._collector.next_id()
         return "llm_notrace"
 
-    def _run(self, prompt: str, *, system: str | None, json_mode: bool, node: str) -> str:
+    async def _run(self, prompt: str, *, system: str | None, json_mode: bool, node: str) -> str:
         if not self.api_key:
             raise RuntimeError(
-                "OPENROUTER_API_KEY is not set. "
-                "Add it to your .env file or export it as an environment variable."
+                "LLM API key is not set. "
+                "Set LLM_API_KEY in your environment."
             )
 
         last_error: Exception | None = None
 
         for model_id in self._models:
             for attempt in range(1, self.max_retries + 2):
+                if shutdown.is_set():
+                    raise RuntimeError("server shutting down")
+
                 call_id = self._next_id()
                 started_at = datetime.now(UTC).isoformat()
 
@@ -164,7 +180,7 @@ class OpenRouterClient:
                 ))
 
                 try:
-                    content = self._call(model_id, prompt, system=system, json_mode=json_mode)
+                    content = await self._call(model_id, prompt, system=system, json_mode=json_mode)
                     finished_at = datetime.now(UTC).isoformat()
                     self._emit(LLMCall(
                         id=call_id, node=node,
@@ -194,7 +210,9 @@ class OpenRouterClient:
                             "model %s attempt %d/%d failed (%s) — retrying in %.1fs",
                             model_id, attempt, self.max_retries + 1, exc, wait,
                         )
-                        time.sleep(wait)
+                        # Interruptible backoff that can wake up early on shutdown.
+                        if await shutdown.wait_or_timeout(wait):
+                            raise RuntimeError("server shutting down")
                     else:
                         logger.warning("model %s exhausted retries, trying next", model_id)
 
@@ -215,7 +233,7 @@ class OpenRouterClient:
 
         raise RuntimeError(f"All models exhausted. Last error: {last_error}") from last_error
 
-    def _call(self, model_id: str, prompt: str, *, system: str | None, json_mode: bool) -> str:
+    async def _call(self, model_id: str, prompt: str, *, system: str | None, json_mode: bool) -> str:
         default_system = (
             "Return only valid JSON. Do not include markdown, comments, or extra text."
             if json_mode else None
@@ -225,13 +243,13 @@ class OpenRouterClient:
             messages.append({"role": "system", "content": system or default_system})
         messages.append({"role": "user", "content": prompt})
 
-        payload: dict = {"model": model_id, "messages": messages, "temperature": 0}
+        payload: dict = {"model": model_id, "messages": messages, "temperature": 0, "max_tokens": 2048}
         if json_mode:
             payload["response_format"] = {"type": "json_object"}
 
         try:
-            with httpx.Client(timeout=self.timeout_seconds) as client:
-                response = client.post(
+            async with httpx.AsyncClient(timeout=self.timeout_seconds) as client:
+                response = await client.post(
                     f"{self.base_url}/chat/completions",
                     headers=self._headers(),
                     json=payload,

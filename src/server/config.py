@@ -10,7 +10,7 @@ from pathlib import Path
 
 
 def _load_env() -> None:
-    if os.getenv("OPENROUTER_API_KEY"):
+    if os.getenv("LLM_API_KEY"):
         return
     try:
         from dotenv import load_dotenv  # type: ignore[import]
@@ -30,9 +30,16 @@ def _load_env() -> None:
 
 _load_env()
 
-OPENROUTER_API_KEY: str | None = os.getenv("OPENROUTER_API_KEY")
-OPENROUTER_BASE_URL: str = os.getenv("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1")
-OPENROUTER_HTTP_REFERER: str | None = os.getenv("OPENROUTER_HTTP_REFERER") or None
-OPENROUTER_APP_TITLE: str | None = os.getenv("OPENROUTER_APP_TITLE") or None
+# Required
+LLM_PROVIDER: str = (os.getenv("LLM_PROVIDER") or "openrouter").strip().lower()
+LLM_API_KEY: str | None = os.getenv("LLM_API_KEY") or None
+
+# Optional with sensible defaults
+LLM_BASE_URL: str = (
+    os.getenv("LLM_BASE_URL")
+    or ("https://api.openai.com/v1" if LLM_PROVIDER == "openai" else "https://openrouter.ai/api/v1")
+)
+LLM_HTTP_REFERER: str | None = os.getenv("LLM_HTTP_REFERER") or None
+LLM_APP_TITLE: str | None = os.getenv("LLM_APP_TITLE") or None
 
 TAVILY_API_KEY: str | None = os.getenv("TAVILY_API_KEY") or None

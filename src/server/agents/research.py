@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import logging
 from datetime import UTC, datetime
@@ -66,7 +67,7 @@ def _detect_conflicts(evidence: list[Evidence], metrics: dict) -> list[dict]:
     return conflicts
 
 
-def research_node(state: ResearchState) -> ResearchState:
+async def research_node(state: ResearchState) -> ResearchState:
     query = state["query"]
     intent = state.get("intent")
     open_questions: list[str] = state.get("open_questions") or []
@@ -91,7 +92,7 @@ def research_node(state: ResearchState) -> ResearchState:
             _ck = _cache_key("info", ticker)
             info = _cache.get(_ck) or {}
             if not info:
-                info = _finance.get_info(ticker)
+                info = await asyncio.to_thread(_finance.get_info, ticker)
                 if info:
                     _cache.set(_ck, info, ttl_seconds=_FINANCE_TTL)
             if info:
@@ -120,7 +121,7 @@ def research_node(state: ResearchState) -> ResearchState:
             _ck = _cache_key("financials", ticker)
             financials = _cache.get(_ck) or {}
             if not financials:
-                financials = _finance.get_financials(ticker)
+                financials = await asyncio.to_thread(_finance.get_financials, ticker)
                 if financials:
                     _cache.set(_ck, financials, ttl_seconds=_FINANCE_TTL)
             if financials:
@@ -167,7 +168,7 @@ def research_node(state: ResearchState) -> ResearchState:
             _ck = _cache_key("price", ticker)
             price = _cache.get(_ck) or {}
             if not price:
-                price = _finance.get_price_history(ticker)
+                price = await asyncio.to_thread(_finance.get_price_history, ticker)
                 if price:
                     _cache.set(_ck, price, ttl_seconds=_FINANCE_TTL)
             if price:
@@ -207,7 +208,7 @@ def research_node(state: ResearchState) -> ResearchState:
             _ck = _cache_key("news", ticker)
             news_items = _cache.get(_ck)
             if news_items is None:
-                news_items = _finance.get_news(ticker)
+                news_items = await asyncio.to_thread(_finance.get_news, ticker)
                 _cache.set(_ck, news_items, ttl_seconds=_WEB_TTL)
             for item in news_items[:5]:
                 new_evidence.append(Evidence(
@@ -234,7 +235,7 @@ def research_node(state: ResearchState) -> ResearchState:
         _ck = _cache_key("web", web_query)
         web_results = _cache.get(_ck)
         if web_results is None:
-            web_results = _web.search(web_query, max_results=5)
+            web_results = await asyncio.to_thread(_web.search, web_query, 5)
             _cache.set(_ck, web_results, ttl_seconds=_WEB_TTL)
         seen_urls = {ev.url for ev in new_evidence if ev.url}
         for item in web_results:

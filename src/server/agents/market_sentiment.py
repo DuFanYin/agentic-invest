@@ -4,6 +4,9 @@ from __future__ import annotations
 
 import json
 import logging
+from json import JSONDecodeError
+
+from pydantic import ValidationError
 
 from src.server.models.analysis import MarketSentiment
 from src.server.models.state import ResearchState
@@ -63,7 +66,9 @@ PRICE / MARKET DATA:
 {price_str}
 """
 
-def market_sentiment_node(state: ResearchState, *, llm: OpenRouterClient = _default_llm) -> ResearchState:
+async def market_sentiment_node(
+    state: ResearchState, *, llm: OpenRouterClient = _default_llm
+) -> ResearchState:
     evidence = state.get("evidence") or []
     normalized_data = state.get("normalized_data")
     statuses = list(state.get("agent_statuses") or [])
@@ -82,11 +87,17 @@ def market_sentiment_node(state: ResearchState, *, llm: OpenRouterClient = _defa
     if evidence:
         prompt = _build_prompt(news_evidence, price_history, all_evidence_ids)
         try:
-            raw = llm.call_with_retry(prompt, system=_SYSTEM, node="market_sentiment")
+            raw = await llm.call_with_retry(prompt, system=_SYSTEM, node="market_sentiment")
             parsed = json.loads(raw)
             result = MarketSentiment.model_validate(parsed)
+        except JSONDecodeError as exc:
+            logger.warning("market_sentiment: LLM returned invalid JSON — %s", exc)
+        except ValidationError as exc:
+            logger.warning("market_sentiment: schema validation failed — %s", exc)
+        except RuntimeError as exc:
+            logger.warning("market_sentiment: LLM exhausted all models — %s", exc)
         except Exception as exc:
-            logger.warning("market_sentiment LLM failed: %s", exc)
+            logger.warning("market_sentiment: unexpected error — %s", exc)
 
     if result is None:
         msg = f"[{_NODE}] unable to generate grounded sentiment analysis from LLM output"

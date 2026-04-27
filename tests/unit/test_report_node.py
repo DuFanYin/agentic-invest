@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
+import asyncio
 import pytest
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock
 
 from src.server.agents.report_verification import report_verification_node
 from src.server.models.analysis import FundamentalAnalysis, MarketSentiment
@@ -94,30 +95,34 @@ def _mock_llm(report: str | None = None, raises: Exception | None = None):
     text = report or "\n".join(_REQUIRED_SECTIONS) + "\n\nNot financial advice."
     llm = MagicMock()
     if raises:
-        llm.complete_text.side_effect = raises
+        llm.complete_text = AsyncMock(side_effect=raises)
     else:
-        llm.complete_text.return_value = text
+        llm.complete_text = AsyncMock(return_value=text)
     return llm
+
+
+def _run(coro):
+    return asyncio.run(coro)
 
 
 # ── section headers ────────────────────────────────────────────────────────
 
 def test_llm_report_contains_required_sections():
-    result = report_verification_node(_state(), llm=_mock_llm())
+    result = _run(report_verification_node(_state(), llm=_mock_llm()))
     md = result["report_markdown"]
     for section in _REQUIRED_SECTIONS:
         assert section in md, f"Missing section: {section}"
 
 
 def test_disclaimer_says_not_financial_advice():
-    result = report_verification_node(_state(), llm=_mock_llm())
+    result = _run(report_verification_node(_state(), llm=_mock_llm()))
     assert "Not financial advice" in result["report_markdown"]
 
 
 # ── validation ─────────────────────────────────────────────────────────────
 
 def test_valid_state_produces_no_errors():
-    result = report_verification_node(_state(), llm=_mock_llm())
+    result = _run(report_verification_node(_state(), llm=_mock_llm()))
     assert result["validation_result"].errors == []
     assert result["validation_result"].is_valid is True
 
@@ -131,14 +136,14 @@ def test_validation_errors_appended_to_report():
         Scenario(name="Downside", description=".", tags=["bearish-1"], probability=0.5,
                  drivers=["d"], triggers=["t"], signals=["s"], evidence_ids=["ev_001"]),
     ]
-    result = report_verification_node(_state(scenarios=bad_scenarios), llm=_mock_llm())
+    result = _run(report_verification_node(_state(scenarios=bad_scenarios), llm=_mock_llm()))
     assert "Validation Warnings" in result["report_markdown"]
     assert result["validation_result"].is_valid is False
 
 
 def test_missing_fields_produce_warnings():
     fa = _fa().model_copy(update={"missing_fields": ["eps", "free_cash_flow"]})
-    result = report_verification_node(_state(fa=fa), llm=_mock_llm())
+    result = _run(report_verification_node(_state(fa=fa), llm=_mock_llm()))
     assert len(result["validation_result"].warnings) >= 1
 
 
@@ -146,18 +151,18 @@ def test_missing_fields_produce_warnings():
 
 def test_raises_when_llm_raises():
     with pytest.raises(RuntimeError, match="report_verification"):
-        report_verification_node(_state(), llm=_mock_llm(raises=RuntimeError("all models failed")))
+        _run(report_verification_node(_state(), llm=_mock_llm(raises=RuntimeError("all models failed"))))
 
 
 def test_raises_when_no_evidence():
     with pytest.raises(RuntimeError, match="report_verification"):
-        report_verification_node(_state(evidence=[]), llm=_mock_llm())
+        _run(report_verification_node(_state(evidence=[]), llm=_mock_llm()))
 
 
 # ── statuses unchanged when empty ─────────────────────────────────────────
 
 def test_empty_statuses_returned_unchanged():
-    result = report_verification_node(_state(), llm=_mock_llm())
+    result = _run(report_verification_node(_state(), llm=_mock_llm()))
     assert result["agent_statuses"] == []
 
 
@@ -171,7 +176,7 @@ def test_empty_statuses_returned_unchanged():
     ],
 )
 def test_open_questions_reroute_signal(fa, has_open_questions):
-    result = report_verification_node(_state(fa=fa), llm=_mock_llm())
+    result = _run(report_verification_node(_state(fa=fa), llm=_mock_llm()))
     if has_open_questions:
         assert len(result["open_questions"]) >= 1
         assert all("report_verification" in q for q in result["open_questions"])

@@ -18,7 +18,8 @@ START → parse_intent → research → [parallel] ─────────�
 """
 
 import json
-from collections.abc import Generator
+import asyncio
+from collections.abc import AsyncGenerator
 
 from langgraph.graph import END, START, StateGraph
 
@@ -41,9 +42,9 @@ _MAX_RESEARCH_PASSES = 2
 # ── intent parsing node ────────────────────────────────────────────────────
 
 def _make_parse_intent_node(llm_client: OpenRouterClient):
-    def parse_intent_node(state: ResearchState) -> ResearchState:
+    async def parse_intent_node(state: ResearchState) -> ResearchState:
         statuses = initial_agent_statuses(running="parse_intent")
-        intent = _parse_intent(state["query"], llm_client)
+        intent = await _parse_intent(state["query"], llm_client)
         statuses = update_status(
             statuses, "parse_intent",
             lifecycle="active", phase="dispatching", action="intent parsed",
@@ -151,13 +152,25 @@ def build_graph(llm_client: OpenRouterClient | None = None) -> StateGraph:
 
     builder = StateGraph(ResearchState)
 
+    async def _fundamental_node(state: ResearchState) -> ResearchState:
+        return await fundamental_analysis_node(state, llm=llm_client)
+
+    async def _sentiment_node(state: ResearchState) -> ResearchState:
+        return await market_sentiment_node(state, llm=llm_client)
+
+    async def _scenario_node(state: ResearchState) -> ResearchState:
+        return await scenario_scoring_node(state, llm=llm_client)
+
+    async def _report_node(state: ResearchState) -> ResearchState:
+        return await report_verification_node(state, llm=llm_client)
+
     builder.add_node("parse_intent", _make_parse_intent_node(llm_client))
     builder.add_node("research", research_node)
-    builder.add_node("fundamental_analysis", lambda s: fundamental_analysis_node(s, llm=llm_client))
-    builder.add_node("market_sentiment", lambda s: market_sentiment_node(s, llm=llm_client))
+    builder.add_node("fundamental_analysis", _fundamental_node)
+    builder.add_node("market_sentiment", _sentiment_node)
     builder.add_node("gap_check", _gap_check_node)
-    builder.add_node("scenario_scoring", lambda s: scenario_scoring_node(s, llm=llm_client))
-    builder.add_node("report_verification", lambda s: report_verification_node(s, llm=llm_client))
+    builder.add_node("scenario_scoring", _scenario_node)
+    builder.add_node("report_verification", _report_node)
 
     builder.add_edge(START, "parse_intent")
     builder.add_edge("parse_intent", "research")
@@ -199,49 +212,75 @@ class OrchestratorAgent:
             return self._test_client  # test stub owns its own mock behaviour; collector unused
         return OpenRouterClient(collector=collector)
 
-    def run(self, request: ResearchRequest) -> ResearchResponse:
+    async def run(self, request: ResearchRequest) -> ResearchResponse:
         collector = LLMCallCollector()
         client = self._client_for_request(collector)
         graph = build_graph(client)
-        final_state = graph.invoke({"query": request.query})
+        final_state = await graph.ainvoke({"query": request.query})
         return _state_to_response(final_state, llm_calls=collector.all())
 
-    def run_stream(self, request: ResearchRequest) -> Generator[dict, None, None]:
+    async def run_stream(self, request: ResearchRequest) -> AsyncGenerator[dict, None]:
         collector = LLMCallCollector()
         client = self._client_for_request(collector)
         graph = build_graph(client)
         final_state: ResearchState = {}
-
-        for step in graph.stream(
+        stream_iter = graph.astream(
             {"query": request.query},
             stream_mode=["updates", "values"],
-        ):
-            mode, payload = step
+        ).__aiter__()
+        step_task: asyncio.Task | None = asyncio.create_task(anext(stream_iter))
+        call_task: asyncio.Task | None = asyncio.create_task(collector.wait_next())
+        graph_done = False
 
-            if mode == "updates":
-                for node_name, delta in payload.items():
-                    for item in collector.drain():
-                        yield {"type": "llm_call", "payload": item.model_dump()}
-                    agent_statuses = delta.get("agent_statuses")
-                    if agent_statuses:
-                        yield {
-                            "type": "agent_status",
-                            "payload": [s.model_dump() for s in agent_statuses],
-                        }
+        while True:
+            wait_tasks = [t for t in (step_task, call_task) if t is not None]
+            if not wait_tasks:
+                break
 
-            elif mode == "values":
-                final_state = payload
+            done, _ = await asyncio.wait(wait_tasks, return_when=asyncio.FIRST_COMPLETED)
+
+            if call_task is not None and call_task in done:
+                item = call_task.result()
+                yield {"type": "llm_call", "payload": item.model_dump()}
+                call_task = asyncio.create_task(collector.wait_next())
+
+            if step_task is not None and step_task in done:
+                try:
+                    mode, payload = step_task.result()
+                except StopAsyncIteration:
+                    graph_done = True
+                    step_task = None
+                else:
+                    if mode == "updates":
+                        for _, delta in payload.items():
+                            agent_statuses = delta.get("agent_statuses")
+                            if agent_statuses:
+                                yield {
+                                    "type": "agent_status",
+                                    "payload": [s.model_dump() for s in agent_statuses],
+                                }
+                    elif mode == "values":
+                        final_state = payload
+                    step_task = asyncio.create_task(anext(stream_iter))
+
+            if graph_done and collector.pending_count() == 0:
+                if call_task is not None:
+                    call_task.cancel()
+                    try:
+                        await call_task
+                    except asyncio.CancelledError:
+                        pass
+                    call_task = None
+                break
 
         all_llm_calls = collector.all()
-        for item in collector.drain():
-            yield {"type": "llm_call", "payload": item.model_dump()}
         response = _state_to_response(final_state, llm_calls=all_llm_calls)
         yield {"type": "final", "payload": response}
 
 
 # ── helpers ────────────────────────────────────────────────────────────────
 
-def _parse_intent(query: str, llm_client: OpenRouterClient) -> ResearchIntent:
+async def _parse_intent(query: str, llm_client: OpenRouterClient) -> ResearchIntent:
     prompt = (
         "You are an investment research intent parser. "
         "Extract structured intent from the user query and return JSON only.\n"
@@ -258,7 +297,7 @@ def _parse_intent(query: str, llm_client: OpenRouterClient) -> ResearchIntent:
         f"Query: {query}"
     )
     try:
-        raw = llm_client.complete(prompt, node="parse_intent")
+        raw = await llm_client.complete(prompt, node="parse_intent")
         parsed = json.loads(raw)
         return ResearchIntent(
             intent=parsed.get("intent", "investment_research"),

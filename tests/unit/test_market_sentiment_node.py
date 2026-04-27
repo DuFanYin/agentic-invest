@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
+import asyncio
 import pytest
 import json
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock
 
 from src.server.agents.market_sentiment import market_sentiment_node
 from src.server.models.analysis import MarketSentiment, MetricsBlock, NormalizedData
@@ -70,10 +71,14 @@ def _state(evidence=None, price_history=None):
 def _mock_llm(response: dict | None = None, raises: Exception | None = None):
     llm = MagicMock()
     if raises:
-        llm.call_with_retry.side_effect = raises
+        llm.call_with_retry = AsyncMock(side_effect=raises)
     else:
-        llm.call_with_retry.return_value = json.dumps(response or _llm_response())
+        llm.call_with_retry = AsyncMock(return_value=json.dumps(response or _llm_response()))
     return llm
+
+
+def _run(coro):
+    return asyncio.run(coro)
 
 
 def _ms(result) -> MarketSentiment:
@@ -83,18 +88,18 @@ def _ms(result) -> MarketSentiment:
 # ── output shape ───────────────────────────────────────────────────────────
 
 def test_result_is_typed_model():
-    result = market_sentiment_node(_state(), llm=_mock_llm())
+    result = _run(market_sentiment_node(_state(), llm=_mock_llm()))
     assert isinstance(_ms(result), MarketSentiment)
 
 
 def test_all_claims_have_evidence_ids():
-    result = market_sentiment_node(_state(), llm=_mock_llm())
+    result = _run(market_sentiment_node(_state(), llm=_mock_llm()))
     for claim in _ms(result).claims:
         assert len(claim.evidence_ids) >= 1
 
 
 def test_core_sentiment_fields_present_and_valid():
-    result = market_sentiment_node(_state(), llm=_mock_llm())
+    result = _run(market_sentiment_node(_state(), llm=_mock_llm()))
     ms = _ms(result)
     assert ms.news_sentiment.direction in ("positive", "neutral", "negative")
     assert ms.market_narrative.summary
@@ -104,45 +109,45 @@ def test_core_sentiment_fields_present_and_valid():
 
 def test_raises_when_llm_raises():
     with pytest.raises(RuntimeError, match="market_sentiment"):
-        market_sentiment_node(_state(), llm=_mock_llm(raises=RuntimeError("exhausted")))
+        _run(market_sentiment_node(_state(), llm=_mock_llm(raises=RuntimeError("exhausted"))))
 
 
 def test_raises_when_no_evidence():
     with pytest.raises(RuntimeError, match="market_sentiment"):
-        market_sentiment_node(_state(evidence=[]), llm=_mock_llm())
+        _run(market_sentiment_node(_state(evidence=[]), llm=_mock_llm()))
 
 
 # ── news evidence filtering ────────────────────────────────────────────────
 
 def test_evidence_ids_included_in_prompt():
     captured = {}
-    def capture(prompt, **kw):
+    async def capture(prompt, **kw):
         captured["prompt"] = prompt
         return json.dumps(_llm_response())
 
     llm = MagicMock()
-    llm.call_with_retry.side_effect = capture
-    market_sentiment_node(_state(), llm=llm)
+    llm.call_with_retry = AsyncMock(side_effect=capture)
+    _run(market_sentiment_node(_state(), llm=llm))
 
     assert "ev_001" in captured["prompt"]
 
 
 def test_empty_statuses_returned_unchanged():
-    result = market_sentiment_node(_state(), llm=_mock_llm())
+    result = _run(market_sentiment_node(_state(), llm=_mock_llm()))
     assert result["agent_statuses"] == []
 
 
 # ── agent_questions surfacing ──────────────────────────────────────────────
 
 def test_agent_questions_empty_when_no_missing_fields():
-    result = market_sentiment_node(_state(), llm=_mock_llm())
+    result = _run(market_sentiment_node(_state(), llm=_mock_llm()))
     assert result["agent_questions"] == []
 
 
 def test_agent_questions_populated_when_llm_reports_missing_fields():
     response = _llm_response()
     response["missing_fields"] = ["analyst_ratings", "short_interest"]
-    result = market_sentiment_node(_state(), llm=_mock_llm(response))
+    result = _run(market_sentiment_node(_state(), llm=_mock_llm(response)))
     qs = result["agent_questions"]
     assert len(qs) == 2
     assert all("market_sentiment needs" in q for q in qs)

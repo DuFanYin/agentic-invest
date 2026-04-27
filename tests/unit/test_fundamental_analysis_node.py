@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
+import asyncio
 import pytest
 import json
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock
 
 from src.server.agents.fundamental_analysis import fundamental_analysis_node
 from src.server.models.analysis import FundamentalAnalysis, MetricsBlock, NormalizedData
@@ -72,10 +73,14 @@ def _state(evidence=None, metrics=None, missing_fields=None, intent=None):
 def _mock_llm(response: dict | None = None, raises: Exception | None = None):
     llm = MagicMock()
     if raises:
-        llm.call_with_retry.side_effect = raises
+        llm.call_with_retry = AsyncMock(side_effect=raises)
     else:
-        llm.call_with_retry.return_value = json.dumps(response or _llm_response())
+        llm.call_with_retry = AsyncMock(return_value=json.dumps(response or _llm_response()))
     return llm
+
+
+def _run(coro):
+    return asyncio.run(coro)
 
 
 def _fa(result) -> FundamentalAnalysis:
@@ -85,12 +90,12 @@ def _fa(result) -> FundamentalAnalysis:
 # ── output shape ───────────────────────────────────────────────────────────
 
 def test_result_is_typed_model():
-    result = fundamental_analysis_node(_state(), llm=_mock_llm())
+    result = _run(fundamental_analysis_node(_state(), llm=_mock_llm()))
     assert isinstance(_fa(result), FundamentalAnalysis)
 
 
 def test_claims_have_required_fields():
-    result = fundamental_analysis_node(_state(), llm=_mock_llm())
+    result = _run(fundamental_analysis_node(_state(), llm=_mock_llm()))
     claims = _fa(result).claims
     assert len(claims) >= 1
     valid = {"high", "medium", "low"}
@@ -101,12 +106,12 @@ def test_claims_have_required_fields():
 
 
 def test_business_quality_present():
-    result = fundamental_analysis_node(_state(), llm=_mock_llm())
+    result = _run(fundamental_analysis_node(_state(), llm=_mock_llm()))
     assert _fa(result).business_quality.view in {"strong", "stable", "weak", "deteriorating"}
 
 
 def test_metrics_attached_from_state():
-    result = fundamental_analysis_node(_state(), llm=_mock_llm())
+    result = _run(fundamental_analysis_node(_state(), llm=_mock_llm()))
     fa = _fa(result)
     raw = _metrics()
     assert fa.metrics.get("ttm") == raw["ttm"]
@@ -118,32 +123,32 @@ def test_metrics_attached_from_state():
 
 def test_raises_when_llm_raises():
     with pytest.raises(RuntimeError, match="fundamental_analysis"):
-        fundamental_analysis_node(_state(), llm=_mock_llm(raises=RuntimeError("all models exhausted")))
+        _run(fundamental_analysis_node(_state(), llm=_mock_llm(raises=RuntimeError("all models exhausted"))))
 
 
 def test_raises_when_no_evidence():
     with pytest.raises(RuntimeError, match="fundamental_analysis"):
-        fundamental_analysis_node(_state(evidence=[]), llm=_mock_llm())
+        _run(fundamental_analysis_node(_state(evidence=[]), llm=_mock_llm()))
 
 
 # ── agent_statuses untouched when empty ───────────────────────────────────
 
 def test_empty_statuses_returned_unchanged():
-    result = fundamental_analysis_node(_state(), llm=_mock_llm())
+    result = _run(fundamental_analysis_node(_state(), llm=_mock_llm()))
     assert result["agent_statuses"] == []
 
 
 # ── agent_questions surfacing ──────────────────────────────────────────────
 
 def test_agent_questions_empty_when_no_missing_fields():
-    result = fundamental_analysis_node(_state(), llm=_mock_llm())
+    result = _run(fundamental_analysis_node(_state(), llm=_mock_llm()))
     assert result["agent_questions"] == []
 
 
 def test_agent_questions_populated_when_llm_reports_missing_fields():
     response = _llm_response()
     response["missing_fields"] = ["free_cash_flow", "capex"]
-    result = fundamental_analysis_node(_state(), llm=_mock_llm(response))
+    result = _run(fundamental_analysis_node(_state(), llm=_mock_llm(response)))
     qs = result["agent_questions"]
     assert len(qs) == 2
     assert all("fundamental_analysis needs" in q for q in qs)

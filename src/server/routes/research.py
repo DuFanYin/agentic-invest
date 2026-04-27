@@ -5,15 +5,18 @@ from datetime import UTC, datetime
 from fastapi import APIRouter
 from fastapi.responses import StreamingResponse
 
+from src.server import shutdown
 from src.server.agents.orchestrator import OrchestratorAgent
 from src.server.models.request import ResearchRequest
 from src.server.models.response import ResearchResponse
-from src.server.utils.status import AGENT_NAMES
+from src.server.utils.status import AGENT_NAMES, initial_agent_statuses
 
 router = APIRouter()
 
+
 def _new_orchestrator() -> OrchestratorAgent:
     return OrchestratorAgent()
+
 
 _FAILED_PHASE_BY_AGENT = {
     "parse_intent": "planning",
@@ -38,110 +41,96 @@ def _node_from_error(message: str) -> str | None:
     return None
 
 
+def _sse(event: str, payload) -> str:
+    data = json.dumps(payload, ensure_ascii=False)
+    return f"event: {event}\ndata: {data}\n\n"
+
+
+def _mark_failed(statuses: list[dict], node: str | None, message: str) -> list[dict]:
+    now = datetime.now(UTC).isoformat()
+    result = []
+    for item in statuses:
+        item = dict(item)
+        item["last_update_at"] = now
+        if node and item.get("agent") == node:
+            item["lifecycle"] = "failed"
+            item["phase"] = _FAILED_PHASE_BY_AGENT.get(node, "idle")
+            item["action"] = "node failed"
+            item["last_error"] = message
+        elif not node and item.get("agent") == "parse_intent":
+            item["lifecycle"] = "failed"
+            item["phase"] = "workflow_complete"
+            item["action"] = "workflow failed"
+            item["last_error"] = message
+        result.append(item)
+    return result
+
+
 def _fallback_statuses(message: str) -> list[dict]:
     now = datetime.now(UTC).isoformat()
-    statuses = []
-    for agent in AGENT_NAMES:
-        statuses.append(
-            {
-                "agent": agent,
-                "lifecycle": "standby",
-                "phase": "idle",
-                "action": "waiting",
-                "details": [],
-                "entered_at": now,
-                "last_update_at": now,
-                "waiting_on": None,
-                "progress_hint": None,
-                "retry_count": 0,
-                "max_retries": 0,
-                "last_error": None,
-            }
-        )
-    node = _node_from_error(message)
-    for status in statuses:
-        if node and status["agent"] == node:
-            status["lifecycle"] = "failed"
-            status["phase"] = _FAILED_PHASE_BY_AGENT.get(node, "idle")
-            status["action"] = "node failed"
-            status["last_error"] = message
-        elif not node and status["agent"] == "parse_intent":
-            # Only blame parse_intent when we can't identify the failing node
-            status["lifecycle"] = "failed"
-            status["phase"] = "workflow_complete"
-            status["action"] = "workflow failed"
-            status["last_error"] = message
-    return statuses
+    return [
+        {
+            "agent": agent,
+            "lifecycle": "standby",
+            "phase": "idle",
+            "action": "waiting",
+            "details": [],
+            "entered_at": now,
+            "last_update_at": now,
+            "waiting_on": None,
+            "progress_hint": None,
+            "retry_count": 0,
+            "max_retries": 0,
+            "last_error": None,
+        }
+        for agent in AGENT_NAMES
+    ]
 
 
 @router.post("/research", response_model=ResearchResponse)
-def run_research(request: ResearchRequest) -> ResearchResponse:
-    return _new_orchestrator().run(request)
+async def run_research(request: ResearchRequest) -> ResearchResponse:
+    return await _new_orchestrator().run(request)
 
 
 @router.post("/research/stream")
 def run_research_stream(request: ResearchRequest) -> StreamingResponse:
-    def event_stream():
+    async def event_stream():
         orchestrator = _new_orchestrator()
-        last_agent_statuses: list[dict] = []
+
+        # Emit initial statuses immediately — UI never blank after clicking Run
+        boot_statuses = [s.model_dump() for s in initial_agent_statuses(running="parse_intent")]
+        last_statuses: list[dict] = boot_statuses
+        yield _sse("agent_status", boot_statuses)
+
         try:
-            for event in orchestrator.run_stream(request):
+            async for event in orchestrator.run_stream(request):
+                if shutdown.is_set():
+                    yield _sse("done", {})
+                    return
+
                 payload = event["payload"]
                 if hasattr(payload, "model_dump"):
                     payload = payload.model_dump()
-                if event["type"] == "agent_status" and isinstance(payload, list):
-                    last_agent_statuses = payload
-                timestamp = datetime.now(UTC).isoformat()
-                data = json.dumps(payload, ensure_ascii=False)
-                yield f"event: {event['type']}\ndata: {data}\n\n"
-                timeline_data = json.dumps(
-                    {"timestamp": timestamp, "event": event["type"], "payload": payload},
-                    ensure_ascii=False,
-                )
-                yield f"event: timeline\ndata: {timeline_data}\n\n"
+
+                event_type = event["type"]
+
+                if event_type == "agent_status" and isinstance(payload, list):
+                    last_statuses = payload
+
+                yield _sse(event_type, payload)
+
         except Exception as exc:
-            timestamp = datetime.now(UTC).isoformat()
             message = str(exc) or "research stream failed"
-            statuses = last_agent_statuses or _fallback_statuses(message)
             node = _node_from_error(message)
-            if node:
-                now = datetime.now(UTC).isoformat()
-                for item in statuses:
-                    if item.get("agent") == node:
-                        item["lifecycle"] = "failed"
-                        item["phase"] = _FAILED_PHASE_BY_AGENT.get(node, "idle")
-                        item["action"] = "node failed"
-                        item["last_error"] = message
-                        item["last_update_at"] = now
-                    if item.get("agent") == "parse_intent":
-                        item["lifecycle"] = "failed"
-                        item["phase"] = "workflow_complete"
-                        item["action"] = "workflow failed"
-                        item["last_error"] = message
-                        item["last_update_at"] = now
-            status_data = json.dumps(statuses, ensure_ascii=False)
-            yield f"event: agent_status\ndata: {status_data}\n\n"
-            yield (
-                "event: error\ndata: "
-                + json.dumps(
-                    {"timestamp": timestamp, "message": message, "node": node or "unknown"},
-                    ensure_ascii=False,
-                )
-                + "\n\n"
-            )
-            yield (
-                "event: timeline\ndata: "
-                + json.dumps(
-                    {
-                        "timestamp": timestamp,
-                        "event": "error",
-                        "payload": {"message": message, "node": node or "unknown"},
-                    },
-                    ensure_ascii=False,
-                )
-                + "\n\n"
-            )
-        yield "event: done\ndata: {}\n\n"
+            statuses = _mark_failed(last_statuses or _fallback_statuses(message), node, message)
+            yield _sse("agent_status", statuses)
+            yield _sse("error", {
+                "timestamp": datetime.now(UTC).isoformat(),
+                "message": message,
+                "node": node or "unknown",
+            })
+
+        yield _sse("done", {})
 
     return StreamingResponse(
         event_stream(),

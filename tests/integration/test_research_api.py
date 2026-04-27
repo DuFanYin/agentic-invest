@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi.testclient import TestClient
@@ -11,6 +11,7 @@ from fastapi.testclient import TestClient
 from src.server.agents.orchestrator import OrchestratorAgent
 from src.server.main import app
 from src.server.services.openrouter import OpenRouterClient
+from src.server import shutdown
 
 
 def _mock_llm(
@@ -64,7 +65,7 @@ def _mock_llm(
     llm = MagicMock(spec=OpenRouterClient)
     call_count = {"n": 0}
 
-    def _call_with_retry(prompt: str, **kw) -> str:
+    async def _call_with_retry(prompt: str, **kw) -> str:
         call_count["n"] += 1
         # Route by distinctive schema markers in each node's prompt
         if "raw_probability" in prompt:      # scenario_scoring schema
@@ -75,15 +76,15 @@ def _mock_llm(
             return _ms
         return _fa  # fallback
 
-    def _complete(prompt: str, **kw) -> str:
+    async def _complete(prompt: str, **kw) -> str:
         return _intent
 
-    def _complete_text(prompt: str, **kw) -> str:
+    async def _complete_text(prompt: str, **kw) -> str:
         return _report
 
-    llm.call_with_retry.side_effect = _call_with_retry
-    llm.complete.side_effect = _complete
-    llm.complete_text.side_effect = _complete_text
+    llm.call_with_retry = AsyncMock(side_effect=_call_with_retry)
+    llm.complete = AsyncMock(side_effect=_complete)
+    llm.complete_text = AsyncMock(side_effect=_complete_text)
     return llm
 
 
@@ -99,6 +100,21 @@ def test_health_endpoint() -> None:
     response = client.get("/health")
     assert response.status_code == 200
     assert response.json()["status"] == "ok"
+
+
+def test_lifespan_clears_then_sets_shutdown_flag() -> None:
+    # Simulate stale state from a prior lifecycle.
+    shutdown.event.set()
+    assert shutdown.event.is_set() is True
+
+    with TestClient(app) as client:
+        # Startup should clear stale shutdown state so new requests can run.
+        assert shutdown.event.is_set() is False
+        response = client.get("/health")
+        assert response.status_code == 200
+
+    # Teardown should set the flag to interrupt in-flight waits/streams.
+    assert shutdown.event.is_set() is True
 
 
 # ── research endpoint ──────────────────────────────────────────────────────

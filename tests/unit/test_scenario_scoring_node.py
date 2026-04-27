@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -78,30 +79,38 @@ def _state(evidence=None, fa=None, ms=None):
     }
 
 
-def _mock_llm(scenarios=None, raises: Exception | None = None):
+def _mock_llm(scenarios=None, raises: Exception | None = None, raw_array: bool = False):
+    """Return LLM mock.  By default emits the wrapper object form {"scenarios": [...]}.
+    Pass raw_array=True to simulate a model that ignores the prompt and returns a bare array."""
     llm = MagicMock()
     if raises:
-        llm.call_with_retry.side_effect = raises
+        llm.call_with_retry = AsyncMock(side_effect=raises)
+    elif raw_array:
+        llm.call_with_retry = AsyncMock(return_value=json.dumps(scenarios or _llm_scenarios()))
     else:
-        llm.call_with_retry.return_value = json.dumps(scenarios or _llm_scenarios())
+        llm.call_with_retry = AsyncMock(return_value=json.dumps({"scenarios": scenarios or _llm_scenarios()}))
     return llm
+
+
+def _run(coro):
+    return asyncio.run(coro)
 
 
 # ── output shape ───────────────────────────────────────────────────────────
 
 def test_at_least_three_scenarios():
-    result = scenario_scoring_node(_state(), llm=_mock_llm())
+    result = _run(scenario_scoring_node(_state(), llm=_mock_llm()))
     assert len(result["scenarios"]) >= 3
 
 
 def test_probabilities_sum_to_one():
-    result = scenario_scoring_node(_state(), llm=_mock_llm())
+    result = _run(scenario_scoring_node(_state(), llm=_mock_llm()))
     total = sum(s.probability for s in result["scenarios"])
     assert abs(total - 1.0) < 1e-5
 
 
 def test_all_scenarios_have_required_shape():
-    result = scenario_scoring_node(_state(), llm=_mock_llm())
+    result = _run(scenario_scoring_node(_state(), llm=_mock_llm()))
     for s in result["scenarios"]:
         assert s.id
         assert s.name
@@ -111,7 +120,7 @@ def test_all_scenarios_have_required_shape():
 
 
 def test_scenarios_sorted_by_probability_descending():
-    result = scenario_scoring_node(_state(), llm=_mock_llm())
+    result = _run(scenario_scoring_node(_state(), llm=_mock_llm()))
     probs = [s.probability for s in result["scenarios"]]
     assert probs == sorted(probs, reverse=True)
 
@@ -119,13 +128,13 @@ def test_scenarios_sorted_by_probability_descending():
 # ── probability normalisation ──────────────────────────────────────────────
 
 def test_unnormalised_probabilities_are_normalised():
-    result = scenario_scoring_node(_state(), llm=_mock_llm(_llm_scenarios(probs=(3, 5, 2))))
+    result = _run(scenario_scoring_node(_state(), llm=_mock_llm(_llm_scenarios(probs=(3, 5, 2)))))
     total = sum(s.probability for s in result["scenarios"])
     assert abs(total - 1.0) < 1e-5
 
 
 def test_equal_probabilities_normalise_to_thirds():
-    result = scenario_scoring_node(_state(), llm=_mock_llm(_llm_scenarios(probs=(1, 1, 1))))
+    result = _run(scenario_scoring_node(_state(), llm=_mock_llm(_llm_scenarios(probs=(1, 1, 1)))))
     for s in result["scenarios"]:
         assert abs(s.probability - 1 / 3) < 1e-5
 
@@ -134,29 +143,36 @@ def test_equal_probabilities_normalise_to_thirds():
 
 def test_raises_when_llm_returns_two_scenarios():
     with pytest.raises(RuntimeError, match="scenario_scoring"):
-        scenario_scoring_node(_state(), llm=_mock_llm(_llm_scenarios(probs=(0.6, 0.4))[:2]))
+        _run(scenario_scoring_node(_state(), llm=_mock_llm(_llm_scenarios(probs=(0.6, 0.4))[:2])))
+
+
+def test_bare_array_response_still_parsed():
+    # Some models ignore the wrapper-object instruction and return a bare array;
+    # _parse_llm_scenarios should handle both forms gracefully.
+    result = _run(scenario_scoring_node(_state(), llm=_mock_llm(raw_array=True)))
+    assert len(result["scenarios"]) >= 3
 
 
 def test_raises_when_llm_returns_more_than_five_scenarios():
     six = _llm_scenarios(probs=(0.2, 0.2, 0.2)) + _llm_scenarios(probs=(0.2, 0.2, 0.0))
     with pytest.raises(RuntimeError, match="scenario_scoring"):
-        scenario_scoring_node(_state(), llm=_mock_llm(six))
+        _run(scenario_scoring_node(_state(), llm=_mock_llm(six)))
 
 
 # ── raises on LLM failure (no stub fallback) ──────────────────────────────
 
 def test_raises_when_llm_raises():
     with pytest.raises(RuntimeError, match="scenario_scoring"):
-        scenario_scoring_node(_state(), llm=_mock_llm(raises=RuntimeError("exhausted")))
+        _run(scenario_scoring_node(_state(), llm=_mock_llm(raises=RuntimeError("exhausted"))))
 
 
 def test_raises_when_no_evidence():
     with pytest.raises(RuntimeError, match="scenario_scoring"):
-        scenario_scoring_node(_state(evidence=[]), llm=_mock_llm())
+        _run(scenario_scoring_node(_state(evidence=[]), llm=_mock_llm()))
 
 
 # ── agent_statuses ─────────────────────────────────────────────────────────
 
 def test_empty_statuses_returned_unchanged():
-    result = scenario_scoring_node(_state(), llm=_mock_llm())
+    result = _run(scenario_scoring_node(_state(), llm=_mock_llm()))
     assert result["agent_statuses"] == []

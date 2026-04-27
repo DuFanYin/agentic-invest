@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import pytest
 from unittest.mock import MagicMock, patch
 
@@ -9,6 +10,10 @@ from src.server.agents.research import research_node, _detect_conflicts
 from src.server.models.analysis import NormalizedData
 from src.server.models.intent import ResearchIntent
 from src.server.models.evidence import Evidence
+
+
+def _run(coro):
+    return asyncio.run(coro)
 
 
 def _intent(ticker: str = "AAPL") -> ResearchIntent:
@@ -97,7 +102,7 @@ def _patch(finance=None, web=None):
 
 def test_all_evidence_have_required_fields():
     with _patch():
-        result = research_node(_base_state())
+        result = _run(research_node(_base_state()))
     for ev in result["evidence"]:
         assert ev.id
         assert ev.source_type
@@ -107,14 +112,14 @@ def test_all_evidence_have_required_fields():
 
 def test_evidence_ids_are_unique():
     with _patch():
-        result = research_node(_base_state())
+        result = _run(research_node(_base_state()))
     ids = [ev.id for ev in result["evidence"]]
     assert len(ids) == len(set(ids))
 
 
 def test_normalized_data_has_metrics():
     with _patch():
-        result = research_node(_base_state())
+        result = _run(research_node(_base_state()))
     nd = result["normalized_data"]
     assert isinstance(nd, NormalizedData)
     assert nd.metrics.ttm
@@ -124,7 +129,7 @@ def test_normalized_data_has_metrics():
 
 def test_research_pass_incremented():
     with _patch():
-        result = research_node(_base_state(pass_id=0))
+        result = _run(research_node(_base_state(pass_id=0)))
     assert result["research_pass"] == 1
 
 
@@ -136,7 +141,7 @@ def test_news_capped_at_five():
         for i in range(10)
     ]
     with _patch(finance=_mock_finance(news=many_news)):
-        result = research_node(_base_state())
+        result = _run(research_node(_base_state()))
     news_items = [ev for ev in result["evidence"] if ev.source_type == "news"]
     assert len(news_items) <= 5
 
@@ -150,7 +155,7 @@ def test_web_results_are_cleaned_for_duplicate_and_empty_urls():
         {"title": "No URL", "url": "", "content": "...", "published_date": None, "score": 0.5},
     ])
     with _patch(web=web):
-        result = research_node(_base_state())
+        result = _run(research_node(_base_state()))
     urls = [ev.url for ev in result["evidence"]]
     assert urls.count("https://example.com/1") == 1
     web_items = [ev for ev in result["evidence"] if ev.source_type == "web"]
@@ -160,7 +165,7 @@ def test_web_results_are_cleaned_for_duplicate_and_empty_urls():
 def test_web_search_called_with_query():
     web = _mock_web()
     with _patch(web=web):
-        research_node(_base_state())
+        _run(research_node(_base_state()))
     web.search.assert_called_once()
 
 
@@ -174,7 +179,7 @@ def test_missing_fields_from_financials_propagated():
         "missing_fields": ["revenue", "gross_margin_pct"],
     }
     with _patch(finance=_mock_finance(financials=fin)):
-        result = research_node(_base_state())
+        result = _run(research_node(_base_state()))
     assert "revenue" in result["normalized_data"].missing_fields
 
 
@@ -190,7 +195,7 @@ def test_no_ticker_web_search_still_runs():
         "agent_statuses": [],
     }
     with _patch(web=web):
-        result = research_node(state)
+        result = _run(research_node(state))
     web.search.assert_called_once()
     assert len(result["evidence"]) >= 1
     assert all(ev.source_type == "web" for ev in result["evidence"])
@@ -207,7 +212,7 @@ def test_no_ticker_no_web_results_raises():
     }
     with pytest.raises(RuntimeError, match="research"):
         with _patch(finance=_mock_finance(), web=web):
-            research_node(state)
+            _run(research_node(state))
 
 
 # ── Resilience: individual service failures ────────────────────────────────
@@ -223,7 +228,7 @@ def test_single_service_failure_does_not_crash(failed_target: str):
     else:
         web.search.side_effect = Exception("Tavily down")
     with _patch(web=web):
-        result = research_node(_base_state())
+        result = _run(research_node(_base_state()))
     assert isinstance(result["evidence"], list)
 
 
@@ -237,14 +242,14 @@ def test_all_services_fail_raises():
     web.search.side_effect = Exception("err")
     with pytest.raises(RuntimeError, match="research"):
         with _patch(finance=finance, web=web):
-            research_node(_base_state())
+            _run(research_node(_base_state()))
 
 
 # ── Id offset on multi-pass ────────────────────────────────────────────────
 
 def test_evidence_ids_offset_on_second_pass():
     with _patch():
-        result = research_node(_base_state(pass_id=1))
+        result = _run(research_node(_base_state(pass_id=1)))
     for ev in result["evidence"]:
         num = int(ev.id.split("_")[1])
         assert num >= 100
@@ -254,7 +259,7 @@ def test_evidence_ids_offset_on_second_pass():
 
 def test_price_history_stored_in_metrics():
     with _patch():
-        result = research_node(_base_state())
+        result = _run(research_node(_base_state()))
     assert result["normalized_data"].metrics.price_history
     assert result["normalized_data"].metrics.price_history["return_1y_pct"] == 22.4
 
@@ -290,7 +295,7 @@ def test_conflicts_stored_in_normalized_data():
         "score": 0.6,
     }])
     with _patch(finance=finance, web=web):
-        result = research_node(_base_state())
+        result = _run(research_node(_base_state()))
     nd = result["normalized_data"]
     assert isinstance(nd, NormalizedData)
     assert isinstance(nd.conflicts, list)

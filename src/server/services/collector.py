@@ -7,6 +7,7 @@ No global state — concurrent requests are fully isolated.
 
 from __future__ import annotations
 
+import asyncio
 import threading
 
 from src.server.models.response import LLMCall
@@ -17,6 +18,7 @@ class LLMCallCollector:
         self._calls: list[LLMCall] = []
         self._lock = threading.Lock()
         self._seq = 0
+        self._pending: asyncio.Queue[LLMCall] = asyncio.Queue()
 
     def next_id(self) -> str:
         with self._lock:
@@ -26,15 +28,16 @@ class LLMCallCollector:
     def record(self, call: LLMCall) -> None:
         with self._lock:
             self._calls.append(call)
+        self._pending.put_nowait(call)
 
-    def drain(self) -> list[LLMCall]:
-        """Return and clear all accumulated calls since last drain."""
-        with self._lock:
-            items = list(self._calls)
-            self._calls.clear()
-            return items
+    async def wait_next(self) -> LLMCall:
+        """Wait for next emitted call event (for real-time stream push)."""
+        return await self._pending.get()
+
+    def pending_count(self) -> int:
+        return self._pending.qsize()
 
     def all(self) -> list[LLMCall]:
-        """Return all calls without clearing (for final response assembly)."""
+        """Return all calls (for final response assembly)."""
         with self._lock:
             return list(self._calls)

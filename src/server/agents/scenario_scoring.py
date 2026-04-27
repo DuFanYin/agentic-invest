@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+from json import JSONDecodeError
 
 from src.server.models.analysis import FundamentalAnalysis, MarketSentiment
 from src.server.models.scenario import Scenario
@@ -26,21 +27,23 @@ _SYSTEM = (
 )
 
 _SCHEMA = """
-Return a JSON array of 3–5 scenario objects. Each scenario describes a distinct future state.
-[
-  {
-    "name": "...",
-    "description": "...",
-    "raw_probability": 0.4,
-    "drivers": ["..."],
-    "triggers": ["..."],
-    "signals": ["..."],
-    "evidence_ids": ["ev_001", ...],
-    "time_horizon": "...",
-    "tags": ["bullish-2", "ai-demand", "rate-sensitive"]
-  },
-  ...
-]
+Return a JSON object with exactly one key "scenarios" containing an array of 3–5 scenario objects.
+{
+  "scenarios": [
+    {
+      "name": "...",
+      "description": "...",
+      "raw_probability": 0.4,
+      "drivers": ["..."],
+      "triggers": ["..."],
+      "signals": ["..."],
+      "evidence_ids": ["ev_001", ...],
+      "time_horizon": "...",
+      "tags": ["bullish-2", "ai-demand", "rate-sensitive"]
+    },
+    ...
+  ]
+}
 Rules:
 - Scenarios are centered on what future state occurs, not on bull/bear framing.
   Use descriptive names: "AI capex supercycle", "Rate plateau stalls growth", not "Bull case".
@@ -110,8 +113,12 @@ def _normalise(scenarios: list[Scenario]) -> list[Scenario]:
 
 def _parse_llm_scenarios(raw: str, evidence_ids: list[str]) -> list[Scenario]:
     data = json.loads(raw)
+    # unwrap wrapper object {"scenarios": [...]} — required because json_object mode
+    # cannot guarantee a top-level array; we always ask for the wrapper form.
+    if isinstance(data, dict):
+        data = data.get("scenarios", data)
     if not isinstance(data, list):
-        raise ValueError("expected JSON array")
+        raise ValueError(f"expected JSON array or {{\"scenarios\": [...]}}, got {type(data).__name__}")
 
     weights = [max(0.0, float(item.get("raw_probability", 0.0))) for item in data]
     total = sum(weights) or 1.0
@@ -140,7 +147,9 @@ def _parse_llm_scenarios(raw: str, evidence_ids: list[str]) -> list[Scenario]:
     return scenarios
 
 
-def scenario_scoring_node(state: ResearchState, *, llm: OpenRouterClient = _default_llm) -> ResearchState:
+async def scenario_scoring_node(
+    state: ResearchState, *, llm: OpenRouterClient = _default_llm
+) -> ResearchState:
     evidence = state.get("evidence") or []
     fundamental_analysis = state.get("fundamental_analysis")
     market_sentiment = state.get("market_sentiment")
@@ -159,12 +168,18 @@ def scenario_scoring_node(state: ResearchState, *, llm: OpenRouterClient = _defa
     if evidence:
         prompt = _build_prompt(fundamental_analysis, market_sentiment, evidence, intent)
         try:
-            raw = llm.call_with_retry(prompt, system=_SYSTEM, node="scenario_scoring")
+            raw = await llm.call_with_retry(prompt, system=_SYSTEM, node="scenario_scoring")
             parsed = _parse_llm_scenarios(raw, evidence_ids)
             scenarios = _normalise(parsed)
             llm_used = True
+        except JSONDecodeError as exc:
+            logger.warning("scenario_scoring: LLM returned invalid JSON — %s", exc)
+        except ValueError as exc:
+            logger.warning("scenario_scoring: scenario structure invalid — %s", exc)
+        except RuntimeError as exc:
+            logger.warning("scenario_scoring: LLM exhausted all models — %s", exc)
         except Exception as exc:
-            logger.warning("scenario_scoring LLM failed: %s", exc)
+            logger.warning("scenario_scoring: unexpected error — %s", exc)
 
     if scenarios is None:
         msg = f"[{_NODE}] unable to generate scenarios from LLM output"
