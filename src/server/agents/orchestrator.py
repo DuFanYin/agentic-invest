@@ -65,9 +65,9 @@ def _make_parse_intent_node(llm_client: OpenRouterClient):
 
 def _gap_check_node(state: ResearchState) -> ResearchState:
     intent = state.get("intent")
-    fundamental_analysis = state.get("fundamental_analysis") or {}
-    market_sentiment = state.get("market_sentiment") or {}
-    normalized_data = state.get("normalized_data") or {}
+    fundamental_analysis = state.get("fundamental_analysis")
+    market_sentiment = state.get("market_sentiment")
+    normalized_data = state.get("normalized_data")
     current_pass = state.get("research_pass", 1)
     statuses = list(state.get("agent_statuses") or [])
 
@@ -85,7 +85,7 @@ def _gap_check_node(state: ResearchState) -> ResearchState:
     new_questions.extend(agent_questions)
 
     # ── Conflict signals from research ─────────────────────────────────────
-    conflicts = normalized_data.get("conflicts") or []
+    conflicts = normalized_data.conflicts if normalized_data else []
     if conflicts:
         new_questions.append(
             f"Conflicting evidence detected across {len(conflicts)} topic(s): "
@@ -271,13 +271,16 @@ def _parse_intent(query: str, llm_client: OpenRouterClient) -> ResearchIntent:
 
 
 def _state_to_response(state: ResearchState) -> ResearchResponse:
+    from src.server.models.analysis import FundamentalAnalysis, MarketSentiment
+    fa = state.get("fundamental_analysis")
+    ms = state.get("market_sentiment")
     return ResearchResponse(
         report_markdown=state.get("report_markdown", ""),
         report_json=state.get("report_json", {}),
         intent=state.get("intent"),
         evidence=state.get("evidence") or [],
-        fundamental_analysis=state.get("fundamental_analysis") or {},
-        market_sentiment=state.get("market_sentiment") or {},
+        fundamental_analysis=fa.model_dump() if isinstance(fa, FundamentalAnalysis) else {},
+        market_sentiment=ms.model_dump() if isinstance(ms, MarketSentiment) else {},
         scenarios=state.get("scenarios") or [],
         agent_statuses=state.get("agent_statuses") or [],
         validation_result=state.get("validation_result") or ValidationResult(),

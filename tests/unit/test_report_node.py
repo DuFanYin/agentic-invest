@@ -7,6 +7,7 @@ import pytest
 from unittest.mock import MagicMock, patch, PropertyMock
 
 from src.server.agents.report_verification import report_verification_node
+from src.server.models.analysis import FundamentalAnalysis, MarketSentiment
 from src.server.models.evidence import Evidence
 from src.server.models.intent import ResearchIntent
 from src.server.models.scenario import Scenario
@@ -44,16 +45,18 @@ def _evidence(n: int = 3) -> list[Evidence]:
 
 def _scenarios() -> list[Scenario]:
     return [
-        Scenario(name="Bull case", description="Upside.", score=0.3, evidence_ids=["ev_001"]),
-        Scenario(name="Base case", description="Base.", score=0.5, evidence_ids=["ev_001"]),
-        Scenario(name="Bear case", description="Downside.", score=0.2, evidence_ids=["ev_001"]),
+        Scenario(name="Rate plateau stalls growth", description="Downside.", tags=["bearish-1"],
+                 probability=0.2, drivers=["d"], triggers=["t"], signals=["s"], evidence_ids=["ev_001"]),
+        Scenario(name="AI capex supercycle", description="Base.", tags=["neutral"],
+                 probability=0.5, drivers=["d"], triggers=["t"], signals=["s"], evidence_ids=["ev_001"]),
+        Scenario(name="Margin expansion", description="Upside.", tags=["bullish-1"],
+                 probability=0.3, drivers=["d"], triggers=["t"], signals=["s"], evidence_ids=["ev_001"]),
     ]
 
 
-def _fa(evidence_ids=None) -> dict:
+def _fa(evidence_ids=None) -> FundamentalAnalysis:
     ids = evidence_ids or ["ev_001", "ev_002"]
-    return {
-        "agent": "fundamental_analysis",
+    return FundamentalAnalysis.model_validate({
         "claims": [{"statement": "Stable margins.", "confidence": "high", "evidence_ids": ids}],
         "business_quality": {"view": "stable", "drivers": ["brand"]},
         "financials": {"profitability_trend": "improving", "cash_flow_quality": "high"},
@@ -61,20 +64,19 @@ def _fa(evidence_ids=None) -> dict:
         "fundamental_risks": [{"name": "Margin risk", "impact": "medium", "signal": "GM declining", "evidence_ids": ids}],
         "missing_fields": [],
         "metrics": {},
-    }
+    })
 
 
-def _ms(evidence_ids=None) -> dict:
+def _ms(evidence_ids=None) -> MarketSentiment:
     ids = evidence_ids or ["ev_002", "ev_003"]
-    return {
-        "agent": "market_sentiment",
+    return MarketSentiment.model_validate({
         "claims": [{"statement": "Sentiment positive.", "confidence": "medium", "evidence_ids": ids}],
         "news_sentiment": {"direction": "positive", "confidence": "medium"},
         "price_action": {"trend": "upward", "return_30d_pct": 3.1, "volatility": "medium"},
         "market_narrative": {"summary": "Investors optimistic.", "crowding_risk": "low"},
         "sentiment_risks": [{"name": "Reversal risk", "impact": "low", "signal": "weak guidance", "evidence_ids": ids}],
         "missing_fields": [],
-    }
+    })
 
 
 def _state(evidence=None, fa=None, ms=None, scenarios=None):
@@ -156,9 +158,12 @@ def test_valid_state_produces_no_errors():
 def test_validation_errors_appended_to_report():
     # Use a scenario that doesn't sum to 1 to trigger a validation error
     bad_scenarios = [
-        Scenario(name="Bull", description=".", score=0.5, evidence_ids=["ev_001"]),
-        Scenario(name="Base", description=".", score=0.5, evidence_ids=["ev_001"]),
-        Scenario(name="Bear", description=".", score=0.5, evidence_ids=["ev_001"]),
+        Scenario(name="Upside", description=".", tags=["bullish-1"], probability=0.5,
+                 drivers=["d"], triggers=["t"], signals=["s"], evidence_ids=["ev_001"]),
+        Scenario(name="Base", description=".", tags=["neutral"], probability=0.5,
+                 drivers=["d"], triggers=["t"], signals=["s"], evidence_ids=["ev_001"]),
+        Scenario(name="Downside", description=".", tags=["bearish-1"], probability=0.5,
+                 drivers=["d"], triggers=["t"], signals=["s"], evidence_ids=["ev_001"]),
     ]
     with _mock_llm_markdown():
         result = report_verification_node(_state(scenarios=bad_scenarios))
@@ -167,8 +172,7 @@ def test_validation_errors_appended_to_report():
 
 
 def test_missing_fields_produce_warnings():
-    fa = _fa()
-    fa["missing_fields"] = ["eps", "free_cash_flow"]
+    fa = _fa().model_copy(update={"missing_fields": ["eps", "free_cash_flow"]})
     with _mock_llm_markdown():
         result = report_verification_node(_state(fa=fa))
     assert len(result["validation_result"].warnings) >= 1
@@ -196,7 +200,7 @@ def test_report_json_scenarios_are_dicts():
     for s in result["report_json"]["scenarios"]:
         assert isinstance(s, dict)
         assert "name" in s
-        assert "score" in s
+        assert "probability" in s
 
 
 def test_report_json_evidence_are_dicts():

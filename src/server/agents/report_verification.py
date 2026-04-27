@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import logging
 
+from src.server.models.analysis import FundamentalAnalysis, MarketSentiment
 from src.server.models.response import ValidationResult
 from src.server.models.scenario import Scenario
 from src.server.models.state import ResearchState
@@ -37,7 +38,7 @@ _SECTIONS = (
     "## Valuation View",
     "## Risk Analysis",
     "## Future Scenarios",
-    "## Bull / Base / Bear Thesis",
+    "## Scenario Implications",
     "## What To Watch Next",
     "## Sources",
     "## Disclaimer",
@@ -56,30 +57,40 @@ def _build_prompt(intent, evidence, fundamental_analysis, market_sentiment, scen
         for e in evidence
     )
 
-    fa_claims = "\n".join(
-        f"- {c['statement']} (confidence: {c.get('confidence','?')}, ids: {c.get('evidence_ids',[])})"
-        for c in fundamental_analysis.get("claims", [])
-    )
-    fa_risks = "\n".join(
-        f"- {r['name']}: {r.get('signal','')}"
-        for r in fundamental_analysis.get("fundamental_risks", [])
-    )
-    fa_bq = fundamental_analysis.get("business_quality", {}).get("view", "unknown")
-    fa_val = fundamental_analysis.get("valuation", {}).get("relative_multiple_view", "unknown")
+    if isinstance(fundamental_analysis, FundamentalAnalysis):
+        fa_claims = "\n".join(
+            f"- {c.statement} (confidence: {c.confidence}, ids: {c.evidence_ids})"
+            for c in fundamental_analysis.claims
+        )
+        fa_risks = "\n".join(
+            f"- {r.name}: {r.signal}"
+            for r in fundamental_analysis.fundamental_risks
+        )
+        fa_bq = fundamental_analysis.business_quality.view
+        fa_val = fundamental_analysis.valuation.relative_multiple_view
+        metrics = fundamental_analysis.metrics
+    else:
+        fa_claims = fa_risks = ""
+        fa_bq = fa_val = "unknown"
+        metrics = {}
 
-    ms_direction = market_sentiment.get("news_sentiment", {}).get("direction", "unknown")
-    ms_narrative = market_sentiment.get("market_narrative", {}).get("summary", "")
-    ms_risks = "\n".join(
-        f"- {r['name']}: {r.get('signal','')}"
-        for r in market_sentiment.get("sentiment_risks", [])
-    )
+    if isinstance(market_sentiment, MarketSentiment):
+        ms_direction = market_sentiment.news_sentiment.direction
+        ms_narrative = market_sentiment.market_narrative.summary
+        ms_risks = "\n".join(
+            f"- {r.name}: {r.signal}"
+            for r in market_sentiment.sentiment_risks
+        )
+    else:
+        ms_direction = "unknown"
+        ms_narrative = ""
+        ms_risks = ""
 
     sc_lines = "\n".join(
-        f"- {s.name} ({s.score:.0%}): {s.description}"
+        f"- {s.name} ({s.probability:.0%}) [{', '.join(s.tags)}]: {s.description}"
         for s in scenarios
     )
 
-    metrics = fundamental_analysis.get("metrics", {})
     metrics_json = json.dumps(metrics, indent=2) if metrics else "{}"
 
     return f"""Write a full investment research report in Markdown. Use exactly these sections in order:
@@ -142,10 +153,12 @@ def report_verification_node(state: ResearchState) -> ResearchState:
     errors.extend(validate_claim_coverage(market_sentiment, available_evidence_ids))
 
     warnings: list[str] = []
-    if fundamental_analysis.get("missing_fields"):
-        warnings.append(f"Missing fields: {', '.join(fundamental_analysis['missing_fields'])}")
-    if market_sentiment.get("missing_fields"):
-        warnings.append(f"Missing sentiment fields: {', '.join(market_sentiment['missing_fields'])}")
+    fa_missing = fundamental_analysis.missing_fields if isinstance(fundamental_analysis, FundamentalAnalysis) else []
+    ms_missing = market_sentiment.missing_fields if isinstance(market_sentiment, MarketSentiment) else []
+    if fa_missing:
+        warnings.append(f"Missing fields: {', '.join(fa_missing)}")
+    if ms_missing:
+        warnings.append(f"Missing sentiment fields: {', '.join(ms_missing)}")
 
     # ── LLM report generation ─────────────────────────────────────────────
     report_markdown: str | None = None
@@ -180,8 +193,8 @@ def report_verification_node(state: ResearchState) -> ResearchState:
     report_json = {
         "intent": intent.model_dump() if intent else {},
         "evidence": evidence_dump,
-        "fundamental_analysis": fundamental_analysis,
-        "market_sentiment": market_sentiment,
+        "fundamental_analysis": fundamental_analysis.model_dump() if isinstance(fundamental_analysis, FundamentalAnalysis) else {},
+        "market_sentiment": market_sentiment.model_dump() if isinstance(market_sentiment, MarketSentiment) else {},
         "scenarios": [s.model_dump() for s in scenarios],
         "validation": {"errors": errors, "warnings": warnings},
     }

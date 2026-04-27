@@ -1,15 +1,40 @@
+from __future__ import annotations
+
+import re
+
+from src.server.models.analysis import FundamentalAnalysis, MarketSentiment
 from src.server.models.scenario import Scenario
+
+_MAGNITUDE_TAG = re.compile(r"^(bearish|bullish)-[123]$|^neutral$")
 
 
 def validate_scenario_scores(scenarios: list[Scenario]) -> list[str]:
     if not scenarios:
         return ["At least one scenario is required."]
 
-    total = sum(scenario.score for scenario in scenarios)
-    if abs(total - 1) >= 1e-6:
-        return [f"Scenario scores must sum to 1. Current sum: {total}"]
+    errors: list[str] = []
 
-    return []
+    total = sum(s.probability for s in scenarios)
+    if abs(total - 1) >= 1e-6:
+        errors.append(f"Scenario probabilities must sum to 1. Current sum: {total}")
+
+    for s in scenarios:
+        missing = []
+        if not s.drivers:
+            missing.append("drivers")
+        if not s.triggers:
+            missing.append("triggers")
+        if not s.signals:
+            missing.append("signals")
+        if missing:
+            errors.append(f"Scenario '{s.name}' missing required fields: {', '.join(missing)}")
+        if not any(_MAGNITUDE_TAG.match(t) for t in s.tags):
+            errors.append(
+                f"Scenario '{s.name}' tags must include a magnitude tag "
+                f"(bearish-1..3, neutral, bullish-1..3). Got: {s.tags}"
+            )
+
+    return errors
 
 
 def validate_evidence_completeness(evidence: list[dict]) -> list[str]:
@@ -22,14 +47,30 @@ def validate_evidence_completeness(evidence: list[dict]) -> list[str]:
     return errors
 
 
-def validate_claim_coverage(analysis: dict, available_evidence_ids: set[str]) -> list[str]:
+def validate_claim_coverage(
+    analysis: FundamentalAnalysis | MarketSentiment | dict,
+    available_evidence_ids: set[str],
+) -> list[str]:
     errors: list[str] = []
-    for claim in analysis.get("claims", []):
-        claim_evidence = claim.get("evidence_ids", [])
-        if not claim_evidence:
-            errors.append(f"Claim missing evidence: {claim.get('statement', 'unknown')}")
-            continue
-        missing_refs = [ref for ref in claim_evidence if ref not in available_evidence_ids]
-        if missing_refs:
-            errors.append(f"Claim references unknown evidence ids: {', '.join(missing_refs)}")
+
+    if isinstance(analysis, (FundamentalAnalysis, MarketSentiment)):
+        claims = analysis.claims
+        for claim in claims:
+            if not claim.evidence_ids:
+                errors.append(f"Claim missing evidence: {claim.statement}")
+                continue
+            missing_refs = [ref for ref in claim.evidence_ids if ref not in available_evidence_ids]
+            if missing_refs:
+                errors.append(f"Claim references unknown evidence ids: {', '.join(missing_refs)}")
+    else:
+        # fallback for plain dict (e.g. in tests that haven't migrated yet)
+        for claim in analysis.get("claims", []):
+            claim_evidence = claim.get("evidence_ids", [])
+            if not claim_evidence:
+                errors.append(f"Claim missing evidence: {claim.get('statement', 'unknown')}")
+                continue
+            missing_refs = [ref for ref in claim_evidence if ref not in available_evidence_ids]
+            if missing_refs:
+                errors.append(f"Claim references unknown evidence ids: {', '.join(missing_refs)}")
+
     return errors

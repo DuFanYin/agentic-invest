@@ -8,6 +8,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from src.server.agents.scenario_scoring import scenario_scoring_node
+from src.server.models.analysis import FundamentalAnalysis, MarketSentiment
 from src.server.models.evidence import Evidence
 from src.server.models.intent import ResearchIntent
 
@@ -26,20 +27,44 @@ def _evidence(n: int = 3) -> list[Evidence]:
     ]
 
 
-def _llm_scenarios(scores=(0.3, 0.5, 0.2)) -> list[dict]:
-    names = ["Bull case", "Base case", "Bear case"]
-    descs = ["Upside.", "Base.", "Downside."]
+def _llm_scenarios(probs=(0.3, 0.5, 0.2)) -> list[dict]:
+    names = ["Rate plateau stalls growth", "AI capex supercycle", "Regulatory crackdown"]
+    descs = ["Headwinds persist.", "Tailwinds accelerate.", "Policy risk materialises."]
+    tags = [["bearish-1", "rate-sensitive"], ["bullish-2", "ai-demand"], ["bearish-2", "policy-risk"]]
     return [
         {
             "name": names[i],
             "description": descs[i],
-            "raw_score": scores[i],
+            "raw_probability": probs[i],
+            "drivers": ["driver"],
             "triggers": ["trigger"],
             "signals": ["signal"],
-            "evidence_ids": [f"ev_{i+1:03d}"],
+            "evidence_ids": [f"ev_{i + 1:03d}"],
+            "tags": tags[i],
         }
-        for i in range(len(scores))
+        for i in range(len(probs))
     ]
+
+
+def _default_fa() -> FundamentalAnalysis:
+    return FundamentalAnalysis.model_validate({
+        "claims": [{"statement": "Stable margins.", "confidence": "high", "evidence_ids": ["ev_001"]}],
+        "business_quality": {"view": "stable", "drivers": []},
+        "financials": {"profitability_trend": "stable", "cash_flow_quality": "high"},
+        "valuation": {"relative_multiple_view": "near median", "simplified_dcf_view": "fair"},
+        "fundamental_risks": [],
+        "missing_fields": [],
+    })
+
+
+def _default_ms() -> MarketSentiment:
+    return MarketSentiment.model_validate({
+        "claims": [],
+        "news_sentiment": {"direction": "positive", "confidence": "medium"},
+        "market_narrative": {"summary": "Optimistic.", "crowding_risk": "low"},
+        "sentiment_risks": [],
+        "missing_fields": [],
+    })
 
 
 def _state(evidence=None, fa=None, ms=None):
@@ -47,15 +72,8 @@ def _state(evidence=None, fa=None, ms=None):
         "query": "Analyse AAPL",
         "intent": ResearchIntent(ticker="AAPL", subjects=["Apple"], scope="company"),
         "evidence": evidence if evidence is not None else _evidence(),
-        "fundamental_analysis": fa or {
-            "claims": [{"statement": "Stable margins.", "confidence": "high", "evidence_ids": ["ev_001"]}],
-            "business_quality": {"view": "stable"},
-            "valuation": {"relative_multiple_view": "near median"},
-        },
-        "market_sentiment": ms or {
-            "news_sentiment": {"direction": "positive"},
-            "market_narrative": {"summary": "Optimistic."},
-        },
+        "fundamental_analysis": fa if fa is not None else _default_fa(),
+        "market_sentiment": ms if ms is not None else _default_ms(),
         "agent_statuses": [],
     }
 
@@ -83,17 +101,17 @@ def test_at_least_three_scenarios():
     assert len(result["scenarios"]) >= 3
 
 
-def test_scores_sum_to_one():
+def test_probabilities_sum_to_one():
     with patch("src.server.agents.scenario_scoring._llm", _mock_llm()):
         result = scenario_scoring_node(_state())
-    total = sum(s.score for s in result["scenarios"])
+    total = sum(s.probability for s in result["scenarios"])
     assert abs(total - 1.0) < 1e-5
 
 
-def test_all_scores_non_negative():
+def test_all_probabilities_non_negative():
     with patch("src.server.agents.scenario_scoring._llm", _mock_llm()):
         result = scenario_scoring_node(_state())
-    assert all(s.score >= 0 for s in result["scenarios"])
+    assert all(s.probability >= 0 for s in result["scenarios"])
 
 
 def test_all_scenarios_have_evidence_ids():
@@ -111,38 +129,56 @@ def test_all_scenarios_have_name_and_description():
         assert s.description
 
 
-# ── score normalisation ────────────────────────────────────────────────────
-
-def test_unnormalised_scores_are_normalised():
-    # raw_scores = [3, 5, 2] → normalised = [0.3, 0.5, 0.2]
-    with patch("src.server.agents.scenario_scoring._llm", _mock_llm(_llm_scenarios(scores=(3, 5, 2)))):
-        result = scenario_scoring_node(_state())
-    total = sum(s.score for s in result["scenarios"])
-    assert abs(total - 1.0) < 1e-5
-    # Bull should be 3/10 = 0.3
-    assert abs(result["scenarios"][0].score - 0.3) < 1e-5
-
-
-def test_equal_scores_normalise_to_thirds():
-    with patch("src.server.agents.scenario_scoring._llm", _mock_llm(_llm_scenarios(scores=(1, 1, 1)))):
+def test_all_scenarios_have_non_empty_tags():
+    with patch("src.server.agents.scenario_scoring._llm", _mock_llm()):
         result = scenario_scoring_node(_state())
     for s in result["scenarios"]:
-        assert abs(s.score - 1 / 3) < 1e-5
+        assert len(s.tags) >= 1
+
+
+def test_scenarios_sorted_by_probability_descending():
+    with patch("src.server.agents.scenario_scoring._llm", _mock_llm()):
+        result = scenario_scoring_node(_state())
+    probs = [s.probability for s in result["scenarios"]]
+    assert probs == sorted(probs, reverse=True)
+
+
+def test_each_scenario_has_id():
+    with patch("src.server.agents.scenario_scoring._llm", _mock_llm()):
+        result = scenario_scoring_node(_state())
+    for s in result["scenarios"]:
+        assert s.id
+
+
+# ── probability normalisation ──────────────────────────────────────────────
+
+def test_unnormalised_probabilities_are_normalised():
+    with patch("src.server.agents.scenario_scoring._llm", _mock_llm(_llm_scenarios(probs=(3, 5, 2)))):
+        result = scenario_scoring_node(_state())
+    total = sum(s.probability for s in result["scenarios"])
+    assert abs(total - 1.0) < 1e-5
+
+
+def test_equal_probabilities_normalise_to_thirds():
+    with patch("src.server.agents.scenario_scoring._llm", _mock_llm(_llm_scenarios(probs=(1, 1, 1)))):
+        result = scenario_scoring_node(_state())
+    for s in result["scenarios"]:
+        assert abs(s.probability - 1 / 3) < 1e-5
 
 
 # ── padding when LLM returns fewer than 3 scenarios ───────────────────────
 
 def test_padding_when_llm_returns_two_scenarios():
-    two = _llm_scenarios(scores=(0.6, 0.4))[:2]
+    two = _llm_scenarios(probs=(0.6, 0.4))[:2]
     with patch("src.server.agents.scenario_scoring._llm", _mock_llm(two)):
         result = scenario_scoring_node(_state())
     assert len(result["scenarios"]) >= 3
-    total = sum(s.score for s in result["scenarios"])
+    total = sum(s.probability for s in result["scenarios"])
     assert abs(total - 1.0) < 1e-5
 
 
 def test_padding_when_llm_returns_one_scenario():
-    one = _llm_scenarios(scores=(1.0,))[:1]
+    one = _llm_scenarios(probs=(1.0,))[:1]
     with patch("src.server.agents.scenario_scoring._llm", _mock_llm(one)):
         result = scenario_scoring_node(_state())
     assert len(result["scenarios"]) >= 3

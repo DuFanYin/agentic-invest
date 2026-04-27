@@ -6,6 +6,7 @@ import hashlib
 import logging
 from datetime import UTC, datetime
 
+from src.server.models.analysis import Conflict, MetricsBlock, NormalizedData
 from src.server.models.evidence import Evidence
 from src.server.models.state import ResearchState
 from src.server.services.cache import Cache
@@ -271,17 +272,25 @@ def research_node(state: ResearchState) -> ResearchState:
             )
         raise RuntimeError(msg)
 
-    conflicts = _detect_conflicts(new_evidence, metrics)
+    raw_conflicts = _detect_conflicts(new_evidence, metrics)
+    conflicts = [Conflict.model_validate(c) for c in raw_conflicts]
 
-    normalized_data: dict = {
-        "query": query,
-        "intent": intent.model_dump() if intent else {},
-        "metrics": metrics,
-        "missing_fields": missing_fields,
-        "conflicts": conflicts,
-        "open_question_context": open_questions,
-        "pass_id": pass_id,
-    }
+    metrics_block = MetricsBlock(
+        ttm=metrics.get("ttm", {}),
+        three_year_avg=metrics.get("three_year_avg", {}),
+        latest_quarter=metrics.get("latest_quarter", {}),
+        price_history=metrics.get("price_history", {}),
+    )
+
+    normalized_data = NormalizedData(
+        query=query,
+        intent=intent.model_dump() if intent else {},
+        metrics=metrics_block,
+        missing_fields=missing_fields,
+        conflicts=conflicts,
+        open_question_context=open_questions,
+        pass_id=pass_id,
+    )
 
     if statuses:
         statuses = update_status(

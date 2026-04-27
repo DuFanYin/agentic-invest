@@ -218,7 +218,7 @@ State mutation rules:
 
 ### Scenario Scoring Agent
 
-- Build forward-looking scenarios (e.g. bull/base/bear, or sector-driver scenarios)
+- Build forward-looking scenario states (3-5 distinct futures), with directional tags as metadata rather than primary buckets
 - Assign probability `score` (0-1) to each scenario
 - Normalize scores before output to ensure total `score` sum is 1
 - Include key triggers and validation signals for each scenario
@@ -232,7 +232,7 @@ State mutation rules:
 
 ### Report & Verification Agent
 
-- Organize bull/neutral/bear narratives
+- Organize scenario implications and decision-relevant contrasts across the generated futures
 - Generate the user-facing research report
 - Check whether every key conclusion is evidence-backed
 - Check scenario probabilities sum to 1
@@ -257,7 +257,7 @@ The final report follows a fixed structure for easier comparison, testing, and f
 - Valuation View
 - Risk Analysis
 - Future Scenarios
-- Bull / Base / Bear Thesis
+- Scenario Implications
 - What To Watch Next
 - Sources
 - Disclaimer: Not financial advice.

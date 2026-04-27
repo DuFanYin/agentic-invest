@@ -188,8 +188,8 @@ If LLM output is unavailable/invalid, the node raises a runtime error (no stub f
 #### `scenario_scoring.py`
 
 LLM node (sequential, after gap_check passes).
-LLM returns raw weights (`raw_score`); Python normalises to `sum = 1` before constructing `Scenario` objects (avoids Pydantic `le=1` violation on unnormalised values).
-Pads to minimum 3 scenarios if LLM returns fewer.
+LLM returns raw weights (`raw_probability`); Python normalises to `sum = 1` before constructing `Scenario` objects.
+Requires 3-5 scenarios from the model; out-of-range counts are treated as invalid output.
 If scenario generation fails, the node raises a runtime error (no stub scenario fallback).
 
 #### `report_verification.py`

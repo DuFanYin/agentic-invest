@@ -105,8 +105,17 @@ const metricGroupsFromAnalysis = (analysis) => {
     return { group, items };
   }).filter(Boolean);
 };
-const scenarioTypeByIndex = (idx) => (idx === 0 ? 'bull' : idx === 1 ? 'base' : 'bear');
-const scenarioNameByType = (type) => (type === 'bull' ? 'Bull' : type === 'base' ? 'Base' : 'Bear');
+const MAGNITUDE_RE = /^(bearish|bullish)-([123])$|^(neutral)$/;
+const scenarioColorClass = (tags) => {
+  const tag = (tags || []).find(t => MAGNITUDE_RE.test(t)) || 'neutral';
+  return tag; // e.g. "bullish-2", "bearish-1", "neutral"
+};
+const scenarioAccentColor = (tags) => {
+  const tag = (tags || []).find(t => MAGNITUDE_RE.test(t)) || 'neutral';
+  if (tag.startsWith('bullish')) return 'var(--accent)';
+  if (tag.startsWith('bearish')) return 'var(--err)';
+  return 'var(--warn)';
+};
 const revealSections = (setSections) => {
   const order = ['intent', 'evidence', 'fundamental', 'sentiment', 'scenarios', 'summary'];
   order.forEach((section, idx) => {
@@ -258,25 +267,35 @@ function SentimentSection({ sentiment }) {
 
 function ScenariosSection({ scenarios }) {
   const items = Array.isArray(scenarios) ? scenarios : [];
-  const sum = items.reduce((acc, s) => acc + (Number(s.score) || 0), 0);
+  const sum = items.reduce((acc, s) => acc + (Number(s.probability) || 0), 0);
   return (
     <div className="report-section">
       <SectionLabel>Scenarios</SectionLabel>
       <div className="section-title">Forward Scenarios</div>
       <div className="scenario-list">
         {items.map((s, idx) => {
-          const type = scenarioTypeByIndex(idx);
-          const pct = Number(s.score) || 0;
+          const colorClass = scenarioColorClass(s.tags);
+          const accentColor = scenarioAccentColor(s.tags);
+          const pct = Number(s.probability) || 0;
+          const domainTags = (s.tags || []).filter(t => !MAGNITUDE_RE.test(t));
           return (
-          <div className={`scenario-card ${type}`} key={`${s.name}-${idx}`}>
+          <div className={`scenario-card ${colorClass}`} key={s.id || `${s.name}-${idx}`}>
             <div className="scenario-header">
-              <span className={`scenario-name ${type}`}>{scenarioNameByType(type).toUpperCase()} — {s.name}</span>
-              <span className="scenario-pct" style={{color: type==='bull'?'var(--accent)':type==='base'?'var(--warn)':'var(--err)'}}>{formatPct(pct)}</span>
+              <span className="scenario-name" style={{color: accentColor}}>{s.name}</span>
+              <span className="scenario-pct" style={{color: accentColor}}>{formatPct(pct)}</span>
             </div>
             <div className="scenario-bar-track">
-              <div className={`scenario-bar-fill ${type}`} style={{width:`${Math.round(pct * 100)}%`}}></div>
+              <div className="scenario-bar-fill" style={{width:`${Math.round(pct * 100)}%`, background: accentColor}}></div>
+            </div>
+            <div className="scenario-tags">
+              {(s.tags || []).map(t => (
+                <span className={`scenario-tag${MAGNITUDE_RE.test(t) ? ' magnitude' : ''}`} key={t}>{t}</span>
+              ))}
             </div>
             <div className="scenario-desc">{s.description}</div>
+            {s.drivers && s.drivers.length > 0 && (
+              <div className="scenario-meta">Drivers: {s.drivers.join(', ')}</div>
+            )}
             <div className="scenario-triggers">Watch: {(s.triggers || []).join(', ') || 'N/A'}</div>
           </div>
         )})}

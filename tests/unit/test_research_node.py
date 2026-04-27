@@ -6,6 +6,7 @@ import pytest
 from unittest.mock import MagicMock, patch
 
 from src.server.agents.research import research_node, _detect_conflicts
+from src.server.models.analysis import NormalizedData
 from src.server.models.intent import ResearchIntent
 from src.server.models.evidence import Evidence
 
@@ -122,16 +123,16 @@ def test_normalized_data_has_metrics():
     with _patch():
         result = research_node(_base_state())
     nd = result["normalized_data"]
-    assert "metrics" in nd
-    assert "ttm" in nd["metrics"]
-    assert "three_year_avg" in nd["metrics"]
-    assert "latest_quarter" in nd["metrics"]
+    assert isinstance(nd, NormalizedData)
+    assert nd.metrics.ttm
+    assert nd.metrics.three_year_avg is not None
+    assert nd.metrics.latest_quarter is not None
 
 
 def test_normalized_data_has_missing_fields_list():
     with _patch():
         result = research_node(_base_state())
-    assert isinstance(result["normalized_data"]["missing_fields"], list)
+    assert isinstance(result["normalized_data"].missing_fields, list)
 
 
 def test_research_pass_incremented():
@@ -222,7 +223,7 @@ def test_missing_fields_from_financials_propagated():
     }
     with _patch(finance=_mock_finance(financials=fin)):
         result = research_node(_base_state())
-    assert "revenue" in result["normalized_data"]["missing_fields"]
+    assert "revenue" in result["normalized_data"].missing_fields
 
 
 # ── Fallback when no ticker ────────────────────────────────────────────────
@@ -319,8 +320,8 @@ def test_evidence_ids_offset_on_second_pass():
 def test_price_history_stored_in_metrics():
     with _patch():
         result = research_node(_base_state())
-    assert "price_history" in result["normalized_data"]["metrics"]
-    assert result["normalized_data"]["metrics"]["price_history"]["return_1y_pct"] == 22.4
+    assert result["normalized_data"].metrics.price_history
+    assert result["normalized_data"].metrics.price_history["return_1y_pct"] == 22.4
 
 
 # ── Conflict detection ─────────────────────────────────────────────────────
@@ -369,5 +370,6 @@ def test_conflicts_stored_in_normalized_data():
     }])
     with _patch(finance=finance, web=web):
         result = research_node(_base_state())
-    assert "conflicts" in result["normalized_data"]
-    assert isinstance(result["normalized_data"]["conflicts"], list)
+    nd = result["normalized_data"]
+    assert isinstance(nd, NormalizedData)
+    assert isinstance(nd.conflicts, list)

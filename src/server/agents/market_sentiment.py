@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import logging
 
+from src.server.models.analysis import MarketSentiment
 from src.server.models.state import ResearchState
 from src.server.services.openrouter import OpenRouterClient
 from src.server.utils.status import update_status
@@ -64,7 +65,7 @@ PRICE / MARKET DATA:
 
 def market_sentiment_node(state: ResearchState) -> ResearchState:
     evidence = state.get("evidence") or []
-    normalized_data = state.get("normalized_data") or {}
+    normalized_data = state.get("normalized_data")
     statuses = list(state.get("agent_statuses") or [])
     if statuses:
         statuses = update_status(
@@ -74,19 +75,16 @@ def market_sentiment_node(state: ResearchState) -> ResearchState:
 
     news_evidence = [ev for ev in evidence if ev.source_type in ("news", "web")]
     all_evidence_ids = [ev.id for ev in evidence]
-    price_history = normalized_data.get("metrics", {}).get("price_history", {})
+    price_history = normalized_data.metrics.price_history if normalized_data else {}
 
-    result: dict | None = None
+    result: MarketSentiment | None = None
 
     if evidence:
         prompt = _build_prompt(news_evidence, price_history, all_evidence_ids)
         try:
             raw = _llm.call_with_retry(prompt, system=_SYSTEM)
             parsed = json.loads(raw)
-            parsed["agent"] = "market_sentiment"
-            parsed.setdefault("missing_fields", [])
-            parsed["_llm_used"] = True
-            result = parsed
+            result = MarketSentiment.model_validate(parsed)
         except Exception as exc:
             logger.warning("market_sentiment LLM failed: %s", exc)
 
@@ -105,20 +103,17 @@ def market_sentiment_node(state: ResearchState) -> ResearchState:
         raise RuntimeError(msg)
 
     # Surface missing fields as open questions so gap_check has agent-sourced signal
-    agent_questions: list[str] = []
-    if result.get("_llm_used") and result.get("missing_fields"):
-        agent_questions = [
-            f"market_sentiment needs: {f}" for f in result["missing_fields"]
-        ]
+    agent_questions: list[str] = [
+        f"market_sentiment needs: {f}" for f in result.missing_fields
+    ]
 
     if statuses:
         statuses = update_status(
             statuses, "market_sentiment",
             lifecycle="standby", phase="analyzing_sentiment", action="sentiment ready",
             details=[
-                f"claims={len(result.get('claims', []))}",
-                f"direction={result.get('news_sentiment', {}).get('direction', 'unknown')}",
-                f"llm={'yes' if result.get('_llm_used') else 'no'}",
+                f"claims={len(result.claims)}",
+                f"direction={result.news_sentiment.direction}",
                 f"questions={len(agent_questions)}",
             ],
         )

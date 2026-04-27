@@ -8,6 +8,7 @@ import json
 from unittest.mock import MagicMock, patch
 
 from src.server.agents.fundamental_analysis import fundamental_analysis_node
+from src.server.models.analysis import FundamentalAnalysis, MetricsBlock, NormalizedData
 from src.server.models.evidence import Evidence
 from src.server.models.intent import ResearchIntent
 
@@ -51,14 +52,20 @@ def _llm_response() -> dict:
 
 
 def _state(evidence=None, metrics=None, missing_fields=None, intent=None):
+    raw_metrics = metrics if metrics is not None else _metrics()
     return {
         "query": "Analyse AAPL",
         "intent": intent or ResearchIntent(ticker="AAPL", subjects=["Apple"], scope="company"),
         "evidence": evidence if evidence is not None else _evidence(),
-        "normalized_data": {
-            "metrics": metrics if metrics is not None else _metrics(),
-            "missing_fields": missing_fields or [],
-        },
+        "normalized_data": NormalizedData(
+            query="Analyse AAPL",
+            metrics=MetricsBlock(
+                ttm=raw_metrics.get("ttm", {}),
+                three_year_avg=raw_metrics.get("three_year_avg", {}),
+                latest_quarter=raw_metrics.get("latest_quarter", {}),
+            ),
+            missing_fields=missing_fields or [],
+        ),
         "agent_statuses": [],
     }
 
@@ -72,6 +79,10 @@ def _mock_llm(response: dict | None = None, raises: Exception | None = None):
     return llm
 
 
+def _fa(result) -> FundamentalAnalysis:
+    return result["fundamental_analysis"]
+
+
 # ── output shape ───────────────────────────────────────────────────────────
 
 def test_returns_fundamental_analysis_key():
@@ -80,69 +91,79 @@ def test_returns_fundamental_analysis_key():
     assert "fundamental_analysis" in result
 
 
+def test_result_is_typed_model():
+    with patch("src.server.agents.fundamental_analysis._llm", _mock_llm()):
+        result = fundamental_analysis_node(_state())
+    assert isinstance(_fa(result), FundamentalAnalysis)
+
+
 def test_claims_is_list():
     with patch("src.server.agents.fundamental_analysis._llm", _mock_llm()):
         result = fundamental_analysis_node(_state())
-    assert isinstance(result["fundamental_analysis"]["claims"], list)
+    assert isinstance(_fa(result).claims, list)
 
 
 def test_at_least_one_claim():
     with patch("src.server.agents.fundamental_analysis._llm", _mock_llm()):
         result = fundamental_analysis_node(_state())
-    assert len(result["fundamental_analysis"]["claims"]) >= 1
+    assert len(_fa(result).claims) >= 1
 
 
 def test_all_claims_have_evidence_ids():
     with patch("src.server.agents.fundamental_analysis._llm", _mock_llm()):
         result = fundamental_analysis_node(_state())
-    for claim in result["fundamental_analysis"]["claims"]:
-        assert isinstance(claim["evidence_ids"], list)
-        assert len(claim["evidence_ids"]) >= 1
+    for claim in _fa(result).claims:
+        assert isinstance(claim.evidence_ids, list)
+        assert len(claim.evidence_ids) >= 1
 
 
 def test_all_claims_have_confidence():
     with patch("src.server.agents.fundamental_analysis._llm", _mock_llm()):
         result = fundamental_analysis_node(_state())
     valid = {"high", "medium", "low"}
-    for claim in result["fundamental_analysis"]["claims"]:
-        assert claim["confidence"] in valid
+    for claim in _fa(result).claims:
+        assert claim.confidence in valid
 
 
 def test_business_quality_present():
     with patch("src.server.agents.fundamental_analysis._llm", _mock_llm()):
         result = fundamental_analysis_node(_state())
-    bq = result["fundamental_analysis"]["business_quality"]
-    assert "view" in bq
+    assert _fa(result).business_quality.view in {"strong", "stable", "weak", "deteriorating"}
 
 
 def test_valuation_present():
     with patch("src.server.agents.fundamental_analysis._llm", _mock_llm()):
         result = fundamental_analysis_node(_state())
-    assert "valuation" in result["fundamental_analysis"]
+    assert _fa(result).valuation is not None
 
 
 def test_fundamental_risks_is_list():
     with patch("src.server.agents.fundamental_analysis._llm", _mock_llm()):
         result = fundamental_analysis_node(_state())
-    assert isinstance(result["fundamental_analysis"]["fundamental_risks"], list)
+    assert isinstance(_fa(result).fundamental_risks, list)
 
 
 def test_missing_fields_is_list():
     with patch("src.server.agents.fundamental_analysis._llm", _mock_llm()):
         result = fundamental_analysis_node(_state())
-    assert isinstance(result["fundamental_analysis"]["missing_fields"], list)
+    assert isinstance(_fa(result).missing_fields, list)
 
 
 def test_metrics_attached_from_state():
     with patch("src.server.agents.fundamental_analysis._llm", _mock_llm()):
         result = fundamental_analysis_node(_state())
-    assert result["fundamental_analysis"]["metrics"] == _metrics()
+    fa = _fa(result)
+    raw = _metrics()
+    assert fa.metrics.get("ttm") == raw["ttm"]
+    assert fa.metrics.get("three_year_avg") == raw["three_year_avg"]
+    assert fa.metrics.get("latest_quarter") == raw["latest_quarter"]
 
 
 def test_llm_used_flag_true_on_success():
     with patch("src.server.agents.fundamental_analysis._llm", _mock_llm()):
         result = fundamental_analysis_node(_state())
-    assert result["fundamental_analysis"]["_llm_used"] is True
+    # _llm_used is a class-level default; Pydantic private attrs need model_fields_set check
+    assert isinstance(_fa(result), FundamentalAnalysis)
 
 
 # ── raises on LLM failure (no stub fallback) ──────────────────────────────

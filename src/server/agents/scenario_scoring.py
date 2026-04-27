@@ -1,10 +1,11 @@
-"""Scenario scoring node — LLM generates scenarios, Python normalises scores."""
+"""Scenario scoring node — LLM generates scenarios, Python normalises probabilities."""
 
 from __future__ import annotations
 
 import json
 import logging
 
+from src.server.models.analysis import FundamentalAnalysis, MarketSentiment
 from src.server.models.scenario import Scenario
 from src.server.models.state import ResearchState
 from src.server.services.openrouter import OpenRouterClient
@@ -16,48 +17,67 @@ _llm = OpenRouterClient()
 _NODE = "scenario_scoring"
 
 _MIN_SCENARIOS = 3
+_MAX_SCENARIOS = 5
 
 _SYSTEM = (
     "You are an investment strategist. "
-    "Given the analysis below, generate investment scenarios with probability weights. "
+    "Given the analysis below, generate distinct future scenarios with probability weights. "
     "Return only valid JSON — no markdown, no prose outside the JSON."
 )
 
 _SCHEMA = """
-Return a JSON array of exactly 3 scenario objects (bull, base, bear — in that order):
+Return a JSON array of 3–5 scenario objects. Each scenario describes a distinct future state.
 [
   {
-    "name": "Bull case",
+    "name": "...",
     "description": "...",
-    "raw_score": 0.3,
+    "raw_probability": 0.4,
+    "drivers": ["..."],
     "triggers": ["..."],
     "signals": ["..."],
-    "evidence_ids": ["ev_001", ...]
+    "evidence_ids": ["ev_001", ...],
+    "time_horizon": "...",
+    "tags": ["bullish-2", "ai-demand", "rate-sensitive"]
   },
   ...
 ]
 Rules:
-- raw_score is your estimated probability weight (need not sum to 1 — Python will normalise).
+- Scenarios are centered on what future state occurs, not on bull/bear framing.
+  Use descriptive names: "AI capex supercycle", "Rate plateau stalls growth", not "Bull case".
+- raw_probability: your estimated weight (need not sum to 1 — Python normalises).
+- drivers: what structural forces make this scenario possible.
+- triggers: specific events that would cause this scenario to play out.
+- signals: observable early indicators to watch for.
+- tags (required, at least 1): must include exactly one magnitude tag from:
+    bearish-3, bearish-2, bearish-1, neutral, bullish-1, bullish-2, bullish-3
+  plus any domain labels that apply, e.g. "ai-demand", "policy-risk", "rate-sensitive".
 - Each scenario must cite at least one evidence_id from the list provided.
-- triggers: conditions that would cause this scenario to play out.
-- signals: observable early indicators to watch.
-- Base case raw_score should typically be the highest.
+- Scenarios must represent meaningfully different causal paths, not just optimistic/pessimistic
+  variants of the same story.
 """
 
 
 def _build_prompt(fundamental_analysis, market_sentiment, evidence, intent) -> str:
     evidence_ids = ", ".join(ev.id for ev in evidence) if evidence else "none"
 
-    fa_claims = "\n".join(
-        f"- {c['statement']} (confidence: {c.get('confidence','?')})"
-        for c in fundamental_analysis.get("claims", [])
-    ) or "No fundamental claims available."
+    if isinstance(fundamental_analysis, FundamentalAnalysis):
+        fa_claims = "\n".join(
+            f"- {c.statement} (confidence: {c.confidence})"
+            for c in fundamental_analysis.claims
+        ) or "No fundamental claims available."
+        fa_view = fundamental_analysis.business_quality.view
+        fa_val = fundamental_analysis.valuation.relative_multiple_view
+    else:
+        fa_claims = "No fundamental claims available."
+        fa_view = "unknown"
+        fa_val = "unknown"
 
-    fa_view = fundamental_analysis.get("business_quality", {}).get("view", "unknown")
-    fa_val = fundamental_analysis.get("valuation", {}).get("relative_multiple_view", "unknown")
-
-    ms_direction = market_sentiment.get("news_sentiment", {}).get("direction", "unknown")
-    ms_narrative = market_sentiment.get("market_narrative", {}).get("summary", "")
+    if isinstance(market_sentiment, MarketSentiment):
+        ms_direction = market_sentiment.news_sentiment.direction
+        ms_narrative = market_sentiment.market_narrative.summary
+    else:
+        ms_direction = "unknown"
+        ms_narrative = ""
 
     horizon = intent.time_horizon if intent else "unspecified"
     ticker = intent.ticker if intent else "unknown"
@@ -81,68 +101,49 @@ Narrative: {ms_narrative}
 
 
 def _normalise(scenarios: list[Scenario]) -> list[Scenario]:
-    total = sum(s.score for s in scenarios) or 1.0
+    total = sum(s.probability for s in scenarios) or 1.0
     return [
-        Scenario(
-            name=s.name,
-            description=s.description,
-            score=round(s.score / total, 6),
-            triggers=s.triggers,
-            signals=s.signals,
-            evidence_ids=s.evidence_ids,
-        )
+        s.model_copy(update={"probability": round(s.probability / total, 6)})
         for s in scenarios
     ]
-
-
-def _pad_to_minimum(scenarios: list[Scenario], evidence_ids: list[str]) -> list[Scenario]:
-    """Ensure at least _MIN_SCENARIOS exist; pad with an 'Other' scenario at weight 0."""
-    defaults = [
-        ("Bull case", "Upside scenario driven by stronger-than-expected results."),
-        ("Base case", "Fundamentals evolve in line with current expectations."),
-        ("Bear case", "Downside scenario driven by deteriorating conditions."),
-    ]
-    while len(scenarios) < _MIN_SCENARIOS:
-        name, desc = defaults[len(scenarios)]
-        scenarios.append(Scenario(
-            name=name,
-            description=desc,
-            score=0.0,
-            evidence_ids=evidence_ids[:1],
-        ))
-    return scenarios
 
 
 def _parse_llm_scenarios(raw: str, evidence_ids: list[str]) -> list[Scenario]:
     data = json.loads(raw)
     if not isinstance(data, list):
         raise ValueError("expected JSON array")
-    # Collect raw weights first, then normalise before constructing Scenario
-    # (Scenario.score has ge=0, le=1 so we can't store unnormalised values)
-    items = []
-    weights = []
-    for item in data:
-        items.append(item)
-        weights.append(max(0.0, float(item.get("raw_score", 0.0))))
 
+    weights = [max(0.0, float(item.get("raw_probability", 0.0))) for item in data]
     total = sum(weights) or 1.0
+
     scenarios = []
-    for item, w in zip(items, weights):
+    for i, (item, w) in enumerate(zip(data, weights)):
+        tags = item.get("tags") or ["neutral"]
+        if not isinstance(tags, list) or not tags:
+            tags = ["neutral"]
         scenarios.append(Scenario(
+            id=f"sc_{i + 1:03d}",
             name=item["name"],
             description=item["description"],
-            score=round(w / total, 6),
+            probability=round(w / total, 6),
+            drivers=item.get("drivers", []),
             triggers=item.get("triggers", []),
             signals=item.get("signals", []),
             evidence_ids=item.get("evidence_ids", evidence_ids[:1]),
+            time_horizon=item.get("time_horizon"),
+            tags=tags,
         ))
+    if len(scenarios) < _MIN_SCENARIOS or len(scenarios) > _MAX_SCENARIOS:
+        raise ValueError(
+            f"expected {_MIN_SCENARIOS}-{_MAX_SCENARIOS} scenarios, got {len(scenarios)}"
+        )
     return scenarios
 
 
 def scenario_scoring_node(state: ResearchState) -> ResearchState:
     evidence = state.get("evidence") or []
-    fundamental_analysis = state.get("fundamental_analysis") or {}
-    market_sentiment = state.get("market_sentiment") or {}
+    fundamental_analysis = state.get("fundamental_analysis")
+    market_sentiment = state.get("market_sentiment")
     intent = state.get("intent")
     statuses = list(state.get("agent_statuses") or [])
     if statuses:
@@ -160,7 +161,6 @@ def scenario_scoring_node(state: ResearchState) -> ResearchState:
         try:
             raw = _llm.call_with_retry(prompt, system=_SYSTEM)
             parsed = _parse_llm_scenarios(raw, evidence_ids)
-            parsed = _pad_to_minimum(parsed, evidence_ids)
             scenarios = _normalise(parsed)
             llm_used = True
         except Exception as exc:
@@ -180,7 +180,10 @@ def scenario_scoring_node(state: ResearchState) -> ResearchState:
             )
         raise RuntimeError(msg)
 
-    score_sum = round(sum(s.score for s in scenarios), 6)
+    # Sort by probability descending — most likely scenario first
+    scenarios = sorted(scenarios, key=lambda s: s.probability, reverse=True)
+
+    prob_sum = round(sum(s.probability for s in scenarios), 6)
 
     if statuses:
         statuses = update_status(
@@ -188,7 +191,7 @@ def scenario_scoring_node(state: ResearchState) -> ResearchState:
             lifecycle="standby", phase="scoring_scenarios", action="scenarios ready",
             details=[
                 f"scenarios={len(scenarios)}",
-                f"score_sum={score_sum}",
+                f"prob_sum={prob_sum}",
                 f"llm={'yes' if llm_used else 'no'}",
             ],
         )

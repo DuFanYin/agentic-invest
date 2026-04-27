@@ -45,7 +45,7 @@ def test_research_endpoint_returns_valid_response() -> None:
     assert data["report_markdown"]
     assert isinstance(data["scenarios"], list)
     assert len(data["scenarios"]) >= 3
-    total = sum(s["score"] for s in data["scenarios"])
+    total = sum(s["probability"] for s in data["scenarios"])
     assert abs(total - 1.0) < 1e-6
 
 

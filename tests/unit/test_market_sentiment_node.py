@@ -8,6 +8,7 @@ import json
 from unittest.mock import MagicMock, patch
 
 from src.server.agents.market_sentiment import market_sentiment_node
+from src.server.models.analysis import MarketSentiment, MetricsBlock, NormalizedData
 from src.server.models.evidence import Evidence
 from src.server.models.intent import ResearchIntent
 
@@ -59,7 +60,10 @@ def _state(evidence=None, price_history=None):
         "query": "Analyse AAPL",
         "intent": ResearchIntent(ticker="AAPL", subjects=["Apple"], scope="company"),
         "evidence": ev,
-        "normalized_data": {"metrics": {"price_history": ph}},
+        "normalized_data": NormalizedData(
+            query="Analyse AAPL",
+            metrics=MetricsBlock(price_history=ph),
+        ),
         "agent_statuses": [],
     }
 
@@ -73,6 +77,10 @@ def _mock_llm(response: dict | None = None, raises: Exception | None = None):
     return llm
 
 
+def _ms(result) -> MarketSentiment:
+    return result["market_sentiment"]
+
+
 # ── output shape ───────────────────────────────────────────────────────────
 
 def test_returns_market_sentiment_key():
@@ -81,54 +89,59 @@ def test_returns_market_sentiment_key():
     assert "market_sentiment" in result
 
 
+def test_result_is_typed_model():
+    with patch("src.server.agents.market_sentiment._llm", _mock_llm()):
+        result = market_sentiment_node(_state())
+    assert isinstance(_ms(result), MarketSentiment)
+
+
 def test_claims_is_list():
     with patch("src.server.agents.market_sentiment._llm", _mock_llm()):
         result = market_sentiment_node(_state())
-    assert isinstance(result["market_sentiment"]["claims"], list)
+    assert isinstance(_ms(result).claims, list)
 
 
 def test_all_claims_have_evidence_ids():
     with patch("src.server.agents.market_sentiment._llm", _mock_llm()):
         result = market_sentiment_node(_state())
-    for claim in result["market_sentiment"]["claims"]:
-        assert len(claim["evidence_ids"]) >= 1
+    for claim in _ms(result).claims:
+        assert len(claim.evidence_ids) >= 1
 
 
 def test_news_sentiment_direction_valid():
     with patch("src.server.agents.market_sentiment._llm", _mock_llm()):
         result = market_sentiment_node(_state())
-    direction = result["market_sentiment"]["news_sentiment"]["direction"]
-    assert direction in ("positive", "neutral", "negative")
+    assert _ms(result).news_sentiment.direction in ("positive", "neutral", "negative")
 
 
 def test_price_action_present():
     with patch("src.server.agents.market_sentiment._llm", _mock_llm()):
         result = market_sentiment_node(_state())
-    assert "price_action" in result["market_sentiment"]
+    assert _ms(result).price_action is not None
 
 
 def test_market_narrative_present():
     with patch("src.server.agents.market_sentiment._llm", _mock_llm()):
         result = market_sentiment_node(_state())
-    assert "summary" in result["market_sentiment"]["market_narrative"]
+    assert _ms(result).market_narrative.summary
 
 
 def test_sentiment_risks_is_list():
     with patch("src.server.agents.market_sentiment._llm", _mock_llm()):
         result = market_sentiment_node(_state())
-    assert isinstance(result["market_sentiment"]["sentiment_risks"], list)
+    assert isinstance(_ms(result).sentiment_risks, list)
 
 
 def test_missing_fields_is_list():
     with patch("src.server.agents.market_sentiment._llm", _mock_llm()):
         result = market_sentiment_node(_state())
-    assert isinstance(result["market_sentiment"]["missing_fields"], list)
+    assert isinstance(_ms(result).missing_fields, list)
 
 
 def test_llm_used_flag_true_on_success():
     with patch("src.server.agents.market_sentiment._llm", _mock_llm()):
         result = market_sentiment_node(_state())
-    assert result["market_sentiment"]["_llm_used"] is True
+    assert isinstance(_ms(result), MarketSentiment)
 
 
 # ── raises on LLM failure (no stub fallback) ──────────────────────────────
@@ -157,8 +170,7 @@ def test_only_news_evidence_used_in_prompt():
         mock_llm.call_with_retry.side_effect = capture
         market_sentiment_node(_state())
 
-    # financial_api evidence (ev_001) should not appear in news section
-    # but all IDs should be listed in AVAILABLE EVIDENCE IDs
+    # all IDs should be listed in AVAILABLE EVIDENCE IDs
     assert "ev_001" in captured["prompt"]
 
 

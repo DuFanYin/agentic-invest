@@ -19,6 +19,7 @@ from typing import Annotated, Any
 
 from typing_extensions import TypedDict
 
+from src.server.models.analysis import FundamentalAnalysis, MarketSentiment, NormalizedData
 from src.server.models.evidence import Evidence
 from src.server.models.intent import ResearchIntent
 from src.server.models.response import AgentStatus, ValidationResult
@@ -96,11 +97,11 @@ class ResearchState(TypedDict, total=False):
 
     # ── Research agent ─────────────────────────────────────────────────────
     evidence: Annotated[list[Evidence], operator.add]   # append across passes
-    normalized_data: dict[str, Any]
+    normalized_data: NormalizedData
 
     # ── Analysis agents ────────────────────────────────────────────────────
-    fundamental_analysis: dict[str, Any]
-    market_sentiment: dict[str, Any]
+    fundamental_analysis: FundamentalAnalysis
+    market_sentiment: MarketSentiment
 
     # ── Gap / retry tracking ───────────────────────────────────────────────
     # agent_questions: accumulated by analysis nodes within a pass; gap_check

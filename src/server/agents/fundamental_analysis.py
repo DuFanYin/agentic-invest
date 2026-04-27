@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import logging
 
+from src.server.models.analysis import FundamentalAnalysis
 from src.server.models.state import ResearchState
 from src.server.services.openrouter import OpenRouterClient
 from src.server.utils.status import update_status
@@ -72,7 +73,7 @@ MISSING DATA: {', '.join(missing_fields) if missing_fields else 'none reported'}
 
 def fundamental_analysis_node(state: ResearchState) -> ResearchState:
     evidence = state.get("evidence") or []
-    normalized_data = state.get("normalized_data") or {}
+    normalized_data = state.get("normalized_data")
     intent = state.get("intent")
     statuses = list(state.get("agent_statuses") or [])
     if statuses:
@@ -81,21 +82,19 @@ def fundamental_analysis_node(state: ResearchState) -> ResearchState:
             lifecycle="active", phase="analyzing_fundamentals", action="building analysis",
         )
 
-    metrics = normalized_data.get("metrics", {})
-    missing_fields = normalized_data.get("missing_fields", [])
+    metrics = normalized_data.metrics.model_dump() if normalized_data else {}
+    missing_fields = normalized_data.missing_fields if normalized_data else []
 
-    result: dict | None = None
+    result: FundamentalAnalysis | None = None
 
     if evidence:
         prompt = _build_prompt(evidence, metrics, missing_fields, intent)
         try:
             raw = _llm.call_with_retry(prompt, system=_SYSTEM)
             parsed = json.loads(raw)
-            parsed["agent"] = "fundamental_analysis"
             parsed["metrics"] = metrics
             parsed.setdefault("missing_fields", missing_fields)
-            parsed["_llm_used"] = True
-            result = parsed
+            result = FundamentalAnalysis.model_validate(parsed)
         except Exception as exc:
             logger.warning("fundamental_analysis LLM failed: %s", exc)
 
@@ -114,19 +113,16 @@ def fundamental_analysis_node(state: ResearchState) -> ResearchState:
         raise RuntimeError(msg)
 
     # Surface missing fields as open questions so gap_check has agent-sourced signal
-    agent_questions: list[str] = []
-    if result.get("_llm_used") and result.get("missing_fields"):
-        agent_questions = [
-            f"fundamental_analysis needs: {f}" for f in result["missing_fields"]
-        ]
+    agent_questions: list[str] = [
+        f"fundamental_analysis needs: {f}" for f in result.missing_fields
+    ]
 
     if statuses:
         statuses = update_status(
             statuses, "fundamental_analysis",
             lifecycle="standby", phase="analyzing_fundamentals", action="fundamentals ready",
             details=[
-                f"claims={len(result.get('claims', []))}",
-                f"llm={'yes' if result.get('_llm_used') else 'no'}",
+                f"claims={len(result.claims)}",
                 f"questions={len(agent_questions)}",
             ],
         )
