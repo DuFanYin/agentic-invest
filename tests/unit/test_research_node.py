@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import pytest
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 from src.server.agents.research import research_node, _detect_conflicts
 from src.server.models.analysis import NormalizedData
@@ -20,12 +20,12 @@ def _intent(ticker: str = "AAPL") -> ResearchIntent:
     return ResearchIntent(ticker=ticker, subjects=["Apple Inc"], scope="company")
 
 
-def _base_state(ticker: str = "AAPL", pass_id: int = 0) -> dict:
+def _base_state(ticker: str = "AAPL", iteration_id: int = 0) -> dict:
     return {
         "query": f"Analyse {ticker}",
         "intent": _intent(ticker),
-        "research_pass": pass_id,
-        "open_questions": [],
+        "research_iteration": iteration_id,
+        "retry_questions": [],
         "agent_statuses": [],
     }
 
@@ -88,11 +88,22 @@ def _mock_cache():
     return c
 
 
-def _patch(finance=None, web=None):
-    """Context manager helper — patches _finance, _web, and _cache."""
+def _mock_macro(fred: dict | None = None, signals: dict | None = None):
+    """Macro client that returns empty data by default (no FRED key in tests)."""
+    client = MagicMock()
+    client.get_all = AsyncMock(return_value={
+        "fred": fred if fred is not None else {},
+        "market_signals": signals if signals is not None else {},
+    })
+    return client
+
+
+def _patch(finance=None, web=None, macro=None):
+    """Context manager helper — patches _finance, _macro, _web, and _cache."""
     from contextlib import ExitStack
     stack = ExitStack()
     stack.enter_context(patch("src.server.agents.research._finance", finance or _mock_finance()))
+    stack.enter_context(patch("src.server.agents.research._macro", macro or _mock_macro()))
     stack.enter_context(patch("src.server.agents.research._web", web or _mock_web()))
     stack.enter_context(patch("src.server.agents.research._cache", _mock_cache()))
     return stack
@@ -127,10 +138,10 @@ def test_normalized_data_has_metrics():
     assert nd.metrics.latest_quarter is not None
 
 
-def test_research_pass_incremented():
+def test_research_iteration_incremented():
     with _patch():
-        result = _run(research_node(_base_state(pass_id=0)))
-    assert result["research_pass"] == 1
+        result = _run(research_node(_base_state(iteration_id=0)))
+    assert result["research_iteration"] == 1
 
 
 # ── Source types ───────────────────────────────────────────────────────────
@@ -190,15 +201,15 @@ def test_no_ticker_web_search_still_runs():
     state = {
         "query": "What are good ETFs?",
         "intent": ResearchIntent(ticker=None, subjects=[], scope="general"),
-        "research_pass": 0,
-        "open_questions": [],
+        "research_iteration": 0,
+        "retry_questions": [],
         "agent_statuses": [],
     }
     with _patch(web=web):
         result = _run(research_node(state))
     web.search.assert_called_once()
     assert len(result["evidence"]) >= 1
-    assert all(ev.source_type == "web" for ev in result["evidence"])
+    assert all(ev.source_type in ("web", "macro_api") for ev in result["evidence"])
 
 
 def test_no_ticker_no_web_results_raises():
@@ -206,8 +217,8 @@ def test_no_ticker_no_web_results_raises():
     state = {
         "query": "What are good ETFs?",
         "intent": ResearchIntent(ticker=None, subjects=[], scope="general"),
-        "research_pass": 0,
-        "open_questions": [],
+        "research_iteration": 0,
+        "retry_questions": [],
         "agent_statuses": [],
     }
     with pytest.raises(RuntimeError, match="research"):
@@ -249,7 +260,7 @@ def test_all_services_fail_raises():
 
 def test_evidence_ids_offset_on_second_pass():
     with _patch():
-        result = _run(research_node(_base_state(pass_id=1)))
+        result = _run(research_node(_base_state(iteration_id=1)))
     for ev in result["evidence"]:
         num = int(ev.id.split("_")[1])
         assert num >= 100

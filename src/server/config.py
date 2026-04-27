@@ -43,3 +43,4 @@ LLM_HTTP_REFERER: str | None = os.getenv("LLM_HTTP_REFERER") or None
 LLM_APP_TITLE: str | None = os.getenv("LLM_APP_TITLE") or None
 
 TAVILY_API_KEY: str | None = os.getenv("TAVILY_API_KEY") or None
+FRED_API_KEY: str | None = os.getenv("FRED_API_KEY") or None

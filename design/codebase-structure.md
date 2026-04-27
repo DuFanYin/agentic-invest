@@ -41,7 +41,7 @@ agentic-invest/
 │   │   │   ├── fundamental_analysis.py
 │   │   │   ├── market_sentiment.py
 │   │   │   ├── scenario_scoring.py
-│   │   │   └── report_verification.py
+│   │   │   └── report_finalize.py
 │   │   ├── services/
 │   │   │   ├── __init__.py
 │   │   │   ├── openrouter.py
@@ -135,8 +135,8 @@ Pydantic models shared across all layers.
 
 `ResearchState` reducer notes:
 - `evidence`: `operator.add` — parallel passes accumulate items
-- `agent_questions`: `_accumulate_or_reset` — parallel analysis nodes append missing-field questions; `gap_check` clears via sentinel
-- `open_questions`: plain replace — gap_check resets each cycle
+- `agent_questions`: `_accumulate_or_reset` — parallel analysis nodes append missing-field questions; `retry_gate` clears via sentinel
+- `retry_questions`: plain replace — `retry_gate` resets each cycle
 - `agent_statuses`: `_last_list` custom reducer — merges concurrent writes by agent and prefers newer `last_update_at` snapshots
 
 ### `src/server/agents/`
@@ -148,16 +148,16 @@ LangGraph node functions and the graph wiring.
 Builds and owns the `StateGraph`. Graph topology:
 
 ```
-START → parse_intent → research → [parallel] → gap_check ─(gaps?)─→ research (retry, ≤2 passes)
+START → parse_intent → research → [parallel] → retry_gate ─(gaps?)─→ research (retry, ≤2 iterations)
                                    fundamental_analysis              └─(no gaps)─→ scenario_scoring
-                                   market_sentiment                                → report_verification
+                                   market_sentiment                                → report_finalize
                                                                                 └─(unsupported claims + retry budget)→ research
                                                                                 └─(otherwise)→ END
 ```
 
 - `_make_parse_intent_node(llm_client)`: calls `_parse_intent()` to extract `ResearchIntent` from the raw query
-- `_gap_check_node`: merges structural gaps (ticker/horizon), agent-raised questions, and research conflict signals; clears `open_questions` after `_MAX_RESEARCH_PASSES = 2`
-- `_gap_router`: returns `"research"` or `"scenario_scoring"`
+- `retry_gate_node`: merges structural gaps (ticker/horizon), agent-raised questions, and research conflict signals; clears `retry_questions` after `MAX_RESEARCH_ITERATIONS = 2`
+- `retry_router`: returns `"research"` or `"scenario_scoring"`
 - `build_graph(llm_client)`: compiles the graph per request execution
 - `OrchestratorAgent.run()`: async invoke (`graph.ainvoke`)
 - `OrchestratorAgent.run_stream()`: yields `agent_status`, `llm_call`, and `final` domain events (route layer wraps with SSE `event` names, plus `error`/`done` control events)
@@ -173,7 +173,7 @@ Collects evidence from two external sources with in-process SQLite caching:
 
 Cache keys are `sha256(prefix + parts)[:16]`. Deduplicates web URLs. If no usable evidence can be collected, the node raises a runtime error (no synthetic evidence fallback).
 
-Returns: `evidence` (list appended via reducer), `normalized_data` (metrics, missing_fields, open_question_context), incremented `research_pass`.
+Returns: `evidence` (list appended via reducer), `normalized_data` (metrics, missing_fields, open_question_context), incremented `research_iteration`.
 
 #### `fundamental_analysis.py`
 
@@ -191,17 +191,17 @@ If LLM output is unavailable/invalid, the node raises a runtime error (no stub f
 
 #### `scenario_scoring.py`
 
-LLM node (sequential, after gap_check passes).
+LLM node (sequential, after `retry_gate` passes).
 LLM returns raw weights (`raw_probability`); Python normalises to `sum(probability) = 1` before constructing `Scenario` objects.
 Requires 3-5 scenarios from the model; out-of-range counts are treated as invalid output.
 If scenario generation fails, the node raises a runtime error (no stub scenario fallback).
 
-#### `report_verification.py`
+#### `report_finalize.py`
 
 Final node — two responsibilities:
 
 1. **Pure-Python validation** (always runs): scenario probability sum, evidence field completeness (`retrieved_at`, `summary`, `reliability` required; `url` optional), claim-to-evidence citation coverage.
-2. **LLM Markdown report** via `_llm.complete_text()` (free-form, not JSON mode). Requires all 12 named sections. If generation fails, the node raises a runtime error (no template fallback). Validation errors are appended as `## Validation Warnings`, and unsupported-claim errors are surfaced as `open_questions` to trigger a supplementary research retry when budget remains.
+2. **LLM Markdown report** via `_llm.complete_text()` (free-form, not JSON mode). Requires all 12 named sections. If generation fails, the node raises a runtime error (no template fallback). Validation errors are appended as `## Validation Warnings`, and unsupported-claim errors are surfaced as `retry_questions` to trigger a supplementary research retry when budget remains.
 
 ### `src/server/services/`
 
@@ -255,43 +255,3 @@ React-in-HTML frontend without a build step (React + ReactDOM + Babel loaded fro
 
 - `index.html`: page layout + inline `type="text/babel"` app logic; submits query and consumes SSE stream (`agent_status`, `llm_call`, `final`, `error`, `done`)
 - `static/styles.css`: stylesheet
-
-### `tests/`
-
-Two-tier test suite (see `design/test-suite.md` for current inventory and counting method).
-
-**Unit tests** (`tests/unit/`) — fast, no network, all LLM/HTTP calls mocked:
-
-| File | Covers |
-|---|---|
-| `test_cache.py` | SQLite TTL cache, concurrency |
-| `test_finance_data.py` | yfinance data normalisation |
-| `test_fundamental_analysis_node.py` | LLM prompt construction, fallback |
-| `test_intent.py` | `_parse_intent` fallback when LLM unavailable |
-| `test_market_sentiment_node.py` | sentiment prompt, evidence filtering |
-| `test_openrouter.py` | model chain, retry, JSON validation, error classes |
-| `test_report_node.py` | report generation, validation error appending |
-| `test_research_node.py` | cache wiring, evidence assembly, web dedup |
-| `test_scenario_scoring.py` | probability normalisation, sum-to-1 property |
-| `test_scenario_scoring_node.py` | LLM parse, padding, fallback |
-| `test_validation.py` | probability sum, evidence completeness, claim coverage |
-| `test_web_research.py` | Tavily search, graceful degradation |
-
-**Integration tests** (`tests/integration/`) — API-level flow tests with mocked LLM wiring:
-
-| File | Covers |
-|---|---|
-| `test_research_api.py` | full `/research` request → Markdown report end-to-end |
-
-**Run commands:**
-
-```bash
-# Unit tests only (fast)
-pytest tests/unit/
-
-# Full suite including integration
-pytest
-
-# Single file
-pytest tests/unit/test_scenario_scoring.py -v
-```

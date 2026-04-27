@@ -12,12 +12,14 @@ from src.server.models.evidence import Evidence
 from src.server.models.state import ResearchState
 from src.server.services.cache import Cache
 from src.server.services.finance_data import FinanceDataClient
+from src.server.services.macro_data import MacroDataClient
 from src.server.services.web_research import WebResearchClient
 from src.server.utils.status import update_status
 
 logger = logging.getLogger(__name__)
 
 _finance = FinanceDataClient()
+_macro = MacroDataClient()
 _web = WebResearchClient()
 _cache = Cache()
 
@@ -69,12 +71,15 @@ def _detect_conflicts(evidence: list[Evidence]) -> list[dict]:
 async def research_node(state: ResearchState) -> ResearchState:
     query = state["query"]
     intent = state.get("intent")
-    open_questions: list[str] = state.get("open_questions") or []
-    pass_id: int = state.get("research_pass", 0)
+    research_focus: list[str] = state.get("research_focus") or []
+    must_have_metrics: list[str] = state.get("must_have_metrics") or []
+    plan_notes: list[str] = state.get("plan_notes") or []
+    retry_questions: list[str] = state.get("retry_questions") or []
+    iteration_id: int = state.get("research_iteration", 0)
     statuses = list(state.get("agent_statuses") or [])
 
     retrieved_at = datetime.now(UTC).isoformat()
-    id_offset = pass_id * 100
+    id_offset = iteration_id * 100
 
     ticker: str | None = intent.ticker if intent else None
 
@@ -225,11 +230,68 @@ async def research_node(state: ResearchState) -> ResearchState:
         except Exception:
             logger.warning("get_news failed for %s", ticker, exc_info=True)
 
+    # ── Macro data (FRED + yfinance macro tickers) — always collected ─────
+    try:
+        macro_all = await _macro.get_all()
+        fred = macro_all.get("fred", {})
+        signals = macro_all.get("market_signals", {})
+
+        if fred:
+            fred_lines = []
+            for series_id, item in fred.items():
+                val = item.get("value")
+                if val is None:
+                    continue
+                fred_lines.append(
+                    f"{item.get('label', series_id)}: {val} ({item.get('direction', 'stable')})"
+                )
+            if fred_lines:
+                new_evidence.append(Evidence(
+                    id=f"ev_{ev_id:03d}",
+                    source_type="macro_api",
+                    title="FRED Economic Indicators",
+                    url="https://fred.stlouisfed.org",
+                    retrieved_at=retrieved_at,
+                    summary="Key economic indicators: " + "; ".join(fred_lines),
+                    reliability="high",
+                    related_topics=["macro", "interest_rates", "inflation", "gdp", "employment"],
+                ))
+                ev_id += 1
+
+        if signals:
+            sig_lines = []
+            for ticker_sym, item in signals.items():
+                val = item.get("value")
+                if val is None:
+                    continue
+                sig_lines.append(
+                    f"{item.get('label', ticker_sym)}: {val} ({item.get('direction', 'stable')})"
+                )
+            if sig_lines:
+                new_evidence.append(Evidence(
+                    id=f"ev_{ev_id:03d}",
+                    source_type="macro_api",
+                    title="Macro Market Signals",
+                    url="https://finance.yahoo.com",
+                    retrieved_at=retrieved_at,
+                    summary="Market signals: " + "; ".join(sig_lines),
+                    reliability="high",
+                    related_topics=["macro", "vix", "rates", "dollar"],
+                ))
+                ev_id += 1
+    except Exception:
+        logger.warning("macro data collection failed", exc_info=True)
+
     # ── Web search (Tavily) — runs for any query, ticker or not ───────────
-    web_query = (
-        f"{intent.subjects[0] if intent and intent.subjects else query} "
-        f"{open_questions[0] if open_questions else 'investment analysis'}"
-    ).strip()
+    subject = intent.subjects[0] if intent and intent.subjects else query
+    if retry_questions:
+        web_query = f"{subject} {retry_questions[0]}"
+    elif research_focus:
+        # Use the first planning focus area to guide the search
+        web_query = f"{subject} {research_focus[0]}"
+    else:
+        web_query = f"{subject} investment analysis"
+    web_query = web_query.strip()
     try:
         _ck = _cache_key("web", web_query)
         web_results = _cache.get(_ck)
@@ -288,8 +350,8 @@ async def research_node(state: ResearchState) -> ResearchState:
         metrics=metrics_block,
         missing_fields=missing_fields,
         conflicts=conflicts,
-        open_question_context=open_questions,
-        pass_id=pass_id,
+        open_question_context=retry_questions,
+        pass_id=iteration_id,
     )
 
     if statuses:
@@ -300,12 +362,16 @@ async def research_node(state: ResearchState) -> ResearchState:
         statuses = update_status(
             statuses, "research",
             lifecycle="standby", phase="collecting_evidence", action="evidence collected",
-            details=[f"evidence={len(new_evidence)}", f"pass={pass_id}"],
+            details=[f"evidence={len(new_evidence)}", f"iteration={iteration_id}"],
             progress_hint=f"{len(new_evidence)} evidence",
         )
         statuses = update_status(
             statuses, "fundamental_analysis",
             lifecycle="active", phase="analyzing_fundamentals", action="analysing fundamentals",
+        )
+        statuses = update_status(
+            statuses, "macro_analysis",
+            lifecycle="active", phase="analyzing_macro", action="analysing macro environment",
         )
         statuses = update_status(
             statuses, "market_sentiment",
@@ -315,6 +381,6 @@ async def research_node(state: ResearchState) -> ResearchState:
     return {
         "evidence": new_evidence,
         "normalized_data": normalized_data,
-        "research_pass": pass_id + 1,
+        "research_iteration": iteration_id + 1,
         "agent_statuses": statuses,
     }

@@ -42,11 +42,19 @@ Rules:
 """
 
 
-def _build_prompt(evidence, metrics, missing_fields, intent) -> str:
+def _build_prompt(evidence, metrics, missing_fields, intent, research_focus, must_have_metrics, plan_notes) -> str:
+    financial_evidence = [ev for ev in evidence if ev.source_type == "financial_api"]
+    supplemental = [ev for ev in evidence if ev.source_type != "financial_api"]
+
     ev_lines = "\n".join(
-        f"[{ev.id}] ({ev.source_type}, reliability={ev.reliability}) {ev.summary}"
-        for ev in evidence
-    )
+        f"[{ev.id}] (reliability={ev.reliability}) {ev.summary}"
+        for ev in financial_evidence
+    ) or "No financial API evidence available."
+
+    supplemental_lines = "\n".join(
+        f"[{ev.id}] ({ev.source_type}) {ev.summary}"
+        for ev in supplemental
+    )[:2000]  # cap to avoid token bloat
 
     metrics_json = json.dumps(metrics, indent=2) if metrics else "{}"
 
@@ -58,15 +66,31 @@ def _build_prompt(evidence, metrics, missing_fields, intent) -> str:
             f"Horizon: {intent.time_horizon or 'unspecified'}"
         )
 
+    focus_str = "\n".join(f"- {f}" for f in research_focus) if research_focus else "General fundamental analysis"
+    metrics_str = ", ".join(must_have_metrics) if must_have_metrics else "standard financials"
+    notes_str = "\n".join(f"- {n}" for n in plan_notes) if plan_notes else "none"
+
     return f"""{_SCHEMA}
 
 INTENT: {intent_str}
 
-EVIDENCE:
+RESEARCH PLAN:
+Focus areas:
+{focus_str}
+
+Must-have metrics: {metrics_str}
+
+Specific questions to address:
+{notes_str}
+
+FINANCIAL API EVIDENCE (primary source):
 {ev_lines}
 
 FINANCIAL METRICS:
 {metrics_json}
+
+SUPPLEMENTAL EVIDENCE (macro/news — for context only, do not lead with these):
+{supplemental_lines or 'none'}
 
 MISSING DATA: {', '.join(missing_fields) if missing_fields else 'none reported'}
 """
@@ -77,6 +101,9 @@ async def fundamental_analysis_node(
     evidence = state.get("evidence") or []
     normalized_data = state.get("normalized_data")
     intent = state.get("intent")
+    research_focus: list[str] = state.get("research_focus") or []
+    must_have_metrics: list[str] = state.get("must_have_metrics") or []
+    plan_notes: list[str] = state.get("plan_notes") or []
     statuses = list(state.get("agent_statuses") or [])
     if statuses:
         statuses = update_status(
@@ -90,7 +117,7 @@ async def fundamental_analysis_node(
     result: FundamentalAnalysis | None = None
 
     if evidence:
-        prompt = _build_prompt(evidence, metrics, missing_fields, intent)
+        prompt = _build_prompt(evidence, metrics, missing_fields, intent, research_focus, must_have_metrics, plan_notes)
         try:
             raw = await llm.call_with_retry(prompt, system=_SYSTEM, node=_NODE)
             parsed = json.loads(raw)
@@ -114,7 +141,7 @@ async def fundamental_analysis_node(
             )
         raise RuntimeError(msg)
 
-    # Surface missing fields as open questions so gap_check has agent-sourced signal
+    # Surface missing fields as open questions so retry gate has agent-sourced signal
     agent_questions: list[str] = [
         f"fundamental_analysis needs: {f}" for f in result.missing_fields
     ]
@@ -129,7 +156,7 @@ async def fundamental_analysis_node(
             ],
         )
         statuses = update_status(
-            statuses, "gap_check",
+            statuses, "retry_gate",
             lifecycle="active", phase="evaluating_gaps", action="checking for gaps",
         )
 

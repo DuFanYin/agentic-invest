@@ -17,10 +17,12 @@ AGENT_REGISTRY: tuple[AgentMeta, ...] = (
     AgentMeta(name="parse_intent", tag="O", failed_phase="planning"),
     AgentMeta(name="research", tag="R", failed_phase="collecting_evidence"),
     AgentMeta(name="fundamental_analysis", tag="F", failed_phase="analyzing_fundamentals"),
+    AgentMeta(name="macro_analysis", tag="X", failed_phase="analyzing_macro"),
     AgentMeta(name="market_sentiment", tag="M", failed_phase="analyzing_sentiment"),
-    AgentMeta(name="gap_check", tag="G", failed_phase="evaluating_gaps"),
+    AgentMeta(name="retry_gate", tag="G", failed_phase="evaluating_gaps"),
     AgentMeta(name="scenario_scoring", tag="S", failed_phase="scoring_scenarios"),
-    AgentMeta(name="report_verification", tag="V", failed_phase="generating_report"),
+    AgentMeta(name="scenario_debate", tag="D", failed_phase="debating_scenarios"),
+    AgentMeta(name="report_finalize", tag="V", failed_phase="generating_report"),
 )
 
 AGENT_NAMES: list[str] = [item.name for item in AGENT_REGISTRY]

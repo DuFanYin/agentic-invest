@@ -3,7 +3,7 @@
 import asyncio
 from unittest.mock import AsyncMock, MagicMock
 
-from src.server.agents.orchestrator import _parse_intent
+from src.server.agents.planning_agent import parse_intent as _parse_intent
 from src.server.services.openrouter import OpenRouterClient
 
 

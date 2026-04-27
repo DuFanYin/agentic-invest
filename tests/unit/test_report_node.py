@@ -1,4 +1,4 @@
-"""Unit tests for report_verification_node — LLM injected directly."""
+"""Unit tests for report_finalize_node — LLM injected directly."""
 
 from __future__ import annotations
 
@@ -6,8 +6,12 @@ import asyncio
 import pytest
 from unittest.mock import AsyncMock, MagicMock
 
-from src.server.agents.report_verification import report_verification_node
-from src.server.models.analysis import FundamentalAnalysis, MarketSentiment
+from src.server.agents.report_finalize import report_finalize_node
+from src.server.models.analysis import (
+    FundamentalAnalysis,
+    MarketSentiment,
+    ScenarioDebate,
+)
 from src.server.models.evidence import Evidence
 from src.server.models.intent import ResearchIntent
 from src.server.models.scenario import Scenario
@@ -108,21 +112,21 @@ def _run(coro):
 # ── section headers ────────────────────────────────────────────────────────
 
 def test_llm_report_contains_required_sections():
-    result = _run(report_verification_node(_state(), llm=_mock_llm()))
+    result = _run(report_finalize_node(_state(), llm=_mock_llm()))
     md = result["report_markdown"]
     for section in _REQUIRED_SECTIONS:
         assert section in md, f"Missing section: {section}"
 
 
 def test_disclaimer_says_not_financial_advice():
-    result = _run(report_verification_node(_state(), llm=_mock_llm()))
+    result = _run(report_finalize_node(_state(), llm=_mock_llm()))
     assert "Not financial advice" in result["report_markdown"]
 
 
 # ── validation ─────────────────────────────────────────────────────────────
 
 def test_valid_state_produces_no_errors():
-    result = _run(report_verification_node(_state(), llm=_mock_llm()))
+    result = _run(report_finalize_node(_state(), llm=_mock_llm()))
     assert result["validation_result"].errors == []
     assert result["validation_result"].is_valid is True
 
@@ -136,49 +140,68 @@ def test_validation_errors_appended_to_report():
         Scenario(name="Downside", description=".", tags=["bearish-1"], probability=0.5,
                  drivers=["d"], triggers=["t"], signals=["s"], evidence_ids=["ev_001"]),
     ]
-    result = _run(report_verification_node(_state(scenarios=bad_scenarios), llm=_mock_llm()))
+    result = _run(report_finalize_node(_state(scenarios=bad_scenarios), llm=_mock_llm()))
     assert "Validation Errors" in result["report_markdown"]
     assert result["validation_result"].is_valid is False
 
 
 def test_missing_fields_produce_warnings():
     fa = _fa().model_copy(update={"missing_fields": ["eps", "free_cash_flow"]})
-    result = _run(report_verification_node(_state(fa=fa), llm=_mock_llm()))
+    result = _run(report_finalize_node(_state(fa=fa), llm=_mock_llm()))
     assert len(result["validation_result"].warnings) >= 1
+    assert result["retry_questions"] == []
 
 
 # ── raises on LLM failure (no stub fallback) ──────────────────────────────
 
 def test_raises_when_llm_raises():
-    with pytest.raises(RuntimeError, match="report_verification"):
-        _run(report_verification_node(_state(), llm=_mock_llm(raises=RuntimeError("all models failed"))))
+    with pytest.raises(RuntimeError, match="report_finalize"):
+        _run(report_finalize_node(_state(), llm=_mock_llm(raises=RuntimeError("all models failed"))))
 
 
 def test_raises_when_no_evidence():
-    with pytest.raises(RuntimeError, match="report_verification"):
-        _run(report_verification_node(_state(evidence=[]), llm=_mock_llm()))
+    with pytest.raises(RuntimeError, match="report_finalize"):
+        _run(report_finalize_node(_state(evidence=[]), llm=_mock_llm()))
 
 
 # ── statuses unchanged when empty ─────────────────────────────────────────
 
 def test_empty_statuses_returned_unchanged():
-    result = _run(report_verification_node(_state(), llm=_mock_llm()))
+    result = _run(report_finalize_node(_state(), llm=_mock_llm()))
     assert result["agent_statuses"] == []
 
 
-# ── open_questions re-route signal ────────────────────────────────────────
+# ── retry_questions re-route signal ───────────────────────────────────────
 
 @pytest.mark.parametrize(
-    ("fa", "has_open_questions"),
+    ("fa", "has_retry_questions"),
     [
         (None, False),
         (_fa(evidence_ids=["ev_999"]), True),
     ],
 )
-def test_open_questions_reroute_signal(fa, has_open_questions):
-    result = _run(report_verification_node(_state(fa=fa), llm=_mock_llm()))
-    if has_open_questions:
-        assert len(result["open_questions"]) >= 1
-        assert all("report_verification" in q for q in result["open_questions"])
+def test_retry_questions_reroute_signal(fa, has_retry_questions):
+    result = _run(report_finalize_node(_state(fa=fa), llm=_mock_llm()))
+    if has_retry_questions:
+        assert len(result["retry_questions"]) >= 1
+        assert all("report_finalize" in q for q in result["retry_questions"])
     else:
-        assert result["open_questions"] == []
+        assert result["retry_questions"] == []
+
+
+def test_quality_metrics_use_debate_calibrated_probabilities():
+    debate = ScenarioDebate(
+        debate_summary="Calibrated",
+        probability_adjustments=[],
+        calibrated_scenarios=[
+            {"name": "Rate plateau stalls growth", "probability": 0.6, "tags": ["bearish-1"]},
+            {"name": "AI capex supercycle", "probability": 0.3, "tags": ["neutral"]},
+            {"name": "Margin expansion", "probability": 0.05, "tags": ["bullish-1"]},
+        ],
+        confidence="medium",
+        debate_flags=[],
+    )
+    state = _state()
+    state["scenario_debate"] = debate
+    result = _run(report_finalize_node(state, llm=_mock_llm()))
+    assert result["quality_metrics"].scenario_probability_valid is False

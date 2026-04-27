@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import logging
 
-from src.server.models.analysis import FundamentalAnalysis, MarketSentiment
+from src.server.models.analysis import FundamentalAnalysis, MacroAnalysis, MarketSentiment
 from src.server.models.scenario import Scenario
 from src.server.models.state import ResearchState
 from src.server.services.openrouter import OpenRouterClient
@@ -59,7 +59,7 @@ Rules:
 """
 
 
-def _build_prompt(fundamental_analysis, market_sentiment, evidence, intent) -> str:
+def _build_prompt(fundamental_analysis, macro_analysis, market_sentiment, evidence, intent, research_focus=None, plan_notes=None) -> str:
     evidence_ids = ", ".join(ev.id for ev in evidence) if evidence else "none"
 
     if isinstance(fundamental_analysis, FundamentalAnalysis):
@@ -74,6 +74,17 @@ def _build_prompt(fundamental_analysis, market_sentiment, evidence, intent) -> s
         fa_view = "unknown"
         fa_val = "unknown"
 
+    if isinstance(macro_analysis, MacroAnalysis):
+        macro_view = macro_analysis.macro_view
+        macro_rate = macro_analysis.rate_environment
+        macro_growth = macro_analysis.growth_environment
+        macro_drivers = "\n".join(f"- {d}" for d in macro_analysis.macro_drivers) or "none"
+    else:
+        macro_view = "unknown"
+        macro_rate = "unknown"
+        macro_growth = "unknown"
+        macro_drivers = "none"
+
     if isinstance(market_sentiment, MarketSentiment):
         ms_direction = market_sentiment.news_sentiment.direction
         ms_narrative = market_sentiment.market_narrative.summary
@@ -84,17 +95,33 @@ def _build_prompt(fundamental_analysis, market_sentiment, evidence, intent) -> s
     horizon = intent.time_horizon if intent else "unspecified"
     ticker = intent.ticker if intent else "unknown"
 
+    focus_str = "\n".join(f"- {f}" for f in (research_focus or [])) or "General investment analysis"
+    notes_str = "\n".join(f"- {n}" for n in (plan_notes or [])) or "none"
+
     return f"""{_SCHEMA}
 
 AVAILABLE EVIDENCE IDs: {evidence_ids}
 
 TICKER: {ticker} | HORIZON: {horizon}
 
+RESEARCH PLAN (scenarios must address these focus areas):
+{focus_str}
+
+Key questions the scenarios should resolve:
+{notes_str}
+
 FUNDAMENTAL ANALYSIS:
 Business quality: {fa_view}
 Valuation: {fa_val}
 Key claims:
 {fa_claims}
+
+MACRO ENVIRONMENT:
+View: {macro_view}
+Rate environment: {macro_rate}
+Growth environment: {macro_growth}
+Key drivers:
+{macro_drivers}
 
 MARKET SENTIMENT:
 Direction: {ms_direction}
@@ -151,8 +178,11 @@ async def scenario_scoring_node(
 ) -> ResearchState:
     evidence = state.get("evidence") or []
     fundamental_analysis = state.get("fundamental_analysis")
+    macro_analysis = state.get("macro_analysis")
     market_sentiment = state.get("market_sentiment")
     intent = state.get("intent")
+    research_focus: list[str] = state.get("research_focus") or []
+    plan_notes: list[str] = state.get("plan_notes") or []
     statuses = list(state.get("agent_statuses") or [])
     if statuses:
         statuses = update_status(
@@ -165,7 +195,7 @@ async def scenario_scoring_node(
     llm_used = False
 
     if evidence:
-        prompt = _build_prompt(fundamental_analysis, market_sentiment, evidence, intent)
+        prompt = _build_prompt(fundamental_analysis, macro_analysis, market_sentiment, evidence, intent, research_focus, plan_notes)
         try:
             raw = await llm.call_with_retry(prompt, system=_SYSTEM, node=_NODE)
             parsed = _parse_llm_scenarios(raw, evidence_ids)
@@ -204,7 +234,7 @@ async def scenario_scoring_node(
             ],
         )
         statuses = update_status(
-            statuses, "report_verification",
+            statuses, "report_finalize",
             lifecycle="active", phase="generating_report", action="generating report",
         )
 

@@ -24,11 +24,14 @@ const NOW = () => {
 };
 
 const AGENTS = [
-  { id:'O', name:'Orchestrator', color:'var(--agent-O)' },
+  { id:'O', name:'Planning',     color:'var(--agent-O)' },
   { id:'R', name:'Research',     color:'var(--agent-R)' },
   { id:'F', name:'Fundamental',  color:'var(--agent-F)' },
+  { id:'X', name:'Macro',        color:'#8b5cf6' },
   { id:'M', name:'Sentiment',    color:'var(--agent-M)' },
+  { id:'G', name:'Retry Gate',   color:'#f59e0b' },
   { id:'S', name:'Scenarios',    color:'var(--agent-S)' },
+  { id:'D', name:'Debate',       color:'#06b6d4' },
   { id:'V', name:'Verification', color:'var(--agent-V)' },
 ];
 
@@ -36,9 +39,12 @@ const AGENT_ID_BY_NAME = {
   parse_intent: 'O',
   research: 'R',
   fundamental_analysis: 'F',
+  macro_analysis: 'X',
   market_sentiment: 'M',
+  retry_gate: 'G',
   scenario_scoring: 'S',
-  report_verification: 'V',
+  scenario_debate: 'D',
+  report_finalize: 'V',
 };
 
 const isStandbyLifecycle = (lifecycle) => !lifecycle || lifecycle === 'standby';
@@ -155,7 +161,7 @@ const scenarioTagTone = (tag) => {
   return 'generic';
 };
 const revealSections = (setSections) => {
-  const order = ['intent', 'fundamental', 'sentiment', 'scenarios', 'summary', 'evidence'];
+  const order = ['intent', 'fundamental', 'macro', 'sentiment', 'scenarios', 'debate', 'summary', 'evidence'];
   order.forEach((section, idx) => {
     setTimeout(() => {
       setSections((prev) => new Set([...prev, section]));
@@ -371,6 +377,30 @@ function SentimentSection({ sentiment }) {
   );
 }
 
+function MacroSection({ macro }) {
+  const drivers = Array.isArray(macro?.macro_drivers) ? macro.macro_drivers : [];
+  const risks = Array.isArray(macro?.macro_risks) ? macro.macro_risks : [];
+  const signals = Array.isArray(macro?.macro_signals) ? macro.macro_signals : [];
+  return (
+    <div className="report-section">
+      <SectionLabel>Macro Environment</SectionLabel>
+      <div className="section-title">Macro Regime & Signals</div>
+      <div className="section-body" style={{marginBottom:'12px'}}>
+        {macro?.macro_view || 'No macro view available.'}
+      </div>
+      <div className="intent-grid" style={{marginBottom:'12px'}}>
+        <div className="intent-tag"><span className="intent-key">rate</span><span className="intent-val">{macro?.rate_environment || 'unknown'}</span></div>
+        <div className="intent-tag"><span className="intent-key">growth</span><span className="intent-val">{macro?.growth_environment || 'unknown'}</span></div>
+      </div>
+      <div className="section-body"><b>Drivers:</b> {drivers.join(', ') || 'N/A'}</div>
+      <div className="section-body"><b>Signals:</b> {signals.join(', ') || 'N/A'}</div>
+      <div className="section-body" style={{color:'var(--muted)'}}>
+        <b>Risks:</b> {risks.map(r => `${r.name}(${r.impact})`).join(', ') || 'N/A'}
+      </div>
+    </div>
+  );
+}
+
 function ScenariosSection({ scenarios }) {
   const items = Array.isArray(scenarios) ? scenarios : [];
   const sum = items.reduce((acc, s) => acc + (Number(s.probability) || 0), 0);
@@ -412,6 +442,43 @@ function ScenariosSection({ scenarios }) {
         )})}
       </div>
       <div className="prob-check">∑ probability = {sum.toFixed(3)}</div>
+    </div>
+  );
+}
+
+function DebateSection({ debate }) {
+  if (!debate || typeof debate !== 'object') return null;
+  const adjustments = Array.isArray(debate.probability_adjustments) ? debate.probability_adjustments : [];
+  const flags = Array.isArray(debate.debate_flags) ? debate.debate_flags : [];
+  return (
+    <div className="report-section">
+      <SectionLabel>Scenario Debate</SectionLabel>
+      <div className="section-title">Calibration Summary</div>
+      <div className="section-body" style={{marginBottom:'12px'}}>
+        {debate.debate_summary || 'No debate summary available.'}
+      </div>
+      <div className="section-body"><b>Confidence:</b> {debate.confidence || 'unknown'}</div>
+      <div className="section-body"><b>Flags:</b> {flags.join(', ') || 'none'}</div>
+      {adjustments.length > 0 && (
+        <div className="evidence-table-wrap" style={{marginTop:'12px'}}>
+          <table className="evidence-table">
+            <thead>
+              <tr><th>Scenario</th><th>Before</th><th>After</th><th>Delta</th><th>Reason</th></tr>
+            </thead>
+            <tbody>
+              {adjustments.map((a, i) => (
+                <tr key={`${a.scenario_name}-${i}`}>
+                  <td>{a.scenario_name}</td>
+                  <td>{formatPct(a.before)}</td>
+                  <td>{formatPct(a.after)}</td>
+                  <td>{formatPct(a.delta)}</td>
+                  <td>{a.reason || '-'}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
     </div>
   );
 }
@@ -656,6 +723,8 @@ function App() {
   const llmCalling = llmCalls.filter(c => c?.status === 'calling').length;
   const llmRetry = llmCalls.filter(c => c?.status === 'retry').length;
   const llmFailed = llmCalls.filter(c => c?.status === 'failed').length;
+  const macroData = reportData?.macro_analysis || reportData?.report_json?.macro_analysis || null;
+  const debateData = reportData?.scenario_debate || reportData?.report_json?.scenario_debate || null;
 
   const validationBadge = sections.has('summary') ? (
     <div className={`validation-bar ${isValid ? 'valid' : 'review'}`}>
@@ -695,7 +764,7 @@ function App() {
           <div className="panel-header">
             <span className="panel-label">Agents</span>
             <span className="panel-count">
-              {appState === 'idle' ? '6 standby' : `${activeCount} active · ${waitingCount} waiting`}
+              {appState === 'idle' ? `${AGENTS.length} standby` : `${activeCount} active · ${waitingCount} waiting`}
             </span>
           </div>
           <div className="agent-list">
@@ -744,8 +813,10 @@ function App() {
               {sections.has('summary') && <SummarySection validationBadge={validationBadge} reportMarkdown={reportData?.report_markdown} intent={reportData?.intent} />}
               {sections.has('intent') && <IntentSection intent={reportData?.intent} />}
               {sections.has('fundamental') && <FundamentalSection analysis={reportData?.fundamental_analysis} />}
+              {sections.has('macro') && <MacroSection macro={macroData} />}
               {sections.has('sentiment') && <SentimentSection sentiment={reportData?.market_sentiment} />}
               {sections.has('scenarios') && <ScenariosSection scenarios={reportData?.scenarios} />}
+              {sections.has('debate') && <DebateSection debate={debateData} />}
               {sections.has('evidence') && <EvidenceSection evidence={reportData?.evidence} />}
             </div>
           )}

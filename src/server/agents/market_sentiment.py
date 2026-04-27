@@ -104,7 +104,7 @@ async def market_sentiment_node(
             )
         raise RuntimeError(msg)
 
-    # Surface missing fields as open questions so gap_check has agent-sourced signal
+    # Surface missing fields as open questions so retry gate has agent-sourced signal
     agent_questions: list[str] = [
         f"market_sentiment needs: {f}" for f in result.missing_fields
     ]
@@ -120,7 +120,7 @@ async def market_sentiment_node(
             ],
         )
         statuses = update_status(
-            statuses, "gap_check",
+            statuses, "retry_gate",
             lifecycle="active", phase="evaluating_gaps", action="checking for gaps",
         )
 

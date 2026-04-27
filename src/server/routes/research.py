@@ -25,8 +25,8 @@ def _node_from_error(message: str) -> str | None:
     msg = message.lower()
     if "scenario_scoring" in msg:
         return "scenario_scoring"
-    if "report_verification" in msg:
-        return "report_verification"
+    if "report_finalize" in msg:
+        return "report_finalize"
     return None
 
 

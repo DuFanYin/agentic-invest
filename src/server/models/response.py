@@ -16,11 +16,13 @@ AgentPhase: TypeAlias = Literal[
     "collecting_evidence",
     "retrying_evidence",
     "analyzing_fundamentals",
+    "analyzing_macro",
     "analyzing_sentiment",
     "evaluating_gaps",
     "gap_retry_required",
     "gap_resolved",
     "scoring_scenarios",
+    "debating_scenarios",
     "generating_report",
     "workflow_complete",
 ]
@@ -28,7 +30,12 @@ AgentPhase: TypeAlias = Literal[
 
 from src.server.models.evidence import Evidence
 from src.server.models.intent import ResearchIntent
-from src.server.models.analysis import FundamentalAnalysis, MarketSentiment
+from src.server.models.analysis import (
+    FundamentalAnalysis,
+    MacroAnalysis,
+    MarketSentiment,
+    ScenarioDebate,
+)
 from src.server.models.scenario import Scenario
 
 
@@ -75,8 +82,10 @@ class ResearchResponse(BaseModel):
     intent: ResearchIntent | None = None
     evidence: list[Evidence] = Field(default_factory=list)
     fundamental_analysis: FundamentalAnalysis | None = None
+    macro_analysis: MacroAnalysis | None = None
     market_sentiment: MarketSentiment | None = None
     scenarios: list[Scenario] = Field(default_factory=list)
+    scenario_debate: ScenarioDebate | None = None
     agent_statuses: list[AgentStatus] = Field(default_factory=list)
     validation_result: ValidationResult = Field(default_factory=ValidationResult)
     llm_calls: list[LLMCall] = Field(default_factory=list)
