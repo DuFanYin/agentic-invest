@@ -1,13 +1,16 @@
 """
 LangGraph shared state.
 
-evidence:       operator.add — each research pass appends new items.
-open_questions: plain replace — gap_check writes the current cycle's list;
-                accumulation would break the retry-loop termination check.
-agent_statuses: _last_list — fundamental_analysis and market_sentiment run in
-                parallel and both write this field in the same step; the plain
-                LastValue channel raises InvalidUpdateError on concurrent writes,
-                so we use a custom reducer that picks the last (non-empty) list.
+evidence:        operator.add — each research pass appends new items.
+agent_questions: operator.add — both parallel analysis nodes write their
+                 missing-field questions in the same step; gap_check reads the
+                 accumulated list then resets it to [] for the next cycle.
+open_questions:  plain replace — gap_check writes the merged list each cycle;
+                 accumulation would break the retry-loop termination check.
+agent_statuses:  _last_list — fundamental_analysis and market_sentiment run in
+                 parallel and both write this field in the same step; the plain
+                 LastValue channel raises InvalidUpdateError on concurrent writes,
+                 so we use a custom reducer that picks the last (non-empty) list.
 """
 
 import operator
@@ -42,6 +45,9 @@ class ResearchState(TypedDict, total=False):
     market_sentiment: dict[str, Any]
 
     # ── Gap / retry tracking ───────────────────────────────────────────────
+    # agent_questions: accumulated by analysis nodes within a pass; gap_check
+    # reads and resets each cycle.
+    agent_questions: Annotated[list[str], operator.add]
     open_questions: list[str]   # replaced each cycle — do NOT use operator.add
     research_pass: int          # incremented by research_node; read by gap_check
 

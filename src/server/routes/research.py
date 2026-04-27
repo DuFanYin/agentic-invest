@@ -10,18 +10,18 @@ from src.server.models.response import ResearchResponse
 
 router = APIRouter()
 
+_orchestrator = OrchestratorAgent()
+
 
 @router.post("/research", response_model=ResearchResponse)
 def run_research(request: ResearchRequest) -> ResearchResponse:
-    return OrchestratorAgent().run(request)
+    return _orchestrator.run(request)
 
 
 @router.post("/research/stream")
 def run_research_stream(request: ResearchRequest) -> StreamingResponse:
-    orchestrator = OrchestratorAgent()
-
     def event_stream():
-        for event in orchestrator.run_stream(request):
+        for event in _orchestrator.run_stream(request):
             payload = event["payload"]
             if hasattr(payload, "model_dump"):
                 payload = payload.model_dump()

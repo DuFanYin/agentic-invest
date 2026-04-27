@@ -2,7 +2,7 @@
 
 from unittest.mock import MagicMock
 
-from src.server.agents.orchestrator import OrchestratorAgent
+from src.server.agents.orchestrator import _parse_intent
 from src.server.services.openrouter import OpenRouterClient
 
 
@@ -11,8 +11,7 @@ def test_parse_intent_from_query_fallback() -> None:
     broken_client = MagicMock(spec=OpenRouterClient)
     broken_client.complete.side_effect = RuntimeError("no key")
 
-    agent = OrchestratorAgent(llm_client=broken_client)
-    intent = agent._parse_intent("Analyse NVDA for long-term investment")
+    intent = _parse_intent("Analyse NVDA for long-term investment", broken_client)
 
     assert intent.intent == "investment_research"
     assert intent.subjects  # non-empty fallback

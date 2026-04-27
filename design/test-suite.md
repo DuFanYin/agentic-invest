@@ -1,9 +1,9 @@
 # Test Suite
 
-**164 tests, all passing.**
+**176 tests, all passing.**
 
-- Unit tests only (fast, ~1s): `PYTHONPATH=. pytest tests/unit/ -q`
-- Full suite including integration (slow, ~50s — integration tests hit real OpenRouter API): `PYTHONPATH=. pytest tests/ -q`
+- Unit tests only (fast): `PYTHONPATH=. pytest tests/unit/ -q`
+- Full suite including integration (slow, ~50s — hits real OpenRouter API): `PYTHONPATH=. pytest tests/ -q`
 
 ---
 
@@ -48,12 +48,12 @@ End-to-end HTTP layer. Spins up the FastAPI app via `TestClient` with the full L
 
 ---
 
-### `tests/unit/test_research_node.py` — 24 tests
+### `tests/unit/test_research_node.py` — 27 tests
 
-`research_node` with both `FinanceDataClient` and `WebResearchClient` mocked. Covers:
+`research_node` and `_detect_conflicts` with `FinanceDataClient`, `WebResearchClient`, and `Cache` mocked. Covers:
 
 - Output shape: evidence list returned, all items have required fields, IDs unique
-- `normalized_data`: metrics with TTM / 3-year-avg / latest-quarter; `missing_fields` is a list
+- `normalized_data`: metrics with TTM / 3-year-avg / latest-quarter; `missing_fields` is a list; `conflicts` is a list
 - `research_pass` incremented each call
 - Source types: `financial_api`, `news`, and `web` evidence all present; news capped at 5 items
 - Web search: called on every run; duplicate URLs across yfinance and web results deduplicated; empty-URL web results excluded
@@ -61,6 +61,7 @@ End-to-end HTTP layer. Spins up the FastAPI app via `TestClient` with the full L
 - No-ticker path: web search still runs; returns fallback when both finance and web return nothing
 - Resilience: `get_info`, `get_financials`, `get_price_history`, web search each fail independently without crash; all failing together still returns fallback
 - Multi-pass ID offset; price history in `metrics["price_history"]`
+- `_detect_conflicts`: no conflicts when all evidence same reliability; conflict detected when high + low reliability sources cover the same topic; `conflicts` key always present in `normalized_data`
 
 ---
 
@@ -93,11 +94,11 @@ End-to-end HTTP layer. Spins up the FastAPI app via `TestClient` with the full L
 
 ---
 
-### `tests/unit/test_report_node.py` — 14 tests
+### `tests/unit/test_report_node.py` — 16 tests
 
-`report_verification_node` with `_llm_markdown` mocked. Covers:
+`report_verification_node` with `_llm.complete_text` mocked. Covers:
 
-- Output keys: `report_markdown`, `report_json`, `validation_result` all present
+- Output keys: `report_markdown`, `report_json`, `validation_result`, `open_questions` all present
 - All 12 required section headers present in LLM-generated report; Disclaimer contains "Not financial advice"
 - Valid state → no errors, `is_valid: true`
 - Validation errors appended as `## Validation Warnings` section in report
@@ -106,10 +107,29 @@ End-to-end HTTP layer. Spins up the FastAPI app via `TestClient` with the full L
 - Fallback when no evidence: still returns a report
 - `report_json` scenarios and evidence are dicts with required keys
 - Empty statuses returned unchanged
+- `open_questions` empty when all claims cite known evidence IDs
+- `open_questions` populated (prefixed `"report_verification:"`) when a claim references an unknown evidence ID
 
 ---
 
-### `tests/unit/test_market_sentiment_node.py` — 15 tests
+### `tests/unit/test_fundamental_analysis_node.py` — 19 tests
+
+`fundamental_analysis_node` with `_llm` mocked. Covers:
+
+- Output shape: `fundamental_analysis` key present; claims list; all claims cite evidence IDs and have valid confidence
+- `business_quality`, `valuation`, `fundamental_risks` present; `missing_fields` is a list
+- Metrics attached from state; `_llm_used: true` on success
+- Fallback when LLM raises: `_llm_used: false`, all required keys present
+- Fallback when no evidence
+- `missing_fields` from state propagated into fallback
+- Empty statuses returned unchanged
+- `agent_questions` empty when LLM reports no missing fields
+- `agent_questions` populated (prefixed `"fundamental_analysis needs:"`) when LLM reports missing fields
+- `agent_questions` empty on fallback (LLM not used)
+
+---
+
+### `tests/unit/test_market_sentiment_node.py` — 18 tests
 
 `market_sentiment_node` with `_llm` mocked. Covers:
 
@@ -120,6 +140,9 @@ End-to-end HTTP layer. Spins up the FastAPI app via `TestClient` with the full L
 - Fallback when no evidence
 - Prompt includes all evidence IDs (not just news type)
 - Empty statuses unchanged
+- `agent_questions` empty when LLM reports no missing fields
+- `agent_questions` populated (prefixed `"market_sentiment needs:"`) when LLM reports missing fields
+- `agent_questions` empty on fallback
 
 ---
 
@@ -148,12 +171,12 @@ End-to-end HTTP layer. Spins up the FastAPI app via `TestClient` with the full L
 
 `src/server/utils/validation.py` pure functions. Covers:
 
-- `check_scenario_scores`: passes when sum ≈ 1, returns error when not
-- `check_evidence_completeness`: passes when all fields present, fails when URL missing
-- `check_claim_coverage`: passes with valid evidence IDs, fails with an unknown ID
+- `validate_scenario_scores`: passes when sum ≈ 1, returns error when not
+- `validate_evidence_completeness`: passes when all required fields present; passes when `url` is None (it's optional); fails when `retrieved_at`, `summary`, or `reliability` missing
+- `validate_claim_coverage`: passes with valid evidence IDs, fails with an unknown ID
 
 ---
 
 ### `tests/unit/test_intent.py` — 1 test
 
-`parse_intent` fallback path: when the LLM call raises, the node returns a default `ResearchIntent` rather than propagating the exception.
+`_parse_intent` fallback path: when the LLM call raises, the function returns a default `ResearchIntent` with a non-empty `subjects` list rather than propagating the exception.

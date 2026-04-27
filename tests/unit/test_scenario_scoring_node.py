@@ -63,9 +63,9 @@ def _state(evidence=None, fa=None, ms=None):
 def _mock_llm(scenarios=None, raises: Exception | None = None):
     llm = MagicMock()
     if raises:
-        llm.complete.side_effect = raises
+        llm.call_with_retry.side_effect = raises
     else:
-        llm.complete.return_value = json.dumps(scenarios or _llm_scenarios())
+        llm.call_with_retry.return_value = json.dumps(scenarios or _llm_scenarios())
     return llm
 
 

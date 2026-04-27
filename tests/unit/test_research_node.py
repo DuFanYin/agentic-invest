@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock, patch
 
-from src.server.agents.research import research_node
+from src.server.agents.research import research_node, _detect_conflicts
 from src.server.models.intent import ResearchIntent
 from src.server.models.evidence import Evidence
 
@@ -72,12 +72,20 @@ def _mock_web(results: list | None = None):
     return client
 
 
+def _mock_cache():
+    """Cache that always misses so service calls always go through."""
+    c = MagicMock()
+    c.get.return_value = None
+    return c
+
+
 def _patch(finance=None, web=None):
-    """Context manager helper — patches both _finance and _web."""
+    """Context manager helper — patches _finance, _web, and _cache."""
     from contextlib import ExitStack
     stack = ExitStack()
     stack.enter_context(patch("src.server.agents.research._finance", finance or _mock_finance()))
     stack.enter_context(patch("src.server.agents.research._web", web or _mock_web()))
+    stack.enter_context(patch("src.server.agents.research._cache", _mock_cache()))
     return stack
 
 
@@ -310,3 +318,53 @@ def test_price_history_stored_in_metrics():
         result = research_node(_base_state())
     assert "price_history" in result["normalized_data"]["metrics"]
     assert result["normalized_data"]["metrics"]["price_history"]["return_1y_pct"] == 22.4
+
+
+# ── Conflict detection ─────────────────────────────────────────────────────
+
+def test_no_conflicts_when_all_evidence_same_reliability():
+    ev = [
+        Evidence(id="ev_001", source_type="financial_api", title="A", summary="s",
+                 reliability="high", retrieved_at="2026-01-01T00:00:00Z",
+                 related_topics=["valuation"]),
+        Evidence(id="ev_002", source_type="financial_api", title="B", summary="s",
+                 reliability="high", retrieved_at="2026-01-01T00:00:00Z",
+                 related_topics=["valuation"]),
+    ]
+    conflicts = _detect_conflicts(ev, {})
+    assert conflicts == []
+
+
+def test_conflict_detected_on_reliability_divergence():
+    ev = [
+        Evidence(id="ev_001", source_type="financial_api", title="A", summary="s",
+                 reliability="high", retrieved_at="2026-01-01T00:00:00Z",
+                 related_topics=["valuation"]),
+        Evidence(id="ev_002", source_type="web", title="B", summary="s",
+                 reliability="low", retrieved_at="2026-01-01T00:00:00Z",
+                 related_topics=["valuation"]),
+    ]
+    conflicts = _detect_conflicts(ev, {})
+    assert len(conflicts) == 1
+    assert conflicts[0]["topic"] == "valuation"
+    assert conflicts[0]["type"] == "reliability_divergence"
+
+
+def test_conflicts_stored_in_normalized_data():
+    # high + low reliability on same topic triggers a conflict
+    finance = _mock_finance()
+    finance.get_info.return_value = {
+        "name": "Apple Inc", "sector": "Technology",
+        "market_cap_fmt": "$3T", "pe_ratio": 28.5, "ev_ebitda": 22.1, "description": "",
+    }
+    web = _mock_web([{
+        "title": "Bearish valuation view",
+        "url": "https://bearish.com/1",
+        "content": "valuation looks stretched",
+        "published_date": None,
+        "score": 0.6,
+    }])
+    with _patch(finance=finance, web=web):
+        result = research_node(_base_state())
+    assert "conflicts" in result["normalized_data"]
+    assert isinstance(result["normalized_data"]["conflicts"], list)

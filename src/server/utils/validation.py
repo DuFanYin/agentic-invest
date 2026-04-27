@@ -14,7 +14,7 @@ def validate_scenario_scores(scenarios: list[Scenario]) -> list[str]:
 
 def validate_evidence_completeness(evidence: list[dict]) -> list[str]:
     errors: list[str] = []
-    required_fields = ("url", "retrieved_at", "summary", "reliability")
+    required_fields = ("retrieved_at", "summary", "reliability")  # url is optional on Evidence model
     for item in evidence:
         missing = [field for field in required_fields if not item.get(field)]
         if missing:

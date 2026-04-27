@@ -3,3 +3,16 @@ __pycache__/
 *.pyc
 local/
 .env
+
+# runtime cache (SQLite + WAL files)
+cache.db
+cache.db-wal
+cache.db-shm
+*.db
+
+# pytest / coverage
+.pytest_cache/
+.coverage
+htmlcov/
+
+.DS_Store  

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock, patch, PropertyMock
 
 from src.server.agents.report_verification import report_verification_node
 from src.server.models.evidence import Evidence
@@ -88,16 +88,13 @@ def _state(evidence=None, fa=None, ms=None, scenarios=None):
 
 
 def _mock_llm_markdown(report: str | None = None, raises: Exception | None = None):
-    if raises:
-        return patch(
-            "src.server.agents.report_verification._llm_markdown",
-            side_effect=raises,
-        )
     text = report or "\n".join(_REQUIRED_SECTIONS) + "\n\nNot financial advice."
-    return patch(
-        "src.server.agents.report_verification._llm_markdown",
-        return_value=text,
-    )
+    llm = MagicMock()
+    if raises:
+        llm.complete_text.side_effect = raises
+    else:
+        llm.complete_text.return_value = text
+    return patch("src.server.agents.report_verification._llm", llm)
 
 
 # ── output keys ────────────────────────────────────────────────────────────
@@ -226,3 +223,19 @@ def test_empty_statuses_returned_unchanged():
     with _mock_llm_markdown():
         result = report_verification_node(_state())
     assert result["agent_statuses"] == []
+
+
+# ── open_questions re-route signal ────────────────────────────────────────
+
+def test_no_open_questions_when_all_claims_supported():
+    with _mock_llm_markdown():
+        result = report_verification_node(_state())
+    assert result["open_questions"] == []
+
+
+def test_open_questions_set_when_claim_references_unknown_evidence():
+    bad_fa = _fa(evidence_ids=["ev_999"])  # ev_999 not in evidence list
+    with _mock_llm_markdown():
+        result = report_verification_node(_state(fa=bad_fa))
+    assert len(result["open_questions"]) >= 1
+    assert all("report_verification" in q for q in result["open_questions"])

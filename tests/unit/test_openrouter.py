@@ -74,10 +74,9 @@ def test_complete_strips_markdown_fences():
 
 
 def test_complete_raises_without_api_key():
-    # Patch _load_env at construction time so .env is never read.
-    with patch("src.server.services.openrouter._load_env"):
-        with patch.dict("os.environ", {}, clear=True):
-            client = OpenRouterClient(model="test/model")  # api_key stays None
+    # Patch config so OPENROUTER_API_KEY is None at construction time.
+    with patch("src.server.services.openrouter.OPENROUTER_API_KEY", None):
+        client = OpenRouterClient(model="test/model")
     with pytest.raises(RuntimeError, match="OPENROUTER_API_KEY"):
         client.complete("test prompt")
 
@@ -172,15 +171,13 @@ def test_complete_retries_on_invalid_json():
 
 def test_free_model_chain_used_when_no_env_model():
     from src.server.services.openrouter import _FREE_MODELS
-    with patch("src.server.services.openrouter._load_env"):
-        with patch.dict("os.environ", {"OPENROUTER_MODEL": ""}, clear=False):
-            client = OpenRouterClient(api_key="key")
+    with patch("src.server.services.openrouter.OPENROUTER_MODEL", None):
+        client = OpenRouterClient(api_key="key")
     assert client._models == _FREE_MODELS
 
 
 def test_custom_model_respected_when_set():
-    with patch("src.server.services.openrouter._load_env"):
-        client = OpenRouterClient(api_key="key", model="anthropic/claude-3-haiku")
+    client = OpenRouterClient(api_key="key", model="anthropic/claude-3-haiku")
     assert client._models == ["anthropic/claude-3-haiku"]
 
 

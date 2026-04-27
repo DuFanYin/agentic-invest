@@ -41,8 +41,7 @@ def _error_response(status: int) -> MagicMock:
 
 
 def _client(api_key: str = "tvly-test") -> WebResearchClient:
-    with patch("src.server.services.web_research._load_env"):
-        return WebResearchClient(api_key=api_key)
+    return WebResearchClient(api_key=api_key)
 
 
 # ── result shape ───────────────────────────────────────────────────────────
@@ -84,9 +83,8 @@ def test_published_date_and_score_passed_through():
 # ── missing API key ────────────────────────────────────────────────────────
 
 def test_search_returns_empty_when_no_api_key():
-    with patch("src.server.services.web_research._load_env"):
-        with patch.dict("os.environ", {}, clear=True):
-            client = WebResearchClient()
+    with patch("src.server.services.web_research.TAVILY_API_KEY", None):
+        client = WebResearchClient()
     result = client.search("Apple")
     assert result == []
 
@@ -172,9 +170,8 @@ def test_search_news_calls_search_with_ticker_query():
 
 
 def test_search_news_returns_empty_when_no_api_key():
-    with patch("src.server.services.web_research._load_env"):
-        with patch.dict("os.environ", {}, clear=True):
-            client = WebResearchClient()
+    with patch("src.server.services.web_research.TAVILY_API_KEY", None):
+        client = WebResearchClient()
     result = client.search_news("AAPL")
     assert result == []
 

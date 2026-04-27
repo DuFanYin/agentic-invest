@@ -65,9 +65,9 @@ def _state(evidence=None, price_history=None):
 def _mock_llm(response: dict | None = None, raises: Exception | None = None):
     llm = MagicMock()
     if raises:
-        llm.complete.side_effect = raises
+        llm.call_with_retry.side_effect = raises
     else:
-        llm.complete.return_value = json.dumps(response or _llm_response())
+        llm.call_with_retry.return_value = json.dumps(response or _llm_response())
     return llm
 
 
@@ -162,7 +162,7 @@ def test_only_news_evidence_used_in_prompt():
         return json.dumps(_llm_response())
 
     with patch("src.server.agents.market_sentiment._llm") as mock_llm:
-        mock_llm.complete.side_effect = capture
+        mock_llm.call_with_retry.side_effect = capture
         market_sentiment_node(_state())
 
     # financial_api evidence (ev_001) should not appear in news section
@@ -174,3 +174,27 @@ def test_empty_statuses_returned_unchanged():
     with patch("src.server.agents.market_sentiment._llm", _mock_llm()):
         result = market_sentiment_node(_state())
     assert result["agent_statuses"] == []
+
+
+# ── agent_questions surfacing ──────────────────────────────────────────────
+
+def test_agent_questions_empty_when_no_missing_fields():
+    with patch("src.server.agents.market_sentiment._llm", _mock_llm()):
+        result = market_sentiment_node(_state())
+    assert result["agent_questions"] == []
+
+
+def test_agent_questions_populated_when_llm_reports_missing_fields():
+    response = _llm_response()
+    response["missing_fields"] = ["analyst_ratings", "short_interest"]
+    with patch("src.server.agents.market_sentiment._llm", _mock_llm(response)):
+        result = market_sentiment_node(_state())
+    qs = result["agent_questions"]
+    assert len(qs) == 2
+    assert all("market_sentiment needs" in q for q in qs)
+
+
+def test_agent_questions_empty_on_fallback():
+    with patch("src.server.agents.market_sentiment._llm", _mock_llm(raises=RuntimeError("err"))):
+        result = market_sentiment_node(_state())
+    assert result["agent_questions"] == []

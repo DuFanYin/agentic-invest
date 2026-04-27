@@ -95,21 +95,26 @@ def market_sentiment_node(state: ResearchState) -> ResearchState:
 
     if evidence:
         prompt = _build_prompt(news_evidence, price_history, all_evidence_ids)
-        for attempt in range(2):
-            try:
-                raw = _llm.complete(prompt, system=_SYSTEM)
-                parsed = json.loads(raw)
-                parsed["agent"] = "market_sentiment"
-                parsed.setdefault("missing_fields", [])
-                parsed["_llm_used"] = True
-                result = parsed
-                break
-            except Exception as exc:
-                logger.warning("market_sentiment LLM attempt %d failed: %s", attempt + 1, exc)
+        try:
+            raw = _llm.call_with_retry(prompt, system=_SYSTEM)
+            parsed = json.loads(raw)
+            parsed["agent"] = "market_sentiment"
+            parsed.setdefault("missing_fields", [])
+            parsed["_llm_used"] = True
+            result = parsed
+        except Exception as exc:
+            logger.warning("market_sentiment LLM failed: %s", exc)
 
     if result is None:
         logger.warning("market_sentiment falling back to stub output")
         result = _fallback(evidence)
+
+    # Surface missing fields as open questions so gap_check has agent-sourced signal
+    agent_questions: list[str] = []
+    if result.get("_llm_used") and result.get("missing_fields"):
+        agent_questions = [
+            f"market_sentiment needs: {f}" for f in result["missing_fields"]
+        ]
 
     if statuses:
         statuses = update_status(
@@ -119,6 +124,7 @@ def market_sentiment_node(state: ResearchState) -> ResearchState:
                 f"claims={len(result.get('claims', []))}",
                 f"direction={result.get('news_sentiment', {}).get('direction', 'unknown')}",
                 f"llm={'yes' if result.get('_llm_used') else 'no'}",
+                f"questions={len(agent_questions)}",
             ],
         )
         statuses = update_status(
@@ -126,4 +132,8 @@ def market_sentiment_node(state: ResearchState) -> ResearchState:
             status="running", action="checking for gaps",
         )
 
-    return {"market_sentiment": result, "agent_statuses": statuses}
+    return {
+        "market_sentiment": result,
+        "agent_statuses": statuses,
+        "agent_questions": agent_questions,
+    }

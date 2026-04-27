@@ -34,7 +34,8 @@ def test_evidence_completeness_passes_when_all_fields_present() -> None:
     assert validate_evidence_completeness(evidence) == []
 
 
-def test_evidence_completeness_fails_when_url_missing() -> None:
+def test_evidence_completeness_passes_when_url_missing() -> None:
+    # url is optional on the Evidence model — no error expected
     evidence = [
         {
             "id": "ev_001",
@@ -44,8 +45,21 @@ def test_evidence_completeness_fails_when_url_missing() -> None:
             "reliability": "high",
         }
     ]
+    assert validate_evidence_completeness(evidence) == []
+
+
+def test_evidence_completeness_fails_when_required_field_missing() -> None:
+    evidence = [
+        {
+            "id": "ev_001",
+            "url": None,
+            "retrieved_at": None,
+            "summary": "",
+            "reliability": None,
+        }
+    ]
     errors = validate_evidence_completeness(evidence)
-    assert any("url" in e for e in errors)
+    assert errors  # retrieved_at, summary, reliability are required
 
 
 def test_claim_coverage_passes_with_valid_evidence_ids() -> None:

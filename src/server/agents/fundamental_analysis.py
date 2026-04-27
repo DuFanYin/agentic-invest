@@ -104,23 +104,27 @@ def fundamental_analysis_node(state: ResearchState) -> ResearchState:
 
     if evidence:
         prompt = _build_prompt(evidence, metrics, missing_fields, intent)
-        for attempt in range(2):
-            try:
-                raw = _llm.complete(prompt, system=_SYSTEM)
-                parsed = json.loads(raw)
-                # Attach metadata not returned by LLM
-                parsed["agent"] = "fundamental_analysis"
-                parsed["metrics"] = metrics
-                parsed.setdefault("missing_fields", missing_fields)
-                parsed["_llm_used"] = True
-                result = parsed
-                break
-            except Exception as exc:
-                logger.warning("fundamental_analysis LLM attempt %d failed: %s", attempt + 1, exc)
+        try:
+            raw = _llm.call_with_retry(prompt, system=_SYSTEM)
+            parsed = json.loads(raw)
+            parsed["agent"] = "fundamental_analysis"
+            parsed["metrics"] = metrics
+            parsed.setdefault("missing_fields", missing_fields)
+            parsed["_llm_used"] = True
+            result = parsed
+        except Exception as exc:
+            logger.warning("fundamental_analysis LLM failed: %s", exc)
 
     if result is None:
         logger.warning("fundamental_analysis falling back to stub output")
         result = _fallback(evidence, normalized_data)
+
+    # Surface missing fields as open questions so gap_check has agent-sourced signal
+    agent_questions: list[str] = []
+    if result.get("_llm_used") and result.get("missing_fields"):
+        agent_questions = [
+            f"fundamental_analysis needs: {f}" for f in result["missing_fields"]
+        ]
 
     if statuses:
         statuses = update_status(
@@ -129,7 +133,12 @@ def fundamental_analysis_node(state: ResearchState) -> ResearchState:
             details=[
                 f"claims={len(result.get('claims', []))}",
                 f"llm={'yes' if result.get('_llm_used') else 'no'}",
+                f"questions={len(agent_questions)}",
             ],
         )
 
-    return {"fundamental_analysis": result, "agent_statuses": statuses}
+    return {
+        "fundamental_analysis": result,
+        "agent_statuses": statuses,
+        "agent_questions": agent_questions,
+    }

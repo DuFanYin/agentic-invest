@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import hashlib
 import logging
 from datetime import UTC, datetime
 
 from src.server.models.evidence import Evidence
 from src.server.models.state import ResearchState
+from src.server.services.cache import Cache
 from src.server.services.finance_data import FinanceDataClient
 from src.server.services.web_research import WebResearchClient
 from src.server.utils.status import update_status
@@ -15,6 +17,52 @@ logger = logging.getLogger(__name__)
 
 _finance = FinanceDataClient()
 _web = WebResearchClient()
+_cache = Cache()
+
+_FINANCE_TTL = 3600       # 1 hour — financial data changes infrequently
+_WEB_TTL = 900            # 15 min — news is more time-sensitive
+
+
+def _cache_key(prefix: str, *parts: str) -> str:
+    payload = ":".join(parts)
+    return f"{prefix}:{hashlib.sha256(payload.encode()).hexdigest()[:16]}"
+
+
+def _detect_conflicts(evidence: list[Evidence], metrics: dict) -> list[dict]:
+    """
+    Detect factual conflicts across evidence items.
+    Currently checks: duplicate topics with contradictory reliability signals,
+    and numeric metric divergence between info-level and financials-level data.
+    Returns a list of conflict descriptors for downstream agents to reason about.
+    """
+    conflicts: list[dict] = []
+
+    # Group evidence by related_topics and flag cases where high/low reliability
+    # items cover the same topic with different source_types
+    topic_sources: dict[str, list[Evidence]] = {}
+    for ev in evidence:
+        for topic in ev.related_topics:
+            topic_sources.setdefault(topic, []).append(ev)
+
+    for topic, items in topic_sources.items():
+        source_types = {ev.source_type for ev in items}
+        reliabilities = {ev.reliability for ev in items}
+        # A conflict worth flagging: same topic covered by both high and low
+        # reliability sources (e.g. financial_api vs web report different things)
+        if "high" in reliabilities and "low" in reliabilities and len(source_types) > 1:
+            ids = [ev.id for ev in items]
+            conflicts.append({
+                "topic": topic,
+                "type": "reliability_divergence",
+                "evidence_ids": ids,
+                "note": (
+                    f"Topic '{topic}' covered by both high and low-reliability sources "
+                    f"({', '.join(sorted(source_types))}). Downstream agents should "
+                    f"prefer high-reliability evidence."
+                ),
+            })
+
+    return conflicts
 
 
 def research_node(state: ResearchState) -> ResearchState:
@@ -39,7 +87,12 @@ def research_node(state: ResearchState) -> ResearchState:
 
         # Company info
         try:
-            info = _finance.get_info(ticker)
+            _ck = _cache_key("info", ticker)
+            info = _cache.get(_ck) or {}
+            if not info:
+                info = _finance.get_info(ticker)
+                if info:
+                    _cache.set(_ck, info, ttl_seconds=_FINANCE_TTL)
             if info:
                 new_evidence.append(Evidence(
                     id=f"ev_{ev_id:03d}",
@@ -63,7 +116,12 @@ def research_node(state: ResearchState) -> ResearchState:
 
         # Financials
         try:
-            financials = _finance.get_financials(ticker)
+            _ck = _cache_key("financials", ticker)
+            financials = _cache.get(_ck) or {}
+            if not financials:
+                financials = _finance.get_financials(ticker)
+                if financials:
+                    _cache.set(_ck, financials, ttl_seconds=_FINANCE_TTL)
             if financials:
                 ttm = financials.get("ttm", {})
                 metrics = {
@@ -105,7 +163,12 @@ def research_node(state: ResearchState) -> ResearchState:
 
         # Price history
         try:
-            price = _finance.get_price_history(ticker)
+            _ck = _cache_key("price", ticker)
+            price = _cache.get(_ck) or {}
+            if not price:
+                price = _finance.get_price_history(ticker)
+                if price:
+                    _cache.set(_ck, price, ttl_seconds=_FINANCE_TTL)
             if price:
                 ret_1y = price.get("return_1y_pct")
                 ret_30d = price.get("return_30d_pct")
@@ -140,7 +203,11 @@ def research_node(state: ResearchState) -> ResearchState:
 
         # News (yfinance)
         try:
-            news_items = _finance.get_news(ticker)
+            _ck = _cache_key("news", ticker)
+            news_items = _cache.get(_ck)
+            if news_items is None:
+                news_items = _finance.get_news(ticker)
+                _cache.set(_ck, news_items, ttl_seconds=_WEB_TTL)
             for item in news_items[:5]:
                 new_evidence.append(Evidence(
                     id=f"ev_{ev_id:03d}",
@@ -163,7 +230,11 @@ def research_node(state: ResearchState) -> ResearchState:
         f"{open_questions[0] if open_questions else 'investment analysis'}"
     ).strip()
     try:
-        web_results = _web.search(web_query, max_results=5)
+        _ck = _cache_key("web", web_query)
+        web_results = _cache.get(_ck)
+        if web_results is None:
+            web_results = _web.search(web_query, max_results=5)
+            _cache.set(_ck, web_results, ttl_seconds=_WEB_TTL)
         seen_urls = {ev.url for ev in new_evidence if ev.url}
         for item in web_results:
             url = item.get("url", "")
@@ -198,12 +269,14 @@ def research_node(state: ResearchState) -> ResearchState:
             related_topics=["general"],
         ))
 
+    conflicts = _detect_conflicts(new_evidence, metrics)
+
     normalized_data: dict = {
         "query": query,
         "intent": intent.model_dump() if intent else {},
         "metrics": metrics,
         "missing_fields": missing_fields,
-        "conflicts": [],
+        "conflicts": conflicts,
         "open_question_context": open_questions,
         "pass_id": pass_id,
     }

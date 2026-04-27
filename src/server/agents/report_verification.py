@@ -19,6 +19,7 @@ from src.server.utils.validation import (
 logger = logging.getLogger(__name__)
 
 _llm = OpenRouterClient()
+_llm.max_retries = 1  # report is long; limit retries to avoid timeout cascades
 
 _SYSTEM = (
     "You are a senior investment analyst writing a structured research report. "
@@ -199,22 +200,16 @@ def report_verification_node(state: ResearchState) -> ResearchState:
 
     if evidence:
         prompt = _build_prompt(intent, evidence_dump, fundamental_analysis, market_sentiment, scenarios)
-        for attempt in range(2):
-            try:
-                # Report is Markdown, not JSON — use complete() but bypass JSON validation
-                # by asking the LLM via a system prompt that returns plain text.
-                # OpenRouterClient enforces json_object mode, so we call httpx directly
-                # via a lightweight wrapper that skips JSON validation.
-                raw = _llm_markdown(prompt)
-                if raw and len(raw.strip()) > 100:
-                    report_markdown = raw.strip()
-                    if errors:
-                        report_markdown += "\n\n## Validation Warnings\n" + "\n".join(
-                            f"- {e}" for e in errors
-                        )
-                    break
-            except Exception as exc:
-                logger.warning("report_verification LLM attempt %d failed: %s", attempt + 1, exc)
+        try:
+            raw = _llm.complete_text(prompt, system=_SYSTEM)
+            if raw and len(raw.strip()) > 100:
+                report_markdown = raw.strip()
+                if errors:
+                    report_markdown += "\n\n## Validation Warnings\n" + "\n".join(
+                        f"- {e}" for e in errors
+                    )
+        except Exception as exc:
+            logger.warning("report_verification LLM failed: %s", exc)
 
     if report_markdown is None:
         logger.warning("report_verification falling back to template report")
@@ -231,11 +226,22 @@ def report_verification_node(state: ResearchState) -> ResearchState:
         "validation": {"errors": errors, "warnings": warnings},
     }
 
+    # Surface unsupported claims as open questions so the graph can request a
+    # supplementary research pass if the retry budget allows.
+    citation_errors = [e for e in errors if "unknown evidence" in e or "missing evidence" in e]
+    open_questions: list[str] = [
+        f"report_verification: {e}" for e in citation_errors
+    ]
+
     if statuses:
         statuses = update_status(
             statuses, "report_verification",
             status="completed", action="report published",
-            details=[f"is_valid={not errors}", f"errors={len(errors)}"],
+            details=[
+                f"is_valid={not errors}",
+                f"errors={len(errors)}",
+                f"retry_questions={len(open_questions)}",
+            ],
         )
 
     return {
@@ -244,61 +250,8 @@ def report_verification_node(state: ResearchState) -> ResearchState:
         "validation_result": ValidationResult(
             is_valid=not errors, errors=errors, warnings=warnings
         ),
+        "open_questions": open_questions,
         "agent_statuses": statuses,
     }
 
 
-def _llm_markdown(prompt: str) -> str:
-    """
-    Call OpenRouter without JSON mode — the report is Markdown prose.
-    Builds the HTTP request directly, bypassing OpenRouterClient's json_object enforcement.
-    """
-    import os
-    import httpx
-
-    api_key = os.getenv("OPENROUTER_API_KEY")
-    if not api_key:
-        raise RuntimeError("OPENROUTER_API_KEY not set")
-
-    models = [
-        "openai/gpt-oss-20b:free",
-        "openai/gpt-oss-120b:free",
-        "nvidia/nemotron-3-super-120b-a12b:free",
-    ]
-
-    headers = {
-        "Authorization": f"Bearer {api_key}",
-        "Content-Type": "application/json",
-    }
-    if os.getenv("OPENROUTER_HTTP_REFERER"):
-        headers["HTTP-Referer"] = os.getenv("OPENROUTER_HTTP_REFERER", "")
-    if os.getenv("OPENROUTER_APP_TITLE"):
-        headers["X-Title"] = os.getenv("OPENROUTER_APP_TITLE", "")
-
-    last_exc: Exception | None = None
-    for model in models:
-        payload = {
-            "model": model,
-            "messages": [
-                {"role": "system", "content": _SYSTEM},
-                {"role": "user", "content": prompt},
-            ],
-            "temperature": 0,
-        }
-        try:
-            with httpx.Client(timeout=60.0) as client:
-                resp = client.post(
-                    "https://openrouter.ai/api/v1/chat/completions",
-                    headers=headers,
-                    json=payload,
-                )
-            if resp.status_code == 200:
-                data = resp.json()
-                if "choices" in data:
-                    return data["choices"][0]["message"]["content"]
-            last_exc = RuntimeError(f"HTTP {resp.status_code}")
-        except Exception as exc:
-            last_exc = exc
-            logger.warning("_llm_markdown model %s failed: %s", model, exc)
-
-    raise RuntimeError(f"all models failed: {last_exc}") from last_exc

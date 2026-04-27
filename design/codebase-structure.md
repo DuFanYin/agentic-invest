@@ -1,20 +1,24 @@
-# Codebase Structure Design
+# Codebase Structure
 
 ## 1) Goal
 
-The repository is organized by backend services, frontend pages, core agent system, shared models, tests, and docs. The goal is to keep the MVP simple while preserving room for future expansion.
+The repository is organised by backend services, frontend pages, core agent system, shared models, tests, and docs.
+The architecture is layered: routes → agents → services, with a shared model and utils layer beneath them all.
 
 ## 2) Folder Structure
 
 ```text
-agent-assignment/
+agentic-invest/
 ├── design/
 │   ├── core-agent-system.md
-│   ├── peripheral-plan.md
+│   ├── implementation-plan.md
+│   ├── test-suite.md
 │   ├── frontend.md
+│   ├── peripheral-plan.md
 │   └── codebase-structure.md
 ├── src/
 │   ├── server/
+│   │   ├── config.py                  ← central env/config (loaded once)
 │   │   ├── main.py
 │   │   ├── routes/
 │   │   │   ├── __init__.py
@@ -24,6 +28,7 @@ agent-assignment/
 │   │   │   ├── __init__.py
 │   │   │   ├── request.py
 │   │   │   ├── response.py
+│   │   │   ├── state.py               ← LangGraph shared state
 │   │   │   ├── evidence.py
 │   │   │   ├── intent.py
 │   │   │   └── scenario.py
@@ -43,9 +48,8 @@ agent-assignment/
 │   │   │   └── cache.py
 │   │   └── utils/
 │   │       ├── __init__.py
-│   │       ├── validation.py
-│   │       ├── logging.py
-│   │       └── formatting.py
+│   │       ├── status.py              ← AgentStatus mutation helpers
+│   │       └── validation.py
 │   └── frontend/
 │       ├── index.html
 │       └── static/
@@ -53,127 +57,239 @@ agent-assignment/
 │           └── styles.css
 ├── tests/
 │   ├── unit/
+│   │   ├── test_cache.py
+│   │   ├── test_finance_data.py
+│   │   ├── test_fundamental_analysis_node.py
 │   │   ├── test_intent.py
+│   │   ├── test_market_sentiment_node.py
+│   │   ├── test_openrouter.py
+│   │   ├── test_report_node.py
+│   │   ├── test_research_node.py
 │   │   ├── test_scenario_scoring.py
-│   │   └── test_validation.py
+│   │   ├── test_scenario_scoring_node.py
+│   │   ├── test_validation.py
+│   │   └── test_web_research.py
 │   └── integration/
 │       └── test_research_api.py
-├── outputs/
-│   └── sample-report.md
-├── README.md
-└── problem-statment.md
+└── outputs/
+    └── sample-report.md
 ```
 
 ## 3) Directory Responsibilities
 
 ### `design/`
 
-Stores design documentation and does not participate in runtime execution.
+Design documentation only — not imported at runtime.
 
-- `core-agent-system.md`: core multi-agent system design
-- `peripheral-plan.md`: peripheral system, API, testing, and risk-control spec
-- `frontend.md`: Vanilla HTML layout design
-- `codebase-structure.md`: repository structure specification
+- `core-agent-system.md`: multi-agent architecture, graph topology, data contracts
+- `implementation-plan.md`: phased delivery plan with completion status
+- `test-suite.md`: per-file test coverage summary and run commands
+- `frontend.md`: Vanilla HTML/JS UI layout and streaming protocol
+- `peripheral-plan.md`: peripheral architecture and integration planning
+- `codebase-structure.md`: this file
 
-### `src/server/`
+### `src/server/config.py`
 
-FastAPI backend entry and business logic.
+Loads `.env` once at import time via an upward directory walk (up to 8 levels).
+Exposes typed module-level constants:
 
-- `main.py`: creates FastAPI app, registers routes, exposes `/`, `/health`, `/research`
-- `routes/`: HTTP routes by feature
-- `models/`: Pydantic request/response schemas and core data objects
-- `agents/`: core agent implementations
-- `services/`: wrappers for external APIs, LLM, data sources, cache, etc.
-- `utils/`: shared helpers (logging, validation, formatting)
+| Constant | Purpose |
+|---|---|
+| `OPENROUTER_API_KEY` | LLM auth |
+| `OPENROUTER_MODEL` | optional model override |
+| `OPENROUTER_BASE_URL` | defaults to `https://openrouter.ai/api/v1` |
+| `OPENROUTER_HTTP_REFERER` | optional ranking header |
+| `OPENROUTER_APP_TITLE` | optional ranking header |
+| `TAVILY_API_KEY` | web search auth |
+
+All services import from here — no scattered `os.getenv` calls elsewhere.
+
+### `src/server/main.py`
+
+Creates the FastAPI application, mounts static files, and registers route blueprints.
+Exposes: `/` (frontend), `/health`, `/research`, `/research/stream`.
 
 ### `src/server/routes/`
 
-The HTTP layer only receives requests, invokes business flow, and returns responses.
+HTTP layer only — no business logic.
 
-- `__init__.py`: exports route modules
-- `health.py`: defines `/health`
-- `research.py`: defines `/research` and calls the Orchestrator
+- `health.py`: `GET /health` liveness check
+- `research.py`: `POST /research` (sync) and `POST /research/stream` (SSE).
+  Instantiates a single `OrchestratorAgent` at module load; reuses it across requests.
 
 ### `src/server/models/`
 
-Centralized Pydantic models to avoid schema scattering in business code.
+Pydantic models shared across all layers.
 
-- `__init__.py`: exports common schemas
-- `request.py`: `ResearchRequest`
-- `response.py`: `ResearchResponse`, `ValidationResult`
-- `intent.py`: `ResearchIntent`
-- `evidence.py`: `Evidence`
-- `scenario.py`: `Scenario`
+| File | Contents |
+|---|---|
+| `request.py` | `ResearchRequest` |
+| `response.py` | `ResearchResponse`, `AgentStatus`, `ValidationResult` |
+| `state.py` | `ResearchState` (LangGraph `TypedDict`) with annotated reducers |
+| `evidence.py` | `Evidence` — `url` is `Optional[str]` |
+| `intent.py` | `ResearchIntent` |
+| `scenario.py` | `Scenario` — `score: float` in `[0, 1]` |
+
+`ResearchState` reducer notes:
+- `evidence`: `operator.add` — parallel passes accumulate items
+- `agent_questions`: `operator.add` — parallel analysis nodes surface missing-field questions for `gap_check`
+- `open_questions`: plain replace — gap_check resets each cycle
+- `agent_statuses`: `_last_list` custom reducer — handles concurrent writes from the parallel analysis nodes
 
 ### `src/server/agents/`
 
-Agents are split according to core architecture responsibilities.
+LangGraph node functions and the graph wiring.
 
-- `orchestrator.py`: parses query, builds task plan, schedules other agents
-- `research.py`: retrieves materials, organizes evidence, generates normalized data
-- `fundamental_analysis.py`: runs fundamental, valuation, and fundamental-risk analysis
-- `market_sentiment.py`: analyzes news, price action, market narrative, and sentiment risk
-- `scenario_scoring.py`: generates future scenarios and guarantees `sum(score)=1`
-- `report_verification.py`: generates report and performs final validation
+#### `orchestrator.py`
+
+Builds and owns the `StateGraph`. Graph topology:
+
+```
+START → parse_intent → research → [parallel] → gap_check ─(gaps?)─→ research (retry, ≤2 passes)
+                                   fundamental_analysis              └─(no gaps)─→ scenario_scoring
+                                   market_sentiment                                → report_verification
+                                                                                └─(unsupported claims + retry budget)→ research
+                                                                                └─(otherwise)→ END
+```
+
+- `_make_parse_intent_node(llm_client)`: calls `_parse_intent()` to extract `ResearchIntent` from the raw query
+- `_gap_check_node`: merges structural gaps (ticker/horizon), agent-raised questions, and research conflict signals; clears `open_questions` after `_MAX_RESEARCH_PASSES = 2`
+- `_gap_router`: returns `"research"` or `"scenario_scoring"`
+- `build_graph(llm_client)`: compiles the graph; called once at startup
+- `OrchestratorAgent.run()`: synchronous invoke
+- `OrchestratorAgent.run_stream()`: yields `agent_status`, `state_update`, and `final` SSE events
+
+#### `research.py`
+
+Collects evidence from two external sources with in-process SQLite caching:
+
+| Source | TTL | Data |
+|---|---|---|
+| `FinanceDataClient` | 3600 s | company info, financials, price history, yfinance news |
+| `WebResearchClient` | 900 s | Tavily web search results |
+
+Cache keys are `sha256(prefix + parts)[:16]`. Deduplicates web URLs. Falls back to a single low-reliability evidence item if all calls fail.
+
+Returns: `evidence` (list appended via reducer), `normalized_data` (metrics, missing_fields, open_question_context), incremented `research_pass`.
+
+#### `fundamental_analysis.py`
+
+LLM node (runs in parallel with `market_sentiment`).
+Uses `_llm.call_with_retry()` → `json.loads()`.
+Returns: business quality view, valuation view, claims with evidence citations, fundamental risks, missing fields.
+Falls back to a stub result when the LLM fails.
+
+#### `market_sentiment.py`
+
+LLM node (runs in parallel with `fundamental_analysis`).
+Filters evidence to `news`/`web` source types for the prompt.
+Returns: news sentiment direction, price action view, market narrative, sentiment risks.
+Falls back to a stub result when the LLM fails.
+
+#### `scenario_scoring.py`
+
+LLM node (sequential, after gap_check passes).
+LLM returns raw weights (`raw_score`); Python normalises to `sum = 1` before constructing `Scenario` objects (avoids Pydantic `le=1` violation on unnormalised values).
+Pads to minimum 3 scenarios if LLM returns fewer.
+Falls back to a pre-built bull/base/bear triple when the LLM fails.
+
+#### `report_verification.py`
+
+Final node — two responsibilities:
+
+1. **Pure-Python validation** (always runs): scenario score sum, evidence field completeness (`retrieved_at`, `summary`, `reliability` required; `url` optional), claim-to-evidence citation coverage.
+2. **LLM Markdown report** via `_llm.complete_text()` (free-form, not JSON mode). Requires all 12 named sections. Falls back to a Python template if the LLM fails. Validation errors are appended as `## Validation Warnings`, and unsupported-claim errors are surfaced as `open_questions` to trigger a supplementary research retry when budget remains.
 
 ### `src/server/services/`
 
-Encapsulates external dependencies so agents do not call third-party APIs directly.
+External dependency wrappers — agents do not call third-party APIs directly.
 
-- `__init__.py`: exports service clients
-- `openrouter.py`: OpenRouter adapter with model calls, error handling, and retries
-- `finance_data.py`: financial data API wrapper
-- `web_research.py`: web/news retrieval wrapper
-- `cache.py`: cache read/write layer
+#### `openrouter.py`
+
+OpenRouter LLM client with a three-model free-tier chain:
+`openai/gpt-oss-20b:free → openai/gpt-oss-120b:free → nvidia/nemotron-3-super-120b-a12b:free`
+
+Per-model retry with exponential backoff on 429/5xx. Two internal error classes:
+- `_RetryableError`: retry this model
+- `_FatalError`: skip to next model immediately
+
+Public interface:
+
+| Method | Mode | Notes |
+|---|---|---|
+| `complete(prompt)` | JSON | validates JSON before returning |
+| `complete_json(prompt)` | JSON | parses and returns `dict` |
+| `complete_text(prompt)` | text | Markdown reports; no JSON enforcement |
+| `call_with_retry(prompt, attempts=2)` | JSON | agent-level retry; used by all analysis nodes |
+
+`_headers()` builds auth + optional referer/title headers once per call.
+
+#### `finance_data.py`
+
+yfinance wrapper. Provides: `get_info()`, `get_financials()`, `get_price_history()`, `get_news()`.
+`_safe()` converts numpy scalars to Python primitives. `_row()` extracts DataFrame rows safely.
+
+#### `web_research.py`
+
+Tavily search via httpx. Degrades gracefully (returns `[]`) when `TAVILY_API_KEY` is absent.
+
+#### `cache.py`
+
+SQLite-backed TTL cache with `threading.Lock` and WAL mode.
+Operations: `get(key) → dict | None`, `set(key, value, ttl_seconds)`, `delete(key)`, `clear_expired()`.
+TTL is enforced on read (expired entries return `None`).
 
 ### `src/server/utils/`
 
-Contains stateless utility functions.
+Stateless helpers.
 
-- `__init__.py`: exports shared utilities
-- `validation.py`: scenario score, field completeness, and citation integrity checks
-- `logging.py`: logging configuration
-- `formatting.py`: Markdown/JSON formatting helpers
+- `status.py`: `initial_agent_statuses()` and `update_status()` — build and mutate `list[AgentStatus]` without in-place mutation
+- `validation.py`: `validate_scenario_scores()`, `validate_evidence_completeness()`, `validate_claim_coverage()`
 
 ### `src/frontend/`
 
-Vanilla HTML frontend without a heavy frontend framework.
+Vanilla HTML/JS frontend without a build step.
 
-- `index.html`: page structure and layout
-- `static/app.js`: submit form, call `/research`, render result
-- `static/styles.css`: optional stylesheet; can stay minimal if Tailwind CDN is used
+- `index.html`: page layout
+- `static/app.js`: submits query, consumes SSE stream (`agent_status`, `state_update`, `final`, `timeline`, `done` events), renders report
+- `static/styles.css`: stylesheet
 
 ### `tests/`
 
-Testing directory.
+Two-tier test suite (~179 tests total).
 
-- `unit/`: tests schemas, validators, scenario normalization, and small agent helpers
-- `integration/`: tests `/research` end-to-end flow with mocked data sources
+**Unit tests** (`tests/unit/`) — fast, no network, all LLM/HTTP calls mocked:
 
-Suggested files:
+| File | Covers |
+|---|---|
+| `test_cache.py` | SQLite TTL cache, concurrency |
+| `test_finance_data.py` | yfinance data normalisation |
+| `test_fundamental_analysis_node.py` | LLM prompt construction, fallback |
+| `test_intent.py` | `_parse_intent` fallback when LLM unavailable |
+| `test_market_sentiment_node.py` | sentiment prompt, evidence filtering |
+| `test_openrouter.py` | model chain, retry, JSON validation, error classes |
+| `test_report_node.py` | report generation, validation error appending |
+| `test_research_node.py` | cache wiring, evidence assembly, web dedup |
+| `test_scenario_scoring.py` | score normalisation, sum-to-1 property |
+| `test_scenario_scoring_node.py` | LLM parse, padding, fallback |
+| `test_validation.py` | score sum, evidence completeness, claim coverage |
+| `test_web_research.py` | Tavily search, graceful degradation |
 
-- `unit/test_intent.py`: test query -> intent parsing
-- `unit/test_scenario_scoring.py`: test score normalization and `sum(score)=1`
-- `unit/test_validation.py`: test citation/field/probability validation
-- `integration/test_research_api.py`: test basic `/research` API flow
+**Integration tests** (`tests/integration/`) — hit real OpenRouter and yfinance (~50 s):
 
-### `outputs/`
+| File | Covers |
+|---|---|
+| `test_research_api.py` | full `/research` request → Markdown report end-to-end |
 
-Stores locally generated sample reports for demos and README references.
+**Run commands:**
 
-- `sample-report.md`: default sample output for README/demo
+```bash
+# Unit tests only (fast)
+pytest tests/unit/
 
-## 4) Current MVP Priorities
+# Full suite including integration
+pytest
 
-Keep the following files runnable first:
-
-- `src/server/main.py`
-- `src/frontend/index.html`
-- `src/frontend/static/app.js`
-
-Then incrementally expand:
-
-- `models/`
-- `agents/`
-- `services/`
-- `tests/`
+# Single file
+pytest tests/unit/test_scenario_scoring.py -v
+```

@@ -64,9 +64,9 @@ def _state(evidence=None, metrics=None, missing_fields=None, intent=None):
 def _mock_llm(response: dict | None = None, raises: Exception | None = None):
     llm = MagicMock()
     if raises:
-        llm.complete.side_effect = raises
+        llm.call_with_retry.side_effect = raises
     else:
-        llm.complete.return_value = json.dumps(response or _llm_response())
+        llm.call_with_retry.return_value = json.dumps(response or _llm_response())
     return llm
 
 
@@ -183,3 +183,28 @@ def test_empty_statuses_returned_unchanged():
     with patch("src.server.agents.fundamental_analysis._llm", _mock_llm()):
         result = fundamental_analysis_node(_state())
     assert result["agent_statuses"] == []
+
+
+# ── agent_questions surfacing ──────────────────────────────────────────────
+
+def test_agent_questions_empty_when_no_missing_fields():
+    with patch("src.server.agents.fundamental_analysis._llm", _mock_llm()):
+        result = fundamental_analysis_node(_state())
+    assert result["agent_questions"] == []
+
+
+def test_agent_questions_populated_when_llm_reports_missing_fields():
+    response = _llm_response()
+    response["missing_fields"] = ["free_cash_flow", "capex"]
+    with patch("src.server.agents.fundamental_analysis._llm", _mock_llm(response)):
+        result = fundamental_analysis_node(_state())
+    qs = result["agent_questions"]
+    assert len(qs) == 2
+    assert all("fundamental_analysis needs" in q for q in qs)
+
+
+def test_agent_questions_empty_on_fallback():
+    # Fallback sets _llm_used=False so no questions should be surfaced
+    with patch("src.server.agents.fundamental_analysis._llm", _mock_llm(raises=RuntimeError("err"))):
+        result = fundamental_analysis_node(_state())
+    assert result["agent_questions"] == []

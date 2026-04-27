@@ -8,14 +8,20 @@ The system is not a fixed linear pipeline. The Orchestrator maintains a shared s
 
 ```text
 Shared Research State
+├── query
 ├── intent
-├── evidence[]
+├── evidence[]               ← appended across passes (operator.add)
 ├── normalized_data
 ├── fundamental_analysis
 ├── market_sentiment
+├── agent_questions[]        ← appended from parallel analysis nodes (operator.add)
 ├── scenarios[]
-├── open_questions[]
-└── validation_result
+├── open_questions[]         ← replaced each cycle (plain assign, not accumulated)
+├── research_pass            ← incremented by Research Agent; read by gap_check
+├── report_markdown
+├── report_json
+├── validation_result
+└── agent_statuses[]         ← _last_list reducer (handles parallel writes)
 ```
 
 Core principles:
@@ -75,11 +81,11 @@ Each evidence item follows a unified schema for consistent downstream references
   "id": "ev_001",
   "source_type": "filing|financial_api|news|web|company_site",
   "title": "...",
-  "url": "...",
-  "published_at": "...",
-  "retrieved_at": "...",
-  "summary": "...",
-  "reliability": "high|medium|low",
+  "url": "...",            ← optional (nullable)
+  "published_at": "...",  ← optional
+  "retrieved_at": "...",  ← required
+  "summary": "...",       ← required
+  "reliability": "high|medium|low",  ← required
   "related_topics": ["revenue", "margin", "risk"]
 }
 ```
@@ -105,41 +111,49 @@ Each analysis agent outputs a structured result with explicit evidence bindings.
 
 ## 4) Collaboration Model and Topology
 
-The system uses a "shared state + dynamic scheduling" model. Agents iteratively enrich and correct one shared `Research State`.
+The system uses a LangGraph `StateGraph` with a shared `ResearchState`. The graph has two conditional retry checks: one after `gap_check`, and one after `report_verification` (for citation integrity gaps).
 
 Core flow:
 
-- `Research Agent` can start early and keep enriching `evidence[]` and `normalized_data`.
-- `Fundamental Analysis Agent` starts when business and financial data are sufficient; if metrics are missing, it writes `open_questions[]` to the Orchestrator.
-- `Market Sentiment Agent` can run in parallel with fundamental analysis and continuously evaluate news, price action, narratives, and sentiment signals.
-- `Scenario Scoring Agent` can generate an initial scenario set after first-pass conclusions, then rescore when risk, valuation, or sentiment signals change.
-- `Report & Verification Agent` is not final-only; it can run early to check evidence coverage and trigger supplementary research when unsupported claims are detected.
-- The Orchestrator decides whether to rerun selected agents based on `open_questions[]`, validation errors, and data completeness.
+- `parse_intent` extracts a `ResearchIntent` from the raw query (ticker, scope, horizon, required outputs).
+- `research` collects evidence from financial APIs, yfinance news, and Tavily web search. Runs again on retry passes.
+- `fundamental_analysis` and `market_sentiment` run **in parallel** after each research pass.
+- `gap_check` merges structural gaps (e.g. missing ticker/horizon), analysis-node `agent_questions`, and research conflict signals (`normalized_data.conflicts`) to decide whether to retry.
+- If gaps remain and `research_pass < 2`, the graph loops back to `research` for a supplementary pass.
+- `scenario_scoring` runs once gaps are resolved; scores are normalised in Python before constructing Scenario objects.
+- `report_verification` generates the Markdown report via LLM, then runs pure-Python validation. Validation errors are appended as `## Validation Warnings`.
+- If validation detects unsupported/missing evidence references and retry budget remains (`research_pass < 2`), the graph re-routes to `research`; otherwise it terminates.
 
 ```text
-User Query
-└── Orchestrator Agent
-    ├── Initialize Research State
-    │   └── intent / subjects / required_outputs / open_questions
-    ├── Research Agent <──────────────────────────────┐
-    │   └── write: evidence[] + normalized_data       │
-    ├── Fundamental Analysis Agent ───────────────────┤
-    │   ├── read: evidence[] + normalized_data        │
-    │   ├── write: fundamental_analysis               │
-    │   └── may add: open_questions[] ────────────────┘
-    ├── Market Sentiment Agent ◄──────────────────────┐
-    │   ├── read: news / price data / evidence[]      │
-    │   ├── write: market_sentiment                   │
-    │   └── may request: supplementary sentiment evidence
-    ├── Scenario Scoring Agent ◄──────────────────────┐
-    │   ├── read: fundamental_analysis + market_sentiment + evidence[]
-    │   ├── write: scenarios[]                        │
-    │   └── constraint: sum(score) = 1                │
-    └── Report & Verification Agent
-        ├── read: full Research State
-        ├── write: report + validation_result
-        └── on gaps: write open_questions[] and trigger supplementary research
+                              ┌─────────────────────────────────────────┐
+                              │ retry: open_questions detected,         │
+                              │ research_pass < 2                       │
+                              ▼                                          │
+START → parse_intent → research → fundamental_analysis ──┐              │
+                                → market_sentiment    ───┴─→ gap_check ─┤
+                                                                         │
+                                                          (no gaps) ─────┘
+                                                               ↓
+                                                      scenario_scoring
+                                                               ↓
+                                                    report_verification
+                                                               │
+               ┌───────────────────────────────────────────────┴──────────────────────────────┐
+               │ retry: unsupported/missing evidence claims detected, research_pass < 2       │
+               └───────────────────────────────────────────────┬──────────────────────────────┘
+                                                               ▼
+                                                            research
+                                                               │
+                                                           (otherwise)
+                                                               ▼
+                                                               END
 ```
+
+State mutation rules:
+- `evidence[]`: `operator.add` — each research pass appends; never overwritten.
+- `agent_questions[]`: `operator.add` — parallel analysis nodes append missing-field questions; `gap_check` drains and resets for the next cycle.
+- `open_questions[]`: plain replace — `gap_check` resets to the current cycle's list; accumulation would break the termination check.
+- `agent_statuses[]`: `_last_list` custom reducer — both parallel analysis nodes write this field in the same graph step; plain LastValue would raise `InvalidUpdateError`.
 
 ## 5) Agent Responsibilities
 
@@ -159,7 +173,7 @@ User Query
 
 ### Research Agent
 
-- Retrieve filings, company disclosures, public finance data, news, and web sources
+- Retrieve public finance data (`finance_data`: company info, financials, price history, yfinance news) and web sources (`web_research`: Tavily)
 - Assign reliability levels to sources
 - Remove duplicate sources and repeated facts
 - Organize output as `evidence[]`
@@ -167,10 +181,10 @@ User Query
 - Input: research plan, subjects, keywords, and horizon
 - Output: `evidence[]` + `normalized_data`
 - Key strategies:
-  - Prioritize high-quality sources
-  - Ensure each evidence item includes `url`, `retrieved_at`, `summary`, and `reliability`
+  - Prioritize high-quality sources (`financial_api` → `news` → `web`)
+  - Required evidence fields: `retrieved_at`, `summary`, `reliability`; `url` is optional
   - Normalize fields and units; mark `missing_fields` when data is absent
-  - Keep conflict markers instead of forcing early merge
+  - Deduplicate by URL; fall back to a single low-reliability item if all sources fail
 
 ### Fundamental Analysis Agent
 
@@ -184,7 +198,7 @@ User Query
 - Key strategies:
   - Cover at least 3 time slices (TTM / latest 3 years / latest quarter)
   - Bind key judgments to `evidence_ids`
-  - Write `open_questions[]` when data is missing
+  - Write `missing_fields[]` when data is absent; `gap_check` reads this to decide retries
   - Cross-check valuation and attach observable risk signals
 
 ### Market Sentiment Agent
@@ -199,7 +213,7 @@ User Query
   - Separate long-term fundamental change from short-term sentiment
   - Bind sentiment conclusions to market evidence
   - Downweight noisy signals
-  - Use `open_questions[]` when coverage is insufficient
+  - Write `missing_fields[]` when coverage is insufficient; `gap_check` reads this to decide retries
 
 ### Scenario Scoring Agent
 
@@ -227,8 +241,8 @@ User Query
 - Key strategies:
   - Require evidence references for key conclusions
   - Show "what we know / uncertainty / what to watch"
-  - Support draft validation before final publish
-  - Mark unsupported/conflicting claims and block publish on invalid probabilities
+  - Validation always runs in pure Python (no LLM); errors appended inline as `## Validation Warnings`
+- Unsupported/missing-evidence claim errors are surfaced as `open_questions`; the graph may re-route to `research` when retry budget remains
 
 ## 6) Final Report Structure
 

@@ -161,16 +161,14 @@ def scenario_scoring_node(state: ResearchState) -> ResearchState:
 
     if evidence:
         prompt = _build_prompt(fundamental_analysis, market_sentiment, evidence, intent)
-        for attempt in range(2):
-            try:
-                raw = _llm.complete(prompt, system=_SYSTEM)
-                parsed = _parse_llm_scenarios(raw, evidence_ids)
-                parsed = _pad_to_minimum(parsed, evidence_ids)
-                scenarios = _normalise(parsed)
-                llm_used = True
-                break
-            except Exception as exc:
-                logger.warning("scenario_scoring LLM attempt %d failed: %s", attempt + 1, exc)
+        try:
+            raw = _llm.call_with_retry(prompt, system=_SYSTEM)
+            parsed = _parse_llm_scenarios(raw, evidence_ids)
+            parsed = _pad_to_minimum(parsed, evidence_ids)
+            scenarios = _normalise(parsed)
+            llm_used = True
+        except Exception as exc:
+            logger.warning("scenario_scoring LLM failed: %s", exc)
 
     if scenarios is None:
         logger.warning("scenario_scoring falling back to stub output")

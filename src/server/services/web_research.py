@@ -8,34 +8,16 @@ pipeline treats missing web evidence as non-fatal.
 from __future__ import annotations
 
 import logging
-import os
 from datetime import UTC, datetime
 
 import httpx
+
+from src.server.config import TAVILY_API_KEY
 
 logger = logging.getLogger(__name__)
 
 _TAVILY_URL = "https://api.tavily.com/search"
 _DEFAULT_MAX_RESULTS = 5
-
-
-def _load_env() -> None:
-    if os.getenv("TAVILY_API_KEY"):
-        return
-    try:
-        from dotenv import load_dotenv  # type: ignore[import]
-        directory = os.path.dirname(os.path.abspath(__file__))
-        for _ in range(8):
-            candidate = os.path.join(directory, ".env")
-            if os.path.isfile(candidate):
-                load_dotenv(candidate)
-                return
-            parent = os.path.dirname(directory)
-            if parent == directory:
-                break
-            directory = parent
-    except ImportError:
-        pass
 
 
 def _normalise(raw: dict, retrieved_at: str) -> dict:
@@ -56,8 +38,7 @@ class WebResearchClient:
         api_key: str | None = None,
         timeout_seconds: float = 15.0,
     ) -> None:
-        _load_env()
-        self.api_key = api_key or os.getenv("TAVILY_API_KEY")
+        self.api_key = api_key or TAVILY_API_KEY
         self.timeout = timeout_seconds
 
     # ── public API ─────────────────────────────────────────────────────────

@@ -3,15 +3,18 @@ LangGraph-based orchestrator.
 
 Graph topology
 ──────────────
-                         ┌──────────────────────────────────────────────┐
-                         │  (retry: open_questions detected, pass < 2)  │
-                         ▼                                              │
-START → parse_intent → research → [parallel] ─────────────────────────┤
-                                   fundamental_analysis                 │
-                                   market_sentiment                     │
-                                 → gap_check ─── (gaps?) ──────────────┘
-                                             └── (no gaps) → scenario_scoring
-                                                              → report_verification → END
+                         ┌──────────────────────────────────────────────────────┐
+                         │  (retry: open_questions detected, pass < 2)          │
+                         ▼                                                      │
+START → parse_intent → research → [parallel] ───────────────────────────────── ┤
+                         ▲         fundamental_analysis  (writes agent_questions)│
+                         │         market_sentiment      (writes agent_questions)│
+                         │       → gap_check ─── (gaps?) ──────────────────────┘
+                         │                   └── (no gaps) → scenario_scoring
+                         │                                    → report_verification
+                         │                                        │ (unsupported claims
+                         └────────────────────────────────────────┘  + pass < 2)
+                                                                    └── END
 """
 
 import json
@@ -64,23 +67,31 @@ def _gap_check_node(state: ResearchState) -> ResearchState:
     intent = state.get("intent")
     fundamental_analysis = state.get("fundamental_analysis") or {}
     market_sentiment = state.get("market_sentiment") or {}
+    normalized_data = state.get("normalized_data") or {}
     current_pass = state.get("research_pass", 1)
     statuses = list(state.get("agent_statuses") or [])
 
+    # ── Structural checks (orchestrator-level) ─────────────────────────────
     new_questions: list[str] = []
     if intent and not intent.ticker:
         new_questions.append("Need clearer company/ticker mapping from query context")
     if intent and not intent.time_horizon:
         new_questions.append("Need explicit investment horizon to refine scenario assumptions")
-    if fundamental_analysis.get("missing_fields"):
+
+    # ── Agent-sourced questions (surfaced by analysis nodes) ───────────────
+    # operator.add accumulates across the parallel step; gap_check drains and
+    # resets the list by returning agent_questions=[] (plain replace via _last_list
+    # logic doesn't apply here — we just reset via overwrite after reading).
+    agent_questions: list[str] = list(state.get("agent_questions") or [])
+    new_questions.extend(agent_questions)
+
+    # ── Conflict signals from research ─────────────────────────────────────
+    conflicts = normalized_data.get("conflicts") or []
+    if conflicts:
         new_questions.append(
-            "Need additional data for missing fundamental fields: "
-            + ", ".join(fundamental_analysis["missing_fields"])
-        )
-    if market_sentiment.get("missing_fields"):
-        new_questions.append(
-            "Need additional sentiment evidence for: "
-            + ", ".join(market_sentiment["missing_fields"])
+            f"Conflicting evidence detected across {len(conflicts)} topic(s): "
+            + ", ".join(c["topic"] for c in conflicts)
+            + ". Supplementary research may resolve these."
         )
 
     # Cap retries — after max passes, clear questions so the router proceeds.
@@ -94,7 +105,11 @@ def _gap_check_node(state: ResearchState) -> ResearchState:
             statuses, "gap_check",
             status="completed",
             action="retrying research" if will_retry else "gaps resolved",
-            details=[f"open_questions={len(new_questions)}"],
+            details=[
+                f"open_questions={len(new_questions)}",
+                f"agent_sourced={len(agent_questions)}",
+                f"conflicts={len(conflicts)}",
+            ],
         )
         if will_retry:
             statuses = update_status(
@@ -107,13 +122,25 @@ def _gap_check_node(state: ResearchState) -> ResearchState:
                 status="running", action="scoring scenarios",
             )
 
-    return {"open_questions": new_questions, "agent_statuses": statuses}
+    return {
+        "open_questions": new_questions,
+        "agent_questions": [],   # reset for the next cycle
+        "agent_statuses": statuses,
+    }
 
 
 def _gap_router(state: ResearchState) -> str:
     if state.get("open_questions"):
         return "research"
     return "scenario_scoring"
+
+
+def _report_router(state: ResearchState) -> str:
+    """Re-route to research if report_verification found unsupported claims and
+    we still have retry budget; otherwise terminate."""
+    if state.get("open_questions") and state.get("research_pass", 0) < _MAX_RESEARCH_PASSES:
+        return "research"
+    return END
 
 
 # ── graph builder ──────────────────────────────────────────────────────────
@@ -149,7 +176,11 @@ def build_graph(llm_client: OpenRouterClient | None = None) -> StateGraph:
     )
 
     builder.add_edge("scenario_scoring", "report_verification")
-    builder.add_edge("report_verification", END)
+    builder.add_conditional_edges(
+        "report_verification",
+        _report_router,
+        {"research": "research", END: END},
+    )
 
     return builder.compile()
 
@@ -158,8 +189,7 @@ def build_graph(llm_client: OpenRouterClient | None = None) -> StateGraph:
 
 class OrchestratorAgent:
     def __init__(self, llm_client: OpenRouterClient | None = None) -> None:
-        self._llm_client = llm_client or OpenRouterClient()
-        self.graph = build_graph(self._llm_client)
+        self.graph = build_graph(llm_client)
 
     def run(self, request: ResearchRequest) -> ResearchResponse:
         final_state = self.graph.invoke({"query": request.query})
@@ -196,9 +226,6 @@ class OrchestratorAgent:
 
         response = _state_to_response(final_state)
         yield {"type": "final", "payload": response}
-
-    def _parse_intent(self, query: str) -> ResearchIntent:
-        return _parse_intent(query, self._llm_client)
 
 
 # ── helpers ────────────────────────────────────────────────────────────────
