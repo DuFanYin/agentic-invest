@@ -8,7 +8,7 @@ import logging
 from src.server.models.analysis import FundamentalAnalysis, MacroAnalysis, MarketSentiment
 from src.server.models.scenario import Scenario
 from src.server.models.state import ResearchState
-from src.server.services.openrouter import OpenRouterClient
+from src.server.services.llm_provider import LLMClient
 from src.server.utils.contract import NODE_CONTRACTS, assert_reads, assert_writes
 from src.server.utils.status import update_status
 
@@ -17,7 +17,7 @@ _WRITES = NODE_CONTRACTS["scenario_scoring"].writes
 
 logger = logging.getLogger(__name__)
 
-_default_llm = OpenRouterClient()
+_default_llm = LLMClient()
 _NODE = "scenario_scoring"
 
 _MIN_SCENARIOS = 3
@@ -171,7 +171,7 @@ def _parse_llm_scenarios(raw: str, evidence_ids: list[str]) -> list[Scenario]:
 
 
 async def scenario_scoring_node(
-    state: ResearchState, *, llm: OpenRouterClient = _default_llm
+    state: ResearchState, *, llm: LLMClient = _default_llm
 ) -> ResearchState:
     assert_reads(state, _READS, _NODE)
 

@@ -34,7 +34,7 @@ agentic-invest/
 │   │   ├── agents/              # Graph runtime and node implementations
 │   │   ├── services/            # External clients and runtime infra
 │   │   │   ├── __init__.py        
-│   │   │   ├── openrouter.py       # LLM client wrapper
+│   │   │   ├── llm_provider.py     # LLM client wrapper
 │   │   │   ├── finance_data.py     # yfinance data access
 │   │   │   ├── macro_data.py       # FRED and macro signal access
 │   │   │   ├── web_research.py     # Tavily web search client
@@ -153,11 +153,11 @@ External dependency wrappers and request-scoped infrastructure. Agents do not ca
 
 Capability groups:
 
-- LLM access: `openrouter.py`
+- LLM access: `llm_provider.py`
 - data collection: `finance_data.py`, `macro_data.py`, `web_research.py`
 - process-local infrastructure: `cache.py`, `collector.py`, `section_queue.py`
 
-#### `openrouter.py`
+#### `llm_provider.py`
 
 OpenAI-compatible LLM client used by the agent nodes. With the default OpenRouter provider it rotates through a four-model free-tier chain:
 
@@ -208,7 +208,7 @@ TTL is enforced on read, so expired entries behave as cache misses.
 
 #### `collector.py`
 
-Per-request LLM telemetry collector used by `OrchestratorAgent` and `OpenRouterClient`.
+Per-request LLM telemetry collector used by `OrchestratorAgent` and `LLMClient`.
 
 - `record(call)`: append and enqueue `LLMCall` events
 - `wait_next()`: async dequeue for streaming `llm_call` events

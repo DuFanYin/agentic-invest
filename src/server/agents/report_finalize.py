@@ -18,7 +18,7 @@ from src.server.models.analysis import (
 from src.server.models.response import ValidationResult
 from src.server.models.scenario import Scenario
 from src.server.models.state import ResearchState
-from src.server.services.openrouter import OpenRouterClient
+from src.server.services.llm_provider import LLMClient
 from src.server.services.section_queue import SectionQueue
 from src.server.utils.contract import NODE_CONTRACTS, assert_reads, assert_writes
 from src.server.utils.status import update_status
@@ -26,6 +26,7 @@ from src.server.utils.status import update_status
 _READS  = NODE_CONTRACTS["report_finalize"].reads
 _WRITES = NODE_CONTRACTS["report_finalize"].writes
 from src.server.utils.validation import (
+    SCENARIO_PROB_TOLERANCE,
     validate_claim_coverage,
     validate_evidence_completeness,
     validate_scenario_scores,
@@ -33,7 +34,7 @@ from src.server.utils.validation import (
 
 logger = logging.getLogger(__name__)
 
-_default_llm = OpenRouterClient()
+_default_llm = LLMClient()
 _default_llm.max_retries = 1
 _NODE = "report_finalize"
 
@@ -185,7 +186,7 @@ def _fmt_scenarios(scenarios: list[Scenario], debate: ScenarioDebate | None) -> 
     if (
         isinstance(debate, ScenarioDebate)
         and debate.calibrated_scenarios
-        and "fallback_to_baseline" not in debate.debate_flags
+        and not debate.degraded
     ):
         for s in debate.calibrated_scenarios:
             if s.get("name"):
@@ -222,7 +223,7 @@ def _all_context(intent, evidence_dump, fa, macro, ms, scenarios, debate, metric
         parts.append(f"SENTIMENT:\n{_fmt_sentiment(ms)}")
     if scenarios:
         parts.append(f"SCENARIOS:\n{_fmt_scenarios(scenarios, debate)}")
-    if isinstance(debate, ScenarioDebate) and "fallback_to_baseline" not in debate.debate_flags:
+    if isinstance(debate, ScenarioDebate) and not debate.degraded:
         parts.append(f"DEBATE:\n{_fmt_debate(debate)}")
     return "\n\n".join(parts)
 
@@ -252,7 +253,7 @@ def _section_context(
 async def _render_narrative(
     section: ReportSection,
     context: str,
-    llm: OpenRouterClient,
+    llm: LLMClient,
 ) -> str:
     prompt = (
         f"Write the '{section.title}' section of an investment research report.\n\n"
@@ -278,7 +279,7 @@ async def _render_narrative(
 async def report_finalize_node(
     state: ResearchState,
     *,
-    llm: OpenRouterClient = _default_llm,
+    llm: LLMClient = _default_llm,
     section_queue: SectionQueue | None = None,
 ) -> ResearchState:
     assert_reads(state, _READS, _NODE)
@@ -310,6 +311,13 @@ async def report_finalize_node(
         logger.error(msg)
         raise RuntimeError(msg)
 
+    # Degraded-node detection — fail fast if all three analysis nodes are degraded
+    fa_degraded = isinstance(fa, FundamentalAnalysis) and fa.degraded
+    macro_degraded = isinstance(macro, MacroAnalysis) and macro.degraded
+    ms_degraded = isinstance(ms, MarketSentiment) and ms.degraded
+    if fa_degraded and macro_degraded and ms_degraded:
+        raise RuntimeError(f"[{_NODE}] all three analysis nodes degraded — cannot generate report")
+
     # Validation
     errors: list[str] = []
     errors.extend(validate_scenario_scores(scenarios))
@@ -320,6 +328,17 @@ async def report_finalize_node(
         errors.extend(validate_claim_coverage(ms, available_evidence_ids))
 
     warnings: list[str] = []
+    if fa_degraded:
+        warnings.append("fundamental_analysis unavailable: LLM exhausted")
+    if macro_degraded:
+        warnings.append("macro_analysis unavailable: LLM exhausted")
+    if ms_degraded:
+        warnings.append("market_sentiment unavailable: LLM exhausted")
+    if isinstance(debate, ScenarioDebate) and debate.degraded:
+        warnings.append("scenario_debate unavailable: baseline probabilities used")
+    retry_reason = state.get("retry_reason", "none")
+    if retry_reason == "judge_degraded":
+        warnings.append("llm_judge unavailable: retry decision skipped")
     if isinstance(fa, FundamentalAnalysis) and fa.missing_fields:
         warnings.append(f"Missing fields: {', '.join(fa.missing_fields)}")
     if isinstance(ms, MarketSentiment) and ms.missing_fields:
@@ -412,7 +431,7 @@ async def report_finalize_node(
     if (
         isinstance(debate, ScenarioDebate)
         and debate.calibrated_scenarios
-        and "fallback_to_baseline" not in debate.debate_flags
+        and not debate.degraded
     ):
         prob_sum = sum(float(s.get("probability", 0.0)) for s in debate.calibrated_scenarios)
     else:
@@ -421,7 +440,7 @@ async def report_finalize_node(
     debate_applied = (
         isinstance(debate, ScenarioDebate)
         and len(debate.probability_adjustments) > 0
-        and "fallback_to_baseline" not in debate.debate_flags
+        and not debate.degraded
     )
     unresolved = len(errors) + len(uncovered)
     if unresolved == 0 and citation_coverage >= 0.8:
@@ -433,7 +452,7 @@ async def report_finalize_node(
 
     quality_metrics = QualityMetrics(
         citation_coverage=round(citation_coverage, 4),
-        scenario_probability_valid=abs(prob_sum - 1.0) < 0.01,
+        scenario_probability_valid=abs(prob_sum - 1.0) <= SCENARIO_PROB_TOLERANCE,
         debate_applied=debate_applied,
         unresolved_issues=unresolved,
         confidence=qm_confidence,

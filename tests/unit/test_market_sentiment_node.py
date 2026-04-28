@@ -93,16 +93,21 @@ def test_result_shape_and_core_fields():
     assert isinstance(ms, MarketSentiment)
 
 
-# ── raises on LLM failure (no stub fallback) ──────────────────────────────
+# ── best-effort degraded on LLM failure ───────────────────────────────────
 
-def test_raises_when_llm_raises():
-    with pytest.raises(RuntimeError, match="market_sentiment"):
-        _run(market_sentiment_node(_state(), llm=_mock_llm(raises=RuntimeError("exhausted"))))
+def test_degraded_when_llm_raises():
+    result = _run(market_sentiment_node(_state(), llm=_mock_llm(raises=RuntimeError("exhausted"))))
+    ms = result["market_sentiment"]
+    assert isinstance(ms, MarketSentiment)
+    assert ms.degraded is True
+    assert ms.news_sentiment.direction == "neutral"
 
 
-def test_raises_when_no_evidence():
-    with pytest.raises(RuntimeError, match="market_sentiment"):
-        _run(market_sentiment_node(_state(evidence=[]), llm=_mock_llm()))
+def test_degraded_when_no_evidence():
+    result = _run(market_sentiment_node(_state(evidence=[]), llm=_mock_llm()))
+    ms = result["market_sentiment"]
+    assert isinstance(ms, MarketSentiment)
+    assert ms.degraded is True
 
 
 # ── news evidence filtering ────────────────────────────────────────────────

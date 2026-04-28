@@ -14,6 +14,7 @@ from datetime import UTC, datetime
 from typing import Any
 
 from src.server.models.finance import CompanyInfo, FinancialsPayload, PriceHistoryPayload
+from src.server.services.retry import retry_sync
 
 logger = logging.getLogger(__name__)
 
@@ -66,7 +67,11 @@ class FinanceDataClient:
         try:
             import yfinance as yf
             t = yf.Ticker(ticker)
-            info = t.info
+            info = retry_sync(
+                lambda: t.info,
+                retry_on=(Exception,),
+                op_name=f"yfinance.info.{ticker}",
+            )
             if not info.get("shortName"):
                 logger.warning("ticker %s not found (no shortName)", ticker)
                 return {}
@@ -111,10 +116,10 @@ class FinanceDataClient:
         try:
             import yfinance as yf
             t = yf.Ticker(ticker)
-            inc = t.income_stmt          # annual, newest column first
-            q_inc = t.quarterly_income_stmt
-            cf = t.cashflow
-            bs = t.balance_sheet
+            inc = retry_sync(lambda: t.income_stmt, retry_on=(Exception,), op_name=f"yfinance.income_stmt.{ticker}")  # annual, newest column first
+            q_inc = retry_sync(lambda: t.quarterly_income_stmt, retry_on=(Exception,), op_name=f"yfinance.quarterly_income_stmt.{ticker}")
+            cf = retry_sync(lambda: t.cashflow, retry_on=(Exception,), op_name=f"yfinance.cashflow.{ticker}")
+            bs = retry_sync(lambda: t.balance_sheet, retry_on=(Exception,), op_name=f"yfinance.balance_sheet.{ticker}")
 
             # ── annual metrics ──────────────────────────────────────────
             rev_latest  = _row(inc, "Total Revenue", 0)
@@ -221,7 +226,11 @@ class FinanceDataClient:
         try:
             import yfinance as yf
             t = yf.Ticker(ticker)
-            hist = t.history(period=period)
+            hist = retry_sync(
+                lambda: t.history(period=period),
+                retry_on=(Exception,),
+                op_name=f"yfinance.price_history.{ticker}",
+            )
             if hist.empty:
                 return PriceHistoryPayload(error=f"no price history for {ticker}").model_dump(by_alias=True)
 
@@ -261,7 +270,11 @@ class FinanceDataClient:
         try:
             import yfinance as yf
             t = yf.Ticker(ticker)
-            raw_news = t.news or []
+            raw_news = retry_sync(
+                lambda: (t.news or []),
+                retry_on=(Exception,),
+                op_name=f"yfinance.news.{ticker}",
+            )
             results = []
             for item in raw_news[:10]:
                 content = item.get("content") or {}

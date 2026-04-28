@@ -10,7 +10,7 @@ from fastapi.testclient import TestClient
 
 from src.server.agents.orchestrator import OrchestratorAgent
 from src.server.main import app
-from src.server.services.openrouter import OpenRouterClient
+from src.server.services.llm_provider import LLMClient
 from src.server import shutdown
 
 
@@ -93,7 +93,7 @@ def _mock_llm(
         "## What To Watch Next\n## Sources\n## Disclaimer\nNot financial advice."
     )
 
-    llm = MagicMock(spec=OpenRouterClient)
+    llm = MagicMock(spec=LLMClient)
     call_count = {"n": 0}
 
     async def _call_with_retry(prompt: str, **kw) -> str:

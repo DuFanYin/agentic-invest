@@ -10,6 +10,12 @@ from typing import Any
 from src.server.config import CACHE_DB_PATH
 from src.server.config import FRED_API_KEY
 from src.server.services.cache import Cache
+from src.server.services.retry import (
+    DEFAULT_FETCH_TIMEOUT_SECONDS,
+    RETRYABLE_HTTP_STATUS,
+    RetryableFetchError,
+    retry_sync,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -43,7 +49,16 @@ def _fetch_fred_series(series_id: str, label: str, api_key: str) -> dict[str, An
             f"&observation_start={(datetime.now(UTC) - timedelta(days=400)).strftime('%Y-%m-%d')}"
             f"&sort_order=desc&limit=13"
         )
-        resp = httpx.get(url, timeout=10)
+        def _request() -> httpx.Response:
+            try:
+                resp = httpx.get(url, timeout=DEFAULT_FETCH_TIMEOUT_SECONDS)
+            except (httpx.TimeoutException, httpx.NetworkError) as exc:
+                raise RetryableFetchError(str(exc)) from exc
+            if resp.status_code in RETRYABLE_HTTP_STATUS:
+                raise RetryableFetchError(f"http {resp.status_code}")
+            return resp
+
+        resp = retry_sync(_request, op_name=f"fred.{series_id}")
         resp.raise_for_status()
         observations = resp.json().get("observations", [])
         # Filter out missing values
@@ -76,7 +91,11 @@ def _fetch_yf_macro(ticker: str, label: str) -> dict[str, Any]:
     try:
         import yfinance as yf  # type: ignore[import]
         tk = yf.Ticker(ticker)
-        hist = tk.history(period="5d", interval="1d")
+        hist = retry_sync(
+            lambda: tk.history(period="5d", interval="1d"),
+            retry_on=(Exception,),
+            op_name=f"yfinance.macro.{ticker}",
+        )
         if hist.empty:
             return {"ticker": ticker, "label": label, "value": None, "direction": "unknown"}
         closes = hist["Close"].dropna()

@@ -23,6 +23,7 @@ from collections.abc import AsyncGenerator
 
 from langgraph.graph import END, START, StateGraph
 
+from src.server.config import REQUEST_TIMEOUT_SECONDS
 from src.server.agents.fundamental_analysis import fundamental_analysis_node
 from src.server.agents.macro_analysis import macro_analysis_node
 from src.server.agents.planning_agent import make_planning_node
@@ -36,14 +37,14 @@ from src.server.models.request import ResearchRequest
 from src.server.models.response import LLMCall, ResearchResponse, ValidationResult
 from src.server.models.state import ResearchState
 from src.server.services.collector import LLMCallCollector
-from src.server.services.openrouter import OpenRouterClient
+from src.server.services.llm_provider import LLMClient
 from src.server.services.section_queue import SectionQueue
 
 
 # ── graph builder ──────────────────────────────────────────────────────────
 
-def build_graph(llm_client: OpenRouterClient | None = None, sq: SectionQueue | None = None) -> StateGraph:
-    llm_client = llm_client or OpenRouterClient()
+def build_graph(llm_client: LLMClient | None = None, sq: SectionQueue | None = None) -> StateGraph:
+    llm_client = llm_client or LLMClient()
     sq = sq  # captured by _report_node closure
 
     builder = StateGraph(ResearchState)
@@ -108,22 +109,26 @@ def build_graph(llm_client: OpenRouterClient | None = None, sq: SectionQueue | N
 # ── public façade ──────────────────────────────────────────────────────────
 
 class OrchestratorAgent:
-    def __init__(self, llm_client: OpenRouterClient | None = None) -> None:
+    def __init__(self, llm_client: LLMClient | None = None) -> None:
         # llm_client is only set in tests (a MagicMock stub).
         # Production always leaves this None and gets a fresh client per request.
         self._test_client = llm_client
 
-    def _client_for_request(self, collector: LLMCallCollector) -> OpenRouterClient:
+    def _client_for_request(self, collector: LLMCallCollector) -> LLMClient:
         if self._test_client is not None:
             return self._test_client  # test stub owns its own mock behaviour; collector unused
-        return OpenRouterClient(collector=collector)
+        return LLMClient(collector=collector)
 
     async def run(self, request: ResearchRequest) -> ResearchResponse:
         collector = LLMCallCollector()
         sq = SectionQueue()
         client = self._client_for_request(collector)
         graph = build_graph(client, sq=sq)
-        final_state = await graph.ainvoke({"query": request.query})
+        try:
+            async with asyncio.timeout(REQUEST_TIMEOUT_SECONDS):
+                final_state = await graph.ainvoke({"query": request.query})
+        except TimeoutError as exc:
+            raise RuntimeError(f"[orchestrator] request timeout after {int(REQUEST_TIMEOUT_SECONDS)}s") from exc
         cost, prompt_tok, completion_tok = collector.totals()
         return _state_to_response(final_state, llm_calls=collector.all(), total_cost_usd=cost, total_prompt_tokens=prompt_tok, total_completion_tokens=completion_tok)
 
@@ -143,54 +148,57 @@ class OrchestratorAgent:
         graph_done = False
 
         try:
-            while True:
-                wait_tasks = [t for t in (step_task, call_task, section_task) if t is not None]
-                if not wait_tasks:
-                    break
+            async with asyncio.timeout(REQUEST_TIMEOUT_SECONDS):
+                while True:
+                    wait_tasks = [t for t in (step_task, call_task, section_task) if t is not None]
+                    if not wait_tasks:
+                        break
 
-                done, _ = await asyncio.wait(wait_tasks, return_when=asyncio.FIRST_COMPLETED)
+                    done, _ = await asyncio.wait(wait_tasks, return_when=asyncio.FIRST_COMPLETED)
 
-                if call_task is not None and call_task in done:
-                    item = call_task.result()
-                    yield {"type": "llm_call", "payload": item.model_dump()}
-                    call_task = asyncio.create_task(collector.wait_next())
+                    if call_task is not None and call_task in done:
+                        item = call_task.result()
+                        yield {"type": "llm_call", "payload": item.model_dump()}
+                        call_task = asyncio.create_task(collector.wait_next())
 
-                if section_task is not None and section_task in done:
-                    item = section_task.result()
-                    if item is not sq.SENTINEL:
-                        yield {"type": "section_ready", "payload": item}
-                        section_task = asyncio.create_task(sq.wait_next())
-                    else:
-                        section_task = None  # queue exhausted
+                    if section_task is not None and section_task in done:
+                        item = section_task.result()
+                        if item is not sq.SENTINEL:
+                            yield {"type": "section_ready", "payload": item}
+                            section_task = asyncio.create_task(sq.wait_next())
+                        else:
+                            section_task = None  # queue exhausted
 
-                if step_task is not None and step_task in done:
-                    try:
-                        mode, payload = step_task.result()
-                    except StopAsyncIteration:
-                        graph_done = True
-                        step_task = None
-                    else:
-                        if mode == "updates":
-                            for _, delta in payload.items():
-                                agent_statuses = delta.get("agent_statuses")
-                                if agent_statuses:
-                                    yield {
-                                        "type": "agent_status",
-                                        "payload": [s.model_dump() for s in agent_statuses],
-                                    }
-                        elif mode == "values":
-                            final_state = payload
-                        step_task = asyncio.create_task(anext(stream_iter))
-
-                if graph_done and collector.pending_count() == 0 and section_task is None:
-                    if call_task is not None:
-                        call_task.cancel()
+                    if step_task is not None and step_task in done:
                         try:
-                            await call_task
-                        except asyncio.CancelledError:
-                            pass
-                        call_task = None
-                    break
+                            mode, payload = step_task.result()
+                        except StopAsyncIteration:
+                            graph_done = True
+                            step_task = None
+                        else:
+                            if mode == "updates":
+                                for _, delta in payload.items():
+                                    agent_statuses = delta.get("agent_statuses")
+                                    if agent_statuses:
+                                        yield {
+                                            "type": "agent_status",
+                                            "payload": [s.model_dump() for s in agent_statuses],
+                                        }
+                            elif mode == "values":
+                                final_state = payload
+                            step_task = asyncio.create_task(anext(stream_iter))
+
+                    if graph_done and collector.pending_count() == 0 and section_task is None:
+                        if call_task is not None:
+                            call_task.cancel()
+                            try:
+                                await call_task
+                            except asyncio.CancelledError:
+                                pass
+                            call_task = None
+                        break
+        except TimeoutError as exc:
+            raise RuntimeError(f"[orchestrator] request timeout after {int(REQUEST_TIMEOUT_SECONDS)}s") from exc
         finally:
             for task in (step_task, call_task, section_task):
                 if task is not None and not task.done():

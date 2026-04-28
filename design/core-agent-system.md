@@ -164,7 +164,7 @@ State mutation rules:
 The orchestrator is a workflow/runtime coordinator, not a peer analysis agent.
 
 - Build and execute the LangGraph workflow
-- Instantiate and wire per-request runtime dependencies (`OpenRouterClient`, `LLMCallCollector`, `SectionQueue`)
+- Instantiate and wire per-request runtime dependencies (`LLMClient`, `LLMCallCollector`, `SectionQueue`)
 - Handle retry routing, streaming, and failure surfacing
 - Input: `query`
 - Output: graph execution, streamed runtime events, and final aggregated response

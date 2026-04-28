@@ -39,14 +39,13 @@ class Valuation(BaseModel):
 
 class FundamentalAnalysis(BaseModel):
     agent: str = "fundamental_analysis"
-    claims: list[Claim] = Field(..., min_length=1)
-    business_quality: BusinessQuality
-    valuation: Valuation
+    claims: list[Claim] = Field(default_factory=list)
+    business_quality: BusinessQuality = Field(default_factory=lambda: BusinessQuality(view="stable"))
+    valuation: Valuation = Field(default_factory=lambda: Valuation(relative_multiple_view="unavailable"))
     fundamental_risks: list[Risk] = Field(default_factory=list)
     missing_fields: list[str] = Field(default_factory=list)
-    # metrics is passed through from research — not produced by the LLM
     metrics: dict[str, Any] = Field(default_factory=dict)
-    _llm_used: bool = True
+    degraded: bool = False
 
     model_config = {"populate_by_name": True}
 
@@ -69,12 +68,12 @@ class MarketNarrative(BaseModel):
 class MarketSentiment(BaseModel):
     agent: str = "market_sentiment"
     claims: list[Claim] = Field(default_factory=list)
-    news_sentiment: NewsSentiment
+    news_sentiment: NewsSentiment = Field(default_factory=lambda: NewsSentiment(direction="neutral"))
     price_action: PriceAction | None = None
-    market_narrative: MarketNarrative
+    market_narrative: MarketNarrative = Field(default_factory=lambda: MarketNarrative(summary="Sentiment analysis unavailable."))
     sentiment_risks: list[Risk] = Field(default_factory=list)
     missing_fields: list[str] = Field(default_factory=list)
-    _llm_used: bool = True
+    degraded: bool = False
 
     model_config = {"populate_by_name": True}
 
@@ -105,12 +104,21 @@ class MacroRisk(BaseModel):
 
 class MacroAnalysis(BaseModel):
     agent: str = "macro_analysis"
-    macro_view: str
+    macro_view: str = "Macro analysis unavailable."
     macro_drivers: list[str] = Field(default_factory=list)
     macro_risks: list[MacroRisk] = Field(default_factory=list)
     rate_environment: Literal["tightening", "easing", "stable"] = "stable"
     growth_environment: Literal["expanding", "contracting", "stable"] = "stable"
     missing_fields: list[str] = Field(default_factory=list)
+    degraded: bool = False
+
+
+# ── JudgeDecision ─────────────────────────────────────────────────────────
+
+class JudgeDecision(BaseModel):
+    should_retry: bool = False
+    retry_question: str = ""
+    reason: str = ""
 
 
 # ── ScenarioDebate ─────────────────────────────────────────────────────────
@@ -133,12 +141,13 @@ class ProbabilityAdjustment(BaseModel):
 
 
 class ScenarioDebate(BaseModel):
-    debate_summary: str
+    debate_summary: str = "Debate unavailable."
     advocacy_summaries: list[dict[str, Any]] = Field(default_factory=list)
     probability_adjustments: list[ProbabilityAdjustment] = Field(default_factory=list)
     calibrated_scenarios: list[Any] = Field(default_factory=list)  # list[Scenario] — avoids circular import
     confidence: Literal["high", "medium", "low"] = "medium"
     debate_flags: list[str] = Field(default_factory=list)
+    degraded: bool = False
 
 
 # ── ReportPlan ────────────────────────────────────────────────────────────
@@ -179,15 +188,6 @@ class QualityMetrics(BaseModel):
     debate_applied: bool = False
     unresolved_issues: int = 0
     confidence: Literal["high", "medium", "low"] = "low"
-
-
-# ── Budget ─────────────────────────────────────────────────────────────────
-
-class Budget(BaseModel):
-    pass_used: int = 0
-    pass_limit: int = 2
-    elapsed_ms: int = 0
-    timeout_ms: int = 120000
 
 
 # ── NormalizedData ─────────────────────────────────────────────────────────

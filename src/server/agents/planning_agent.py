@@ -9,7 +9,7 @@ from dataclasses import dataclass, field
 from src.server.models.analysis import CustomSection, PlanContext, ReportPlan, ReportSection
 from src.server.models.intent import ResearchIntent
 from src.server.models.state import ResearchState
-from src.server.services.openrouter import OpenRouterClient
+from src.server.services.llm_provider import LLMClient
 from src.server.utils.contract import NODE_CONTRACTS, assert_reads, assert_writes
 from src.server.utils.status import initial_agent_statuses, update_status
 
@@ -100,7 +100,7 @@ def _parse_custom_sections(raw: dict) -> list[CustomSection]:
 
 # ── Core plan() function ────────────────────────────────────────────────────
 
-async def plan(query: str, llm_client: OpenRouterClient) -> PlanningResult:
+async def plan(query: str, llm_client: LLMClient) -> PlanningResult:
     prompt = f"{_SCHEMA}\n\nUser query: {query}"
     try:
         raw = await llm_client.complete(prompt, system=_SYSTEM, node=_NODE)
@@ -160,12 +160,12 @@ async def plan(query: str, llm_client: OpenRouterClient) -> PlanningResult:
         )
 
 
-async def parse_intent(query: str, llm_client: OpenRouterClient) -> ResearchIntent:
+async def parse_intent(query: str, llm_client: LLMClient) -> ResearchIntent:
     result = await plan(query, llm_client)
     return result.intent
 
 
-def make_planning_node(llm_client: OpenRouterClient):
+def make_planning_node(llm_client: LLMClient):
     async def planning_agent_node(state: ResearchState) -> ResearchState:
         assert_reads(state, _READS, _NODE)
         statuses = initial_agent_statuses(running=_NODE)

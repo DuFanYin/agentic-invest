@@ -107,15 +107,20 @@ def test_result_shape_and_core_fields():
     assert fa.metrics.get("latest_quarter") == raw["latest_quarter"]
 
 
-# ── raises on LLM failure (no stub fallback) ──────────────────────────────
+# ── best-effort degraded on LLM failure ───────────────────────────────────
 
-def test_raises_when_llm_raises():
-    with pytest.raises(RuntimeError, match="fundamental_analysis"):
-        _run(fundamental_analysis_node(_state(), llm=_mock_llm(raises=RuntimeError("all models exhausted"))))
+def test_degraded_when_llm_raises():
+    result = _run(fundamental_analysis_node(_state(), llm=_mock_llm(raises=RuntimeError("all models exhausted"))))
+    fa = result["fundamental_analysis"]
+    assert isinstance(fa, FundamentalAnalysis)
+    assert fa.degraded is True
+    assert fa.claims == []
 
 
-def test_raises_when_no_evidence():
-    with pytest.raises(RuntimeError, match="fundamental_analysis"):
-        _run(fundamental_analysis_node(_state(evidence=[]), llm=_mock_llm()))
+def test_degraded_when_no_evidence():
+    result = _run(fundamental_analysis_node(_state(evidence=[]), llm=_mock_llm()))
+    fa = result["fundamental_analysis"]
+    assert isinstance(fa, FundamentalAnalysis)
+    assert fa.degraded is True
 
 

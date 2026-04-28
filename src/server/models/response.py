@@ -6,7 +6,8 @@ AgentLifecycle: TypeAlias = Literal[
     "active",
     "waiting",
     "blocked",
-    "failed",
+    "degraded",  # best-effort: node ran but returned a degraded result, pipeline continues
+    "failed",    # hard failure: node raised, pipeline stopped
 ]
 
 AgentPhase: TypeAlias = Literal[

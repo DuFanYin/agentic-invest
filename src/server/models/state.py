@@ -17,7 +17,6 @@ from typing import Annotated, Any
 from typing_extensions import TypedDict
 
 from src.server.models.analysis import (
-    Budget,
     FundamentalAnalysis,
     MacroAnalysis,
     MarketSentiment,
@@ -44,7 +43,8 @@ def _last_list(left: list, right: list) -> list:
         "active": 1,
         "waiting": 2,
         "blocked": 3,
-        "failed": 4,
+        "degraded": 4,
+        "failed": 5,
     }
 
     def _ts(item) -> float:
@@ -113,9 +113,6 @@ class ResearchState(TypedDict, total=False):
     validation_result: ValidationResult
     quality_metrics: QualityMetrics
     stop_reason: str
-
-    # ── Budget ─────────────────────────────────────────────────────────────
-    budget: Budget
 
     # ── Agent status sidebar ───────────────────────────────────────────────
     # _last_list: both parallel analysis nodes write this in the same step.

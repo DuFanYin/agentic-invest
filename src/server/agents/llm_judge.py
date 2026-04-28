@@ -12,9 +12,11 @@ in the report as data limitations, not routed back to research.
 from __future__ import annotations
 
 import json
+import logging
 
+from src.server.models.analysis import JudgeDecision
 from src.server.models.state import ResearchState
-from src.server.services.openrouter import OpenRouterClient
+from src.server.services.llm_provider import LLMClient
 from src.server.utils.contract import NODE_CONTRACTS, assert_reads, assert_writes
 from src.server.utils.status import update_status
 
@@ -68,7 +70,7 @@ Rules:
 """
 
 
-async def llm_judge_node(state: ResearchState, *, llm: OpenRouterClient | None = None) -> ResearchState:
+async def llm_judge_node(state: ResearchState, *, llm: LLMClient | None = None) -> ResearchState:
     assert_reads(state, _READS, _NODE)
 
     intent = state.get("intent")
@@ -97,7 +99,7 @@ async def llm_judge_node(state: ResearchState, *, llm: OpenRouterClient | None =
             retry_reason = "structural"
 
         elif evidence:
-            llm = llm or OpenRouterClient()
+            llm = llm or LLMClient()
             try:
                 web_count = sum(1 for e in evidence if getattr(e, "source_type", "") == "web")
                 news_count = sum(1 for e in evidence if getattr(e, "source_type", "") == "news")
@@ -156,18 +158,17 @@ MUST-HAVE METRICS:
                     system=_SYSTEM_ANALYSIS_JUDGE,
                     node=_NODE,
                 )
-                parsed = json.loads(raw)
-                should_retry = bool(parsed.get("should_retry"))
-                rq = str(parsed.get("retry_question") or "").strip()
-                if should_retry and rq:
-                    retry_question = rq
+                decision = JudgeDecision.model_validate(json.loads(raw))
+                if decision.should_retry and decision.retry_question:
+                    retry_question = decision.retry_question
                     retry_reason = "analysis_robustness"
-            except Exception:
-                pass
+            except Exception as exc:
+                logging.getLogger(__name__).warning("%s: analysis judge LLM failed — %s", _NODE, exc)
+                retry_reason = "judge_degraded"
 
         if retry_question is None and normalized_data and normalized_data.conflicts:
             try:
-                llm = llm or OpenRouterClient()
+                llm = llm or LLMClient()
                 topics = ", ".join(
                     getattr(c, "topic", str(c)) for c in normalized_data.conflicts
                 )
@@ -192,23 +193,23 @@ CONFLICT DETAILS:
                     system=_SYSTEM_CONFLICT_JUDGE,
                     node=_NODE,
                 )
-                parsed = json.loads(raw)
-                should_retry = bool(parsed.get("should_retry"))
-                rq = str(parsed.get("retry_question") or "").strip()
-                if should_retry and rq:
-                    retry_question = rq
+                decision = JudgeDecision.model_validate(json.loads(raw))
+                if decision.should_retry and decision.retry_question:
+                    retry_question = decision.retry_question
                     retry_reason = "evidence_conflict"
-            except Exception:
-                pass
+            except Exception as exc:
+                logging.getLogger(__name__).warning("%s: conflict judge LLM failed — %s", _NODE, exc)
+                retry_reason = "judge_degraded"
 
     will_retry = retry_question is not None
 
+    is_degraded = retry_reason == "judge_degraded"
     if statuses:
         statuses = update_status(
             statuses, "llm_judge",
-            lifecycle="waiting" if will_retry else "standby",
+            lifecycle="waiting" if will_retry else ("degraded" if is_degraded else "standby"),
             phase="gap_retry_required" if will_retry else "gap_resolved",
-            action="retrying research" if will_retry else "gaps resolved",
+            action="retrying research" if will_retry else ("judge degraded" if is_degraded else "gaps resolved"),
             details=[f"reason={retry_reason}"],
         )
         if will_retry:

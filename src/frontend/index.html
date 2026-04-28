@@ -51,29 +51,17 @@ const isStandbyLifecycle = (lifecycle) => !lifecycle || lifecycle === 'standby';
 const isActiveLifecycle = (lifecycle) => lifecycle === 'active';
 const isWaitingLifecycle = (lifecycle) => lifecycle === 'waiting';
 const isBlockedLifecycle = (lifecycle) => lifecycle === 'blocked';
+const isDegradedLifecycle = (lifecycle) => lifecycle === 'degraded';
 const isFailedLifecycle = (lifecycle) => lifecycle === 'failed';
-const ACTIVE_THRESHOLD_MS = 45000;
-const STALLED_THRESHOLD_MS = 120000;
-
-const parseIsoMs = (value) => {
-  if (!value) return 0;
-  const ts = Date.parse(value);
-  return Number.isFinite(ts) ? ts : 0;
-};
-
-const deriveExecutionPhase = (agentState, nowMs) => {
+const deriveExecutionPhase = (agentState) => {
   const lifecycle = agentState?.lifecycle || 'standby';
   if (isFailedLifecycle(lifecycle)) return 'FAILED';
+  if (isDegradedLifecycle(lifecycle)) return 'DEGRADED';
   if (isBlockedLifecycle(lifecycle)) return 'BLOCKED';
   if (isStandbyLifecycle(lifecycle)) return 'STANDBY';
   if (isWaitingLifecycle(lifecycle) || agentState?.waiting_on) return 'WAITING';
-  if (!isActiveLifecycle(lifecycle)) return String(lifecycle || 'STANDBY').toUpperCase();
-  const lastUpdateMs = parseIsoMs(agentState?.last_update_at);
-  if (!lastUpdateMs) return 'ACTIVE';
-  const idleForMs = Math.max(0, nowMs - lastUpdateMs);
-  if (idleForMs >= STALLED_THRESHOLD_MS) return 'STALLED';
-  if (idleForMs < ACTIVE_THRESHOLD_MS) return 'ACTIVE';
-  return 'RUNNING';
+  if (isActiveLifecycle(lifecycle)) return 'ACTIVE';
+  return String(lifecycle || 'STANDBY').toUpperCase();
 };
 
 const formatPct = (value) => `${Math.round((Number(value) || 0) * 100)}%`;
@@ -145,11 +133,12 @@ const metricGroupsFromAnalysis = (analysis) => {
 
 // Highlight numbers/percentages/multiples inline in claim text
 const NUM_RE = /(\$[\d,.]+[BMKTbmkt]?|\d+\.?\d*[xX]|\+?\-?\d+\.?\d*\s*(?:bps|pp|%)|[\d,.]+\s*(?:billion|million|trillion))/g;
+const NUM_PART_RE = /^(\$[\d,.]+[BMKTbmkt]?|\d+\.?\d*[xX]|\+?\-?\d+\.?\d*\s*(?:bps|pp|%)|[\d,.]+\s*(?:billion|million|trillion))$/;
 const highlightNumbers = (text) => {
   if (!text) return null;
   const parts = text.split(NUM_RE);
   return parts.map((part, i) =>
-    NUM_RE.test(part)
+    NUM_PART_RE.test(part)
       ? <span key={i} className="data-chip">{part}</span>
       : part
   );
@@ -228,20 +217,18 @@ const mergeLLMCallById = (prev, nextItem) => {
   return next;
 };
 
-function AgentRow({ agent, lifecycle, phase, action, waitingOn, progressHint, lastUpdateAt, nowMs }) {
+function AgentRow({ agent, lifecycle, phase, action, waitingOn, progressHint }) {
   const currentLifecycle = lifecycle || 'standby';
-  const label = deriveExecutionPhase({ lifecycle: currentLifecycle, waiting_on: waitingOn, last_update_at: lastUpdateAt }, nowMs);
-  const isEngaged = label === 'ACTIVE' || label === 'RUNNING' || label === 'WAITING';
+  const label = deriveExecutionPhase({ lifecycle: currentLifecycle, waiting_on: waitingOn });
+  const isEngaged = label === 'ACTIVE' || label === 'WAITING';
   const rowClass = isEngaged ? 'active' : '';
-  const dotClass = label === 'STANDBY' ? 'idle' : label === 'STALLED' || label === 'FAILED' ? 'failed' : 'running';
+  const dotClass = label === 'STANDBY' ? 'idle' : label === 'FAILED' ? 'failed' : label === 'DEGRADED' ? 'degraded' : 'running';
   const tagClass =
-    label === 'STANDBY'
-      ? 'tag-standby'
-      : label === 'STALLED' || label === 'FAILED'
-      ? 'tag-stalled'
-      : label === 'WAITING' || label === 'BLOCKED'
-      ? 'tag-waiting'
-      : 'tag-active';
+    label === 'STANDBY'  ? 'tag-standby'  :
+    label === 'FAILED'   ? 'tag-failed'   :
+    label === 'DEGRADED' ? 'tag-degraded' :
+    label === 'WAITING' || label === 'BLOCKED' ? 'tag-waiting' :
+    'tag-active';
   const phaseText = phase ? phase.replaceAll('_', ' ') : 'idle';
   const actionText = waitingOn
     ? `${action || phaseText} (${waitingOn})`
@@ -276,6 +263,15 @@ function LogLine({ time, agentId, msg }) {
 
 function SectionLabel({ children }) {
   return <div className="section-label">{children}</div>;
+}
+
+function DegradedBanner({ label }) {
+  return (
+    <div className="degraded-banner">
+      <span className="degraded-icon">⚠</span>
+      <span>{label || 'Analysis unavailable — LLM exhausted. Data shown is a placeholder.'}</span>
+    </div>
+  );
 }
 
 function IntentSection({ intent }) {
@@ -365,34 +361,40 @@ function FundamentalSection({ analysis, sectionTitle, loading }) {
   const risks = Array.isArray(analysis?.fundamental_risks) ? analysis.fundamental_risks : [];
   const bqView = analysis?.business_quality?.view;
   const valView = analysis?.valuation?.relative_multiple_view;
+  const isDegraded = analysis?.degraded === true;
   return (
     <div className="report-section">
       <SectionLabel>{sectionTitle || 'Fundamental Analysis'}</SectionLabel>
       <div className="section-title">{sectionTitle || 'Business & Financials'}</div>
-      {(bqView || valView) && (
-        <div className="analysis-meta-row">
-          {bqView && <span className={`quality-badge quality-${bqView}`}>{bqView}</span>}
-          {valView && <span className="valuation-note">{highlightNumbers(valView)}</span>}
-        </div>
-      )}
-      <div className="claim-list">
-        {claims.map((c, i) => (
-          <div key={i} className={`claim-item conf-${c.confidence}`}>
-            <span className={`conf-bar conf-${c.confidence}`} />
-            <span className="claim-text">{highlightNumbers(c.statement)}</span>
-          </div>
-        ))}
-      </div>
-      {risks.length > 0 && (
-        <div className="risk-list">
-          {risks.map((r, i) => (
-            <div key={i} className={`risk-item impact-${r.impact}`}>
-              <span className="risk-name">{r.name}</span>
-              <span className="risk-signal">{r.signal}</span>
+      {isDegraded
+        ? <DegradedBanner label="Fundamental analysis unavailable — LLM exhausted." />
+        : <>
+          {(bqView || valView) && (
+            <div className="analysis-meta-row">
+              {bqView && <span className={`quality-badge quality-${bqView}`}>{bqView}</span>}
+              {valView && <span className="valuation-note">{highlightNumbers(valView)}</span>}
             </div>
-          ))}
-        </div>
-      )}
+          )}
+          <div className="claim-list">
+            {claims.map((c, i) => (
+              <div key={i} className={`claim-item conf-${c.confidence}`}>
+                <span className={`conf-bar conf-${c.confidence}`} />
+                <span className="claim-text">{highlightNumbers(c.statement)}</span>
+              </div>
+            ))}
+          </div>
+          {risks.length > 0 && (
+            <div className="risk-list">
+              {risks.map((r, i) => (
+                <div key={i} className={`risk-item impact-${r.impact}`}>
+                  <span className="risk-name">{r.name}</span>
+                  <span className="risk-signal">{r.signal}</span>
+                </div>
+              ))}
+            </div>
+          )}
+        </>
+      }
     </div>
   );
 }
@@ -407,42 +409,46 @@ function SentimentSection({ sentiment, sectionTitle, loading }) {
   const claims = Array.isArray(sentiment?.claims) ? sentiment.claims : [];
   const risks = Array.isArray(sentiment?.sentiment_risks) ? sentiment.sentiment_risks : [];
   const direction = sentiment?.news_sentiment?.direction;
-  const dirConf = sentiment?.news_sentiment?.confidence;
   const pa = sentiment?.price_action;
   const narrative = sentiment?.market_narrative?.summary;
+  const isSentimentDegraded = sentiment?.degraded === true;
   return (
     <div className="report-section">
       <SectionLabel>{sectionTitle || 'Market Sentiment'}</SectionLabel>
       <div className="section-title">{sectionTitle || 'Sentiment & Price Action'}</div>
-      <div className="analysis-meta-row">
-        {direction && <span className={`sentiment-badge dir-${direction}`}>{direction}</span>}
-        {dirConf && <span className="conf-label">{dirConf} confidence</span>}
-        {pa?.return_30d_pct != null && (
-          <span className={`data-chip ${pa.return_30d_pct >= 0 ? 'chip-pos' : 'chip-neg'}`}>
-            {pa.return_30d_pct >= 0 ? '+' : ''}{pa.return_30d_pct.toFixed(1)}% 30d
-          </span>
-        )}
-        {pa?.volatility && <span className="conf-label">vol: {pa.volatility}</span>}
-      </div>
-      {narrative && <div className="section-body narrative-line">{narrative}</div>}
-      <div className="claim-list">
-        {claims.map((c, i) => (
-          <div key={i} className={`claim-item conf-${c.confidence}`}>
-            <span className={`conf-bar conf-${c.confidence}`} />
-            <span className="claim-text">{highlightNumbers(c.statement)}</span>
+      {isSentimentDegraded
+        ? <DegradedBanner label="Market sentiment unavailable — LLM exhausted." />
+        : <>
+          <div className="analysis-meta-row">
+            {direction && <span className={`sentiment-badge dir-${direction}`}>{direction}</span>}
+            {pa?.return_30d_pct != null && (
+              <span className={`data-chip ${pa.return_30d_pct >= 0 ? 'chip-pos' : 'chip-neg'}`}>
+                {pa.return_30d_pct >= 0 ? '+' : ''}{pa.return_30d_pct.toFixed(1)}% 30d
+              </span>
+            )}
+            {pa?.volatility && <span className="conf-label">vol: {pa.volatility}</span>}
           </div>
-        ))}
-      </div>
-      {risks.length > 0 && (
-        <div className="risk-list">
-          {risks.map((r, i) => (
-            <div key={i} className={`risk-item impact-${r.impact}`}>
-              <span className="risk-name">{r.name}</span>
-              <span className="risk-signal">{r.signal}</span>
+          {narrative && <div className="section-body narrative-line">{narrative}</div>}
+          <div className="claim-list">
+            {claims.map((c, i) => (
+              <div key={i} className={`claim-item conf-${c.confidence}`}>
+                <span className={`conf-bar conf-${c.confidence}`} />
+                <span className="claim-text">{highlightNumbers(c.statement)}</span>
+              </div>
+            ))}
+          </div>
+          {risks.length > 0 && (
+            <div className="risk-list">
+              {risks.map((r, i) => (
+                <div key={i} className={`risk-item impact-${r.impact}`}>
+                  <span className="risk-name">{r.name}</span>
+                  <span className="risk-signal">{r.signal}</span>
+                </div>
+              ))}
             </div>
-          ))}
-        </div>
-      )}
+          )}
+        </>
+      }
     </div>
   );
 }
@@ -456,35 +462,41 @@ function MacroSection({ macro, sectionTitle, loading }) {
   );
   const drivers = Array.isArray(macro?.macro_drivers) ? macro.macro_drivers : [];
   const risks = Array.isArray(macro?.macro_risks) ? macro.macro_risks : [];
+  const isMacroDegraded = macro?.degraded === true;
   return (
     <div className="report-section">
       <SectionLabel>{sectionTitle || 'Macro Environment'}</SectionLabel>
       <div className="section-title">{sectionTitle || 'Macro Regime'}</div>
-      <div className="analysis-meta-row">
-        {macro?.rate_environment && <span className="intent-tag"><span className="intent-key">rate</span><span className="intent-val">{macro.rate_environment}</span></span>}
-        {macro?.growth_environment && <span className="intent-tag"><span className="intent-key">growth</span><span className="intent-val">{macro.growth_environment}</span></span>}
-      </div>
-      {macro?.macro_view && (
-        <div className="section-body narrative-line">{highlightNumbers(macro.macro_view)}</div>
-      )}
-      <div className="claim-list">
-        {drivers.map((d, i) => (
-          <div key={i} className="claim-item conf-medium">
-            <span className="conf-bar conf-medium" />
-            <span className="claim-text">{highlightNumbers(d)}</span>
+      {isMacroDegraded
+        ? <DegradedBanner label="Macro analysis unavailable — LLM exhausted." />
+        : <>
+          <div className="analysis-meta-row">
+            {macro?.rate_environment && <span className="intent-tag"><span className="intent-key">rate</span><span className="intent-val">{macro.rate_environment}</span></span>}
+            {macro?.growth_environment && <span className="intent-tag"><span className="intent-key">growth</span><span className="intent-val">{macro.growth_environment}</span></span>}
           </div>
-        ))}
-      </div>
-      {risks.length > 0 && (
-        <div className="risk-list">
-          {risks.map((r, i) => (
-            <div key={i} className={`risk-item impact-${r.impact}`}>
-              <span className="risk-name">{r.name}</span>
-              <span className="risk-signal">{r.signal}</span>
+          {macro?.macro_view && (
+            <div className="section-body narrative-line">{highlightNumbers(macro.macro_view)}</div>
+          )}
+          <div className="claim-list">
+            {drivers.map((d, i) => (
+              <div key={i} className="claim-item conf-medium">
+                <span className="conf-bar conf-medium" />
+                <span className="claim-text">{highlightNumbers(d)}</span>
+              </div>
+            ))}
+          </div>
+          {risks.length > 0 && (
+            <div className="risk-list">
+              {risks.map((r, i) => (
+                <div key={i} className={`risk-item impact-${r.impact}`}>
+                  <span className="risk-name">{r.name}</span>
+                  <span className="risk-signal">{r.signal}</span>
+                </div>
+              ))}
             </div>
-          ))}
-        </div>
-      )}
+          )}
+        </>
+      }
     </div>
   );
 }
@@ -566,35 +578,41 @@ function DebateSection({ debate, loading }) {
   if (!debate || typeof debate !== 'object') return null;
   const adjustments = Array.isArray(debate.probability_adjustments) ? debate.probability_adjustments : [];
   const flags = Array.isArray(debate.debate_flags) ? debate.debate_flags : [];
+  const isDebateDegraded = debate.degraded === true;
   return (
     <div className="report-section">
       <SectionLabel>Scenario Debate</SectionLabel>
       <div className="section-title">Calibration Summary</div>
-      <div className="section-body" style={{marginBottom:'12px'}}>
-        {debate.debate_summary || 'No debate summary available.'}
-      </div>
-      <div className="section-body"><b>Confidence:</b> {debate.confidence || 'unknown'}</div>
-      <div className="section-body"><b>Flags:</b> {flags.join(', ') || 'none'}</div>
-      {adjustments.length > 0 && (
-        <div className="evidence-table-wrap" style={{marginTop:'12px'}}>
-          <table className="evidence-table">
-            <thead>
-              <tr><th>Scenario</th><th>Before</th><th>After</th><th>Delta</th><th>Reason</th></tr>
-            </thead>
-            <tbody>
-              {adjustments.map((a, i) => (
-                <tr key={`${a.scenario_name}-${i}`}>
-                  <td>{a.scenario_name}</td>
-                  <td>{formatPct(a.before)}</td>
-                  <td>{formatPct(a.after)}</td>
-                  <td>{formatPct(a.delta)}</td>
-                  <td>{a.reason || '-'}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      )}
+      {isDebateDegraded
+        ? <DegradedBanner label="Scenario debate unavailable — LLM exhausted. Scenario probabilities are baseline (not debate-calibrated)." />
+        : <>
+          <div className="section-body" style={{marginBottom:'12px'}}>
+            {debate.debate_summary || 'No debate summary available.'}
+          </div>
+          <div className="section-body"><b>Confidence:</b> {debate.confidence || 'unknown'}</div>
+          {flags.length > 0 && <div className="section-body"><b>Flags:</b> {flags.join(', ')}</div>}
+          {adjustments.length > 0 && (
+            <div className="evidence-table-wrap" style={{marginTop:'12px'}}>
+              <table className="evidence-table">
+                <thead>
+                  <tr><th>Scenario</th><th>Before</th><th>After</th><th>Delta</th><th>Reason</th></tr>
+                </thead>
+                <tbody>
+                  {adjustments.map((a, i) => (
+                    <tr key={`${a.scenario_name}-${i}`}>
+                      <td>{a.scenario_name}</td>
+                      <td>{formatPct(a.before)}</td>
+                      <td>{formatPct(a.after)}</td>
+                      <td>{formatPct(a.delta)}</td>
+                      <td>{a.reason || '-'}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </>
+      }
     </div>
   );
 }
@@ -688,7 +706,7 @@ function App() {
   const [readySections, setReadySections] = useState({});  // section_id → {content, source}
   const [reportData, setReportData] = useState(null);
   const [llmCalls, setLlmCalls] = useState([]);
-  const [nowMs, setNowMs] = useState(Date.now());
+  const [nowMs, setNowMs] = useState(Date.now());  // still needed for elapsed timer
   const [runStartMs, setRunStartMs] = useState(null);
   const [totalElapsedSec, setTotalElapsedSec] = useState(null);
   const logRef = useRef(null);
@@ -926,15 +944,10 @@ function App() {
 
   const handleKey = (e) => { if (e.key === 'Enter') runResearch(); };
 
-  const activeCount = Object.values(agentStatuses).filter((s) => {
-    const phase = deriveExecutionPhase(s, nowMs);
-    return phase === 'ACTIVE' || phase === 'RUNNING';
-  }).length;
-  const waitingCount = Object.values(agentStatuses).filter((s) => {
-    const phase = deriveExecutionPhase(s, nowMs);
-    return phase === 'WAITING';
-  }).length;
+  const activeCount = Object.values(agentStatuses).filter((s) => deriveExecutionPhase(s) === 'ACTIVE').length;
+  const waitingCount = Object.values(agentStatuses).filter((s) => deriveExecutionPhase(s) === 'WAITING').length;
   const isValid = reportData?.validation_result?.is_valid;
+  const validationWarnings = reportData?.validation_result?.warnings || [];
   const llmCalling = llmCalls.filter(c => c?.status === 'calling').length;
   const llmRetry = llmCalls.filter(c => c?.status === 'retry').length;
   const llmFailed = llmCalls.filter(c => c?.status === 'failed').length;
@@ -1014,8 +1027,6 @@ function App() {
                 action={agentStatuses[ag.id]?.action}
                 waitingOn={agentStatuses[ag.id]?.waiting_on}
                 progressHint={agentStatuses[ag.id]?.progress_hint}
-                lastUpdateAt={agentStatuses[ag.id]?.last_update_at}
-                nowMs={nowMs}
               />
             ))}
           </div>
@@ -1067,6 +1078,20 @@ function App() {
             <div className="report-wrap">
               {/* Intent card — shown as soon as any section arrives */}
               {reportData?.intent && <IntentSection intent={reportData.intent} />}
+
+              {/* Degraded / validation warnings — shown once report is complete */}
+              {appState === 'complete' && validationWarnings.length > 0 && (
+                <div className="report-section warnings-section">
+                  <SectionLabel>Report Quality</SectionLabel>
+                  <div className="section-title">Warnings</div>
+                  {validationWarnings.map((w, i) => (
+                    <div key={i} className="warning-line">
+                      <span className="warning-icon">⚠</span>
+                      <span>{w}</span>
+                    </div>
+                  ))}
+                </div>
+              )}
 
               {/* ── Standard plan sections — deterministic order from report_plan ── */}
               {(reportPlanSections || []).map((section) => {

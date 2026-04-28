@@ -1,14 +1,13 @@
 """
-OpenAI-compatible LLM client.
+Provider-agnostic LLM client.
 
 Strategy
 ────────
 - Provider: openrouter (default) or openai (from env)
-- Default model set depends on provider; can be overridden only in code
-- Per-model: up to 2 retries with 2 s exponential backoff on 429 / 5xx
-- complete()       — enforces response_format json_object; validates JSON before returning
-- complete_text()  — free-form text (Markdown reports); skips JSON mode and validation
-- call_with_retry() — agent-level retry wrapper over complete()
+- Both providers use a two-model chain with per-model retries on 429 / 5xx
+- complete()        — enforces response_format json_object; validates JSON before returning
+- complete_text()   — free-form text (Markdown reports); skips JSON mode and validation
+- call_with_retry() — thin alias for complete(); model chain in _run() handles all retries
 
 Telemetry
 ─────────
@@ -45,12 +44,11 @@ logger = logging.getLogger(__name__)
 
 _FREE_MODELS = [
     "openai/gpt-oss-120b:free",
-    "qwen/qwen3-next-80b-a3b-instruct:free",
     "meta-llama/llama-3.3-70b-instruct:free",
-    "google/gemma-3-27b-it:free",
 ]
 _OPENAI_MODELS = [
     "gpt-4.1",
+    "gpt-4.1-mini",
 ]
 
 # Cost per 1M tokens (input, output) in USD — OpenAI public pricing
@@ -76,7 +74,28 @@ def _compute_cost(model: str, prompt_tokens: int, completion_tokens: int) -> flo
 _RETRYABLE_CODES = {429, 500, 502, 503, 504}
 
 
-class OpenRouterClient:
+def _simplify_prompt(prompt: str) -> str:
+    """Strip schema/rules boilerplate, keep only the data sections."""
+    lines = prompt.splitlines()
+    data_start = next(
+        (i for i, l in enumerate(lines) if any(
+            marker in l for marker in ("EVIDENCE", "DATA", "MACRO DATA", "NEWS", "PRICE", "RESEARCH CONTEXT", "SUBJECT", "SCENARIOS", "AVAILABLE", "YOUR ASSIGNED", "ADVOCATE FOR")
+        )),
+        0,
+    )
+    data_section = "\n".join(lines[data_start:]).strip()
+    return f"Return only valid JSON with no extra text.\n\n{data_section}"
+
+
+class _RetryableError(Exception):
+    """Retry this model."""
+
+
+class _FatalError(Exception):
+    """Skip to next model immediately."""
+
+
+class LLMClient:
     def __init__(
         self,
         *,
@@ -104,10 +123,6 @@ class OpenRouterClient:
         """Send prompt, return validated JSON string. Raises RuntimeError on exhaustion."""
         return await self._run(prompt, system=system, json_mode=True, node=node)
 
-    async def complete_json(self, prompt: str, *, system: str | None = None, node: str = "unknown") -> dict:
-        """Convenience wrapper — parse and return the JSON dict directly."""
-        return json.loads(await self.complete(prompt, system=system, node=node))
-
     async def complete_text(self, prompt: str, *, system: str | None = None, node: str = "unknown") -> str:
         """Send prompt, return raw text (no JSON enforcement). For Markdown reports."""
         return await self._run(prompt, system=system, json_mode=False, node=node)
@@ -117,21 +132,17 @@ class OpenRouterClient:
         prompt: str,
         *,
         system: str | None = None,
-        attempts: int = 2,
         node: str = "unknown",
+        **_,
     ) -> str:
-        """
-        Call complete() up to `attempts` times, swallowing per-attempt errors.
-        Raises RuntimeError only after all attempts fail.
-        """
-        last_exc: Exception | None = None
-        for attempt in range(1, attempts + 1):
-            try:
-                return await self.complete(prompt, system=system, node=node)
-            except Exception as exc:
-                last_exc = exc
-                logger.warning("call_with_retry attempt %d/%d failed: %s", attempt, attempts, exc)
-        raise RuntimeError(f"[openrouter] LLM call failed after {attempts} attempts") from last_exc
+        """Call complete(). On JSON parse failure, retry once with a stripped prompt."""
+        try:
+            return await self.complete(prompt, system=system, node=node)
+        except RuntimeError as exc:
+            if "invalid JSON" not in str(exc):
+                raise
+            logger.warning("%s: JSON parse failed — retrying with simplified prompt", node)
+            return await self.complete(_simplify_prompt(prompt), system=system, node=node)
 
     # ── internals ──────────────────────────────────────────────────────────
 
@@ -173,7 +184,7 @@ class OpenRouterClient:
         for model_id in self._models:
             for attempt in range(1, self.max_retries + 2):
                 if shutdown.is_set():
-                    raise RuntimeError("[openrouter] server shutting down")
+                    raise RuntimeError("[llm] server shutting down")
 
                 call_id = self._next_id()
                 started_at = datetime.now(UTC).isoformat()
@@ -228,7 +239,7 @@ class OpenRouterClient:
                         )
                         # Interruptible backoff that can wake up early on shutdown.
                         if await shutdown.wait_or_timeout(wait):
-                            raise RuntimeError("[openrouter] server shutting down")
+                            raise RuntimeError("[llm] server shutting down")
                     else:
                         logger.warning("model %s exhausted retries, trying next", model_id)
 
@@ -266,11 +277,11 @@ class OpenRouterClient:
                             model_id, attempt, self.max_retries + 1, exc, wait,
                         )
                         if await shutdown.wait_or_timeout(wait):
-                            raise RuntimeError("[openrouter] server shutting down")
+                            raise RuntimeError("[llm] server shutting down")
                     else:
                         logger.warning("model %s exhausted retries after unexpected error, trying next", model_id)
 
-        raise RuntimeError(f"[openrouter] All models exhausted. Last error: {last_error}") from last_error
+        raise RuntimeError(f"[llm] All models exhausted. Last error: {last_error}") from last_error
 
     async def _call(self, model_id: str, prompt: str, *, system: str | None, json_mode: bool) -> tuple[str, dict | None]:
         default_system = (
@@ -354,12 +365,3 @@ def _latency_ms(started_at: str, finished_at: str) -> int:
     except (TypeError, ValueError):
         return 0
 
-
-# ── internal exception types ───────────────────────────────────────────────
-
-class _RetryableError(Exception):
-    """Retry this model."""
-
-
-class _FatalError(Exception):
-    """Skip to next model immediately."""

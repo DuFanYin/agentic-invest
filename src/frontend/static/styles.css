@@ -191,7 +191,8 @@ body[data-variant="dispatch"] .run-btn { font-family: 'DM Sans', sans-serif; fon
 .agent-dot.idle     { background: var(--dim); }
 .agent-dot.running  { animation: blink 0.8s ease-in-out infinite; }
 .agent-dot.completed { }
-.agent-dot.failed   { background: var(--err) !important; }
+.agent-dot.failed   { background: var(--err) !important; animation: none; }
+.agent-dot.degraded { background: var(--warn) !important; animation: none; }
 .agent-name {
   font-size: 11px;
   font-weight: 500;
@@ -215,10 +216,11 @@ body[data-variant="dispatch"] .agent-name { font-family: 'DM Sans', sans-serif; 
   letter-spacing: 0.05em;
   flex-shrink: 0;
 }
-.tag-standby { color: var(--dim); }
-.tag-active { color: var(--accent); }
-.tag-waiting { color: var(--warn); }
-.tag-stalled { color: var(--err); }
+.tag-standby  { color: var(--dim); }
+.tag-active   { color: var(--accent); }
+.tag-waiting  { color: var(--warn); }
+.tag-failed   { color: var(--err); }
+.tag-degraded { color: var(--warn); }
 .tag-complete { color: var(--accent2); }
 
 /* Output log */
@@ -538,6 +540,36 @@ body[data-variant="dispatch"] .section-body { font-size: 14px; line-height: 1.8;
   font-size: 12px;
   line-height: 1.6;
 }
+
+/* Degraded node banner */
+.degraded-banner {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 10px 12px;
+  margin-bottom: 8px;
+  border: 1px solid oklch(60% 0.17 60 / 0.35);
+  border-radius: var(--radius);
+  background: oklch(20% 0.06 60 / 0.25);
+  color: var(--warn);
+  font-size: 11px;
+  line-height: 1.5;
+}
+.degraded-icon { flex-shrink: 0; }
+
+/* Validation warnings panel */
+.warnings-section { border-color: oklch(60% 0.17 60 / 0.3); }
+.warning-line {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 5px 0;
+  border-bottom: 1px solid var(--border);
+  font-size: 11px;
+  color: var(--warn);
+}
+.warning-line:last-child { border-bottom: none; }
+.warning-icon { flex-shrink: 0; }
 
 /* Metric rows */
 .metric-group { margin-bottom: 16px; }

@@ -13,6 +13,12 @@ from datetime import UTC, datetime
 import httpx
 
 from src.server.config import TAVILY_API_KEY
+from src.server.services.retry import (
+    DEFAULT_FETCH_TIMEOUT_SECONDS,
+    RETRYABLE_HTTP_STATUS,
+    RetryableFetchError,
+    retry_sync,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -36,7 +42,7 @@ class WebResearchClient:
         self,
         *,
         api_key: str | None = None,
-        timeout_seconds: float = 15.0,
+        timeout_seconds: float = DEFAULT_FETCH_TIMEOUT_SECONDS,
     ) -> None:
         self.api_key = api_key or TAVILY_API_KEY
         self.timeout = timeout_seconds
@@ -62,10 +68,19 @@ class WebResearchClient:
             "include_raw_content": False,
         }
 
+        def _request() -> httpx.Response:
+            try:
+                with httpx.Client(timeout=self.timeout) as client:
+                    response = client.post(_TAVILY_URL, json=payload)
+            except (httpx.TimeoutException, httpx.NetworkError) as exc:
+                raise RetryableFetchError(str(exc)) from exc
+            if response.status_code in RETRYABLE_HTTP_STATUS:
+                raise RetryableFetchError(f"http {response.status_code}")
+            return response
+
         try:
-            with httpx.Client(timeout=self.timeout) as client:
-                response = client.post(_TAVILY_URL, json=payload)
-        except (httpx.TimeoutException, httpx.NetworkError) as exc:
+            response = retry_sync(_request, op_name="tavily.search")
+        except Exception as exc:
             logger.warning("Tavily request failed: %s", exc)
             return []
 

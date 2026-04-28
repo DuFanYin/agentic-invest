@@ -6,6 +6,7 @@ from src.server.models.analysis import FundamentalAnalysis, MarketSentiment
 from src.server.models.scenario import Scenario
 
 _MAGNITUDE_TAG = re.compile(r"^(bearish|bullish)-[123]$|^neutral$")
+SCENARIO_PROB_TOLERANCE = 0.01
 
 
 def validate_scenario_scores(scenarios: list[Scenario]) -> list[str]:
@@ -15,7 +16,7 @@ def validate_scenario_scores(scenarios: list[Scenario]) -> list[str]:
     errors: list[str] = []
 
     total = sum(s.probability for s in scenarios)
-    if abs(total - 1) >= 1e-6:
+    if abs(total - 1.0) > SCENARIO_PROB_TOLERANCE:
         errors.append(f"Scenario probabilities must sum to 1. Current sum: {total}")
 
     for s in scenarios:

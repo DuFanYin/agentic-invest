@@ -1,7 +1,7 @@
 """Request-scoped LLM call collector.
 
 One instance is created per HTTP request by OrchestratorAgent.
-OpenRouterClient writes events here; the orchestrator reads them.
+LLMClient writes events here; the orchestrator reads them.
 No global state — concurrent requests are fully isolated.
 """
 

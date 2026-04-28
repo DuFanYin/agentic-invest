@@ -142,7 +142,7 @@ NODE_CONTRACTS: dict[str, NodeContract] = {
             "intent", "evidence",
             "fundamental_analysis", "macro_analysis", "market_sentiment",
             "scenarios", "scenario_debate", "plan_context",
-            "research_iteration",
+            "research_iteration", "retry_reason",
         }),
         writes=frozenset({
             "narrative_sections", "report_markdown", "report_json",

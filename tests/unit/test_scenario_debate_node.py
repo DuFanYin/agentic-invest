@@ -132,18 +132,20 @@ def test_calibrated_probabilities_sum_to_one():
     assert abs(total - 1.0) < 0.01
 
 
-# ── fallback paths ─────────────────────────────────────────────────────────
+# ── degraded paths ─────────────────────────────────────────────────────────
 
-def test_fallback_when_all_advocates_fail():
+def test_degraded_when_all_advocates_fail():
     result = _run(scenario_debate_node(_state(), llm=_mock_llm(all_advocates_fail=True)))
     debate = result["scenario_debate"]
     assert isinstance(debate, ScenarioDebate)
-    assert "fallback_to_baseline" in debate.debate_flags
+    assert debate.degraded is True
+    assert "debate_degraded" in debate.debate_flags
 
 
-def test_fallback_when_arbitrator_fails():
+def test_degraded_when_arbitrator_fails():
     result = _run(scenario_debate_node(_state(), llm=_mock_llm(arbitrator_fails=True)))
     debate = result["scenario_debate"]
-    assert "fallback_to_baseline" in debate.debate_flags
+    assert debate.degraded is True
+    assert "debate_degraded" in debate.debate_flags
 
 

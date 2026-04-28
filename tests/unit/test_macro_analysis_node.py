@@ -76,8 +76,11 @@ def test_macro_result_shape_and_core_fields():
     assert isinstance(ma, MacroAnalysis)
 
 
-# ── failure handling ───────────────────────────────────────────────────────
+# ── best-effort degraded on LLM failure ───────────────────────────────────
 
-def test_raises_on_llm_failure():
-    with pytest.raises(RuntimeError, match="macro_analysis"):
-        _run(macro_analysis_node(_state(), llm=_mock_llm(raises=RuntimeError("exhausted"))))
+def test_degraded_on_llm_failure():
+    result = _run(macro_analysis_node(_state(), llm=_mock_llm(raises=RuntimeError("exhausted"))))
+    macro = result["macro_analysis"]
+    assert isinstance(macro, MacroAnalysis)
+    assert macro.degraded is True
+    assert macro.macro_view == "Macro analysis unavailable."

@@ -7,7 +7,7 @@ import logging
 
 from src.server.models.analysis import MacroAnalysis
 from src.server.models.state import ResearchState
-from src.server.services.openrouter import OpenRouterClient
+from src.server.services.llm_provider import LLMClient
 from src.server.utils.contract import NODE_CONTRACTS, assert_reads, assert_writes
 from src.server.utils.status import update_status
 
@@ -16,7 +16,7 @@ _WRITES = NODE_CONTRACTS["macro_analysis"].writes
 
 logger = logging.getLogger(__name__)
 
-_default_llm = OpenRouterClient()
+_default_llm = LLMClient()
 _NODE = "macro_analysis"
 
 _SYSTEM = (
@@ -80,7 +80,7 @@ SUPPLEMENTAL EVIDENCE (for context only):
 
 
 async def macro_analysis_node(
-    state: ResearchState, *, llm: OpenRouterClient = _default_llm
+    state: ResearchState, *, llm: LLMClient = _default_llm
 ) -> ResearchState:
     assert_reads(state, _READS, _NODE)
 
@@ -107,15 +107,16 @@ async def macro_analysis_node(
             logger.warning("%s: LLM step failed — %s", _NODE, exc)
 
     if result is None:
-        msg = f"[{_NODE}] unable to generate macro analysis from LLM output"
-        logger.error(msg)
+        logger.warning("%s: LLM exhausted — returning degraded result", _NODE)
+        result = MacroAnalysis(
+            macro_view="Macro analysis unavailable.",
+            degraded=True,
+        )
         if statuses:
             statuses = update_status(
                 statuses, "macro_analysis",
-                lifecycle="failed", phase="analyzing_macro", action="macro analysis failed",
-                last_error=msg,
+                lifecycle="degraded", phase="analyzing_macro", action="macro analysis degraded",
             )
-        raise RuntimeError(msg)
 
     if statuses:
         statuses = update_status(

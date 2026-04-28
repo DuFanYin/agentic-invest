@@ -16,16 +16,17 @@ from src.server.models.analysis import (
 )
 from src.server.models.scenario import Scenario
 from src.server.models.state import ResearchState
-from src.server.services.openrouter import OpenRouterClient
+from src.server.services.llm_provider import LLMClient
 from src.server.utils.contract import NODE_CONTRACTS, assert_reads, assert_writes
 from src.server.utils.status import update_status
+from src.server.utils.validation import SCENARIO_PROB_TOLERANCE
 
 _READS  = NODE_CONTRACTS["scenario_debate"].reads
 _WRITES = NODE_CONTRACTS["scenario_debate"].writes
 
 logger = logging.getLogger(__name__)
 
-_default_llm = OpenRouterClient()
+_default_llm = LLMClient()
 _NODE = "scenario_debate"
 
 # ── System prompts ─────────────────────────────────────────────────────────
@@ -176,17 +177,13 @@ def _arbitrator_prompt(
 
 # ── Validation & fallback ──────────────────────────────────────────────────
 
-def _fallback_debate(scenarios: list[Scenario]) -> ScenarioDebate:
+def _degraded_debate(scenarios: list[Scenario]) -> ScenarioDebate:
     return ScenarioDebate(
-        debate_summary="Debate calibration failed — returning baseline probabilities.",
-        advocacy_summaries=[],
-        probability_adjustments=[],
-        calibrated_scenarios=[
-            {"name": s.name, "probability": s.probability}
-            for s in scenarios
-        ],
+        debate_summary="Debate unavailable.",
+        calibrated_scenarios=[{"name": s.name, "probability": s.probability} for s in scenarios],
         confidence="low",
-        debate_flags=["fallback_to_baseline"],
+        debate_flags=["debate_degraded"],
+        degraded=True,
     )
 
 
@@ -220,10 +217,10 @@ def _validate_and_fix(
         if isinstance(item, dict) and item.get("name")
     }
     if calibrated_names != set(baseline_by_name):
-        return _fallback_debate(scenarios)
+        return _degraded_debate(scenarios)
 
     total = sum(s.get("probability", 0) for s in calibrated) or 1.0
-    if abs(total - 1.0) > 0.01:
+    if abs(total - 1.0) > SCENARIO_PROB_TOLERANCE:
         calibrated = [
             {**s, "probability": round(s.get("probability", 0) / total, 6)}
             for s in calibrated
@@ -252,7 +249,7 @@ def _validate_and_fix(
 async def _run_advocate(
     scenario: Scenario,
     context: str,
-    llm: OpenRouterClient,
+    llm: LLMClient,
 ) -> ScenarioAdvocacy | None:
     prompt = _advocate_prompt(scenario, context)
     try:
@@ -267,7 +264,7 @@ async def _run_advocate(
 async def _run_debate(
     scenarios: list[Scenario],
     fa, macro, sentiment, evidence,
-    llm: OpenRouterClient,
+    llm: LLMClient,
     statuses: list,
 ) -> tuple[ScenarioDebate, list]:
     context = _shared_context(scenarios, fa, macro, sentiment, evidence)
@@ -285,7 +282,7 @@ async def _run_debate(
     advocacies = [a for a in advocate_results if a is not None]
     if not advocacies:
         logger.warning("%s: all advocates failed", _NODE)
-        return _fallback_debate(scenarios), statuses
+        return _degraded_debate(scenarios), statuses
 
     succeeded = len(advocacies)
     total = len(scenarios)
@@ -308,13 +305,13 @@ async def _run_debate(
         return debate, statuses
     except Exception as exc:
         logger.warning("%s: arbitrator failed — %s", _NODE, exc)
-        return _fallback_debate(scenarios), statuses
+        return _degraded_debate(scenarios), statuses
 
 
 # ── Node entry point ───────────────────────────────────────────────────────
 
 async def scenario_debate_node(
-    state: ResearchState, *, llm: OpenRouterClient = _default_llm
+    state: ResearchState, *, llm: LLMClient = _default_llm
 ) -> ResearchState:
     assert_reads(state, _READS, _NODE)
 
@@ -326,14 +323,16 @@ async def scenario_debate_node(
     statuses = list(state.get("agent_statuses") or [])
 
     if not scenarios:
-        debate = _fallback_debate([])
+        debate = _degraded_debate([])
     else:
         debate, statuses = await _run_debate(scenarios, fa, macro, sentiment, evidence, llm, statuses)
 
     flags_str = ",".join(debate.debate_flags) if debate.debate_flags else "none"
     statuses = update_status(
         statuses, "scenario_debate",
-        lifecycle="standby", phase="debating_scenarios", action="debate complete",
+        lifecycle="degraded" if debate.degraded else "standby",
+        phase="debating_scenarios",
+        action="debate degraded" if debate.degraded else "debate complete",
         details=[
             f"scenarios={len(scenarios)}",
             f"adjustments={len(debate.probability_adjustments)}",

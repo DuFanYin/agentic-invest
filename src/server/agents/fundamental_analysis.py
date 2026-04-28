@@ -5,9 +5,9 @@ from __future__ import annotations
 import json
 import logging
 
-from src.server.models.analysis import FundamentalAnalysis
+from src.server.models.analysis import BusinessQuality, FundamentalAnalysis, Valuation
 from src.server.models.state import ResearchState
-from src.server.services.openrouter import OpenRouterClient
+from src.server.services.llm_provider import LLMClient
 from src.server.utils.contract import NODE_CONTRACTS, assert_reads, assert_writes
 from src.server.utils.status import update_status
 
@@ -16,7 +16,7 @@ _WRITES = NODE_CONTRACTS["fundamental_analysis"].writes
 
 logger = logging.getLogger(__name__)
 
-_default_llm = OpenRouterClient()
+_default_llm = LLMClient()
 _NODE = "fundamental_analysis"
 
 _SYSTEM = (
@@ -103,7 +103,7 @@ MISSING DATA: {', '.join(missing_fields) if missing_fields else 'none reported'}
 """
 
 async def fundamental_analysis_node(
-    state: ResearchState, *, llm: OpenRouterClient = _default_llm
+    state: ResearchState, *, llm: LLMClient = _default_llm
 ) -> ResearchState:
     assert_reads(state, _READS, _NODE)
 
@@ -138,18 +138,21 @@ async def fundamental_analysis_node(
             logger.warning("%s: LLM step failed — %s", _NODE, exc)
 
     if result is None:
-        msg = f"[{_NODE}] unable to generate grounded fundamental analysis from LLM output"
-        logger.error(msg)
+        logger.warning("%s: LLM exhausted — returning degraded result", _NODE)
+        result = FundamentalAnalysis(
+            claims=[],
+            business_quality=BusinessQuality(view="stable"),
+            valuation=Valuation(relative_multiple_view="unavailable"),
+            degraded=True,
+        )
         if statuses:
             statuses = update_status(
                 statuses,
                 "fundamental_analysis",
-                lifecycle="failed",
+                lifecycle="degraded",
                 phase="analyzing_fundamentals",
-                action="fundamental analysis failed",
-                last_error=msg,
+                action="fundamental analysis degraded",
             )
-        raise RuntimeError(msg)
 
     if statuses:
         statuses = update_status(

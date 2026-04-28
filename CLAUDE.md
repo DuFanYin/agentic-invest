@@ -52,6 +52,6 @@ All inter-node data flows through typed Pydantic models defined in `src/server/m
 ## Key conventions
 
 - Each agent node raises `RuntimeError("[node_name] ...")` on unrecoverable failure — caught by LangGraph and surfaced via SSE.
-- LLM calls go through `OpenRouterClient.call_with_retry` (for JSON output) or `complete_text` (for Markdown). The client cycles through a free model chain with retries before raising.
+- LLM calls go through `LLMClient.call_with_retry` (for JSON output) or `complete_text` (for Markdown). The client cycles through a model chain with retries before raising.
 - Scenarios must have 3–5 entries, probabilities summing to 1.0, and at least one magnitude tag (`bearish-1..3`, `neutral`, `bullish-1..3`).
 - `agent_questions` uses a custom LangGraph reducer (`_accumulate_or_reset`) with a `_RESET` sentinel to clear the list between graph passes.

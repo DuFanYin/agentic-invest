@@ -8,8 +8,14 @@ from unittest.mock import AsyncMock, MagicMock
 
 from src.server.agents.report_finalize import report_finalize_node
 from src.server.models.analysis import (
+    BusinessQuality,
     FundamentalAnalysis,
+    MacroAnalysis,
+    MarketNarrative,
     MarketSentiment,
+    NewsSentiment,
+    ScenarioDebate,
+    Valuation,
 )
 from src.server.models.evidence import Evidence
 from src.server.models.intent import ResearchIntent
@@ -149,3 +155,67 @@ def test_llm_failure_still_returns_report():
 def test_raises_when_no_evidence():
     with pytest.raises(RuntimeError, match="report_finalize"):
         _run(report_finalize_node(_state(evidence=[]), llm=_mock_llm()))
+
+
+# ── degraded node disclosure ───────────────────────────────────────────────
+
+def _degraded_fa() -> FundamentalAnalysis:
+    return FundamentalAnalysis(
+        claims=[],
+        business_quality=BusinessQuality(view="stable"),
+        valuation=Valuation(relative_multiple_view="unavailable"),
+        degraded=True,
+    )
+
+
+def _degraded_macro() -> MacroAnalysis:
+    return MacroAnalysis(macro_view="Macro analysis unavailable.", degraded=True)
+
+
+def _degraded_ms() -> MarketSentiment:
+    return MarketSentiment(
+        news_sentiment=NewsSentiment(direction="neutral"),
+        market_narrative=MarketNarrative(summary="Sentiment analysis unavailable."),
+        degraded=True,
+    )
+
+
+def test_single_degraded_node_produces_warning():
+    state = _state(fa=_degraded_fa())
+    result = _run(report_finalize_node(state, llm=_mock_llm()))
+    warnings = result["validation_result"].warnings
+    assert any("fundamental_analysis unavailable" in w for w in warnings)
+
+
+def test_partial_degraded_still_generates_report():
+    state = _state(fa=_degraded_fa())
+    result = _run(report_finalize_node(state, llm=_mock_llm()))
+    assert isinstance(result["report_markdown"], str)
+    assert len(result["report_markdown"]) > 50
+
+
+def test_all_three_degraded_raises():
+    state = _state(fa=_degraded_fa(), ms=_degraded_ms())
+    state["macro_analysis"] = _degraded_macro()
+    with pytest.raises(RuntimeError, match="all three analysis nodes degraded"):
+        _run(report_finalize_node(state, llm=_mock_llm()))
+
+
+def test_debate_degraded_produces_warning():
+    state = _state()
+    state["scenario_debate"] = ScenarioDebate(
+        debate_summary="Debate unavailable.",
+        calibrated_scenarios=[{"name": s.name, "probability": s.probability} for s in _scenarios()],
+        confidence="low",
+        debate_flags=["debate_degraded"],
+        degraded=True,
+    )
+    result = _run(report_finalize_node(state, llm=_mock_llm()))
+    warnings = result["validation_result"].warnings
+    assert any("scenario_debate unavailable" in w for w in warnings)
+
+
+def test_no_degraded_produces_no_degraded_warnings():
+    result = _run(report_finalize_node(_state(), llm=_mock_llm()))
+    warnings = result["validation_result"].warnings
+    assert not any("unavailable" in w for w in warnings)

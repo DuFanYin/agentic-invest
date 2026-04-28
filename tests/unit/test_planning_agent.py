@@ -10,7 +10,7 @@ import pytest
 
 from src.server.agents.planning_agent import plan, make_planning_node
 from src.server.models.intent import ResearchIntent
-from src.server.services.openrouter import OpenRouterClient
+from src.server.services.llm_provider import LLMClient
 
 
 def _run(coro):
@@ -42,7 +42,7 @@ def _llm_response(overrides: dict | None = None) -> dict:
 
 
 def _mock_llm(response: dict | None = None, raises: Exception | None = None):
-    llm = MagicMock(spec=OpenRouterClient)
+    llm = MagicMock(spec=LLMClient)
     if raises:
         llm.complete = AsyncMock(side_effect=raises)
     else:

@@ -100,3 +100,14 @@ def test_judge_triggers_analysis_robustness_retry_from_first_judge():
     assert result["retry_reason"] == "analysis_robustness"
     assert result["retry_questions"] == ["gather margin trend and guidance"]
     assert len(llm.calls) == 1
+
+
+def test_judge_degraded_when_llm_fails():
+    """LLM failure sets retry_reason=judge_degraded and does not retry."""
+    class _FailLLM:
+        async def call_with_retry(self, prompt, *, system, node):
+            raise RuntimeError("all models exhausted")
+
+    result = asyncio.run(llm_judge_node(_state(research_iteration=0), llm=_FailLLM()))
+    assert result["retry_questions"] == []
+    assert result["retry_reason"] == "judge_degraded"
