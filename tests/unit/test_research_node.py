@@ -6,7 +6,8 @@ import asyncio
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from src.server.agents.research import research_node, _detect_conflicts
+from src.server.agents.research import research_node
+from src.server.capabilities.normalize import detect_conflicts
 from src.server.models.analysis import NormalizedData
 from src.server.models.intent import ResearchIntent
 from src.server.models.evidence import Evidence
@@ -99,13 +100,17 @@ def _mock_macro(fred: dict | None = None, signals: dict | None = None):
 
 
 def _patch(finance=None, web=None, macro=None):
-    """Context manager helper — patches _finance, _macro, _web, and _cache."""
+    """Context manager — patches module-level service singletons in research.py
+    and the cache singletons in each capability module."""
     from contextlib import ExitStack
     stack = ExitStack()
+    # research.py singletons (used to build capability call args)
     stack.enter_context(patch("src.server.agents.research._finance", finance or _mock_finance()))
     stack.enter_context(patch("src.server.agents.research._macro", macro or _mock_macro()))
     stack.enter_context(patch("src.server.agents.research._web", web or _mock_web()))
     stack.enter_context(patch("src.server.agents.research._cache", _mock_cache()))
+    # capability modules pass through the same client/cache objects received from research.py,
+    # so patching research.py singletons is sufficient — no extra patches needed.
     return stack
 
 
@@ -176,8 +181,6 @@ def test_all_services_fail_raises():
             _run(research_node(_base_state()))
 
 
-# ── Price history in metrics ───────────────────────────────────────────────
-
 # ── Conflict detection ─────────────────────────────────────────────────────
 
 def test_conflict_detected_on_reliability_divergence():
@@ -189,7 +192,7 @@ def test_conflict_detected_on_reliability_divergence():
                  reliability="low", retrieved_at="2026-01-01T00:00:00Z",
                  related_topics=["valuation"]),
     ]
-    conflicts = _detect_conflicts(ev)
+    conflicts = detect_conflicts(ev)
     assert len(conflicts) == 1
     assert conflicts[0]["topic"] == "valuation"
     assert conflicts[0]["type"] == "reliability_divergence"

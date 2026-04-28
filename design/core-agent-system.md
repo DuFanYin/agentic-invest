@@ -16,7 +16,7 @@ Shared Research State
 ├── fundamental_analysis
 ├── macro_analysis
 ├── market_sentiment
-├── retry_reason            ← current retry cause (`structural|analysis_robustness|evidence_conflict|none`)
+├── retry_reason            ← current retry cause (`structural|analysis_robustness|evidence_conflict|judge_degraded|none`)
 ├── retry_questions[]        ← replaced each cycle (plain assign)
 ├── research_iteration       ← incremented by Research Agent; read by llm_judge
 ├── scenarios[]
@@ -251,7 +251,7 @@ The orchestrator is a workflow/runtime coordinator, not a peer analysis agent.
   - Run a two-stage check: analysis robustness first, then conflict severity
   - Use a structural shortcut for missing company ticker
   - Bias toward proceeding unless the evidence gap or conflict is material
-  - Treat judge failure as best-effort and continue downstream when needed
+  - Treat judge failure as best-effort (`retry_reason=judge_degraded`) and continue downstream
 
 #### Scenario Debate Agent
 
@@ -271,6 +271,7 @@ The orchestrator is a workflow/runtime coordinator, not a peer analysis agent.
   - Require evidence references for key conclusions
   - Show "what we know / uncertainty / what to watch"
   - Validation always runs in pure Python (no LLM contradiction judge); errors/warnings appended inline
+  - Fail fast when core report preconditions are not met (e.g. no evidence, or all three analysis nodes degraded)
   - Clear `retry_questions` and mark workflow completion at the final node
 
 ## 6) Report Composition

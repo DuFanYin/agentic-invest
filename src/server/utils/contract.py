@@ -1,20 +1,22 @@
 """Node read/write contracts for ResearchState.
 
-Each node declares exactly which state fields it reads and writes.
+NODE_CONTRACTS is derived from AGENT_REGISTRY (agents/registry.py), which is
+the single source of truth for reads/writes. Do not hand-maintain contracts here.
+
 In test environments, assert_reads() enforces the read contract at runtime —
 any undeclared field access raises ContractViolation immediately.
 In production the guard is a no-op (zero overhead).
 
 Usage in a node:
     from src.server.utils.contract import assert_reads, assert_writes
-    _READS  = frozenset({...})
-    _WRITES = frozenset({...})
+    _READS  = NODE_CONTRACTS["my_node"].reads
+    _WRITES = NODE_CONTRACTS["my_node"].writes
 
     async def my_node(state):
-        assert_reads(state, _READS, _NODE)
+        assert_reads(state, _READS, "my_node")
         ...
         result = {...}
-        assert_writes(result, _WRITES, _NODE)
+        assert_writes(result, _WRITES, "my_node")
         return result
 """
 
@@ -25,10 +27,17 @@ from dataclasses import dataclass
 
 
 def _enforce() -> bool:
-    return (
-        os.environ.get("PYTEST_CURRENT_TEST") is not None
-        or os.environ.get("CONTRACT_ENFORCE") == "1"
-    )
+    if os.environ.get("CONTRACT_ENFORCE") == "1":
+        return True
+    current_test = os.environ.get("PYTEST_CURRENT_TEST")
+    if not current_test:
+        return False
+    # Integration tests execute full LangGraph state snapshots that include
+    # upstream fields many nodes do not explicitly read.
+    if "tests/integration/" in current_test:
+        return False
+    return True
+
 
 # Fields every node may read freely (present in every state snapshot).
 _GLOBAL_READS = frozenset({"query", "agent_statuses"})
@@ -54,9 +63,6 @@ def assert_reads(state: dict, declared: frozenset[str], node: str) -> None:
     (containing only the fields the node should see). This avoids false
     positives when the real LangGraph state carries extra upstream fields
     that the current node legitimately ignores.
-
-    To trigger enforcement in a unit test, pass a state built from exactly
-    the node's declared reads — any extra key then indicates a contract gap.
     """
     if not _enforce():
         return
@@ -82,72 +88,15 @@ def assert_writes(delta: dict, declared: frozenset[str], node: str) -> None:
         )
 
 
-# ── Ground-truth contract table ────────────────────────────────────────────
-# This is the single authoritative record of the data-flow topology.
-# Keep in sync with each node's _READS / _WRITES constants.
+# ── Derived from AGENT_REGISTRY — do not edit manually ────────────────────
 
-NODE_CONTRACTS: dict[str, NodeContract] = {
-    "parse_intent": NodeContract(
-        reads=frozenset({"query"}),
-        writes=frozenset({
-            "intent", "plan_context",
-            "research_iteration", "retry_questions",
-        }),
-    ),
-    "research": NodeContract(
-        reads=frozenset({
-            "query", "intent", "plan_context",
-            "retry_questions", "research_iteration",
-        }),
-        writes=frozenset({"evidence", "normalized_data", "research_iteration"}),
-    ),
-    "fundamental_analysis": NodeContract(
-        reads=frozenset({
-            "evidence", "normalized_data", "intent", "plan_context",
-        }),
-        writes=frozenset({"fundamental_analysis"}),
-    ),
-    "macro_analysis": NodeContract(
-        reads=frozenset({"evidence", "intent"}),
-        writes=frozenset({"macro_analysis"}),
-    ),
-    "market_sentiment": NodeContract(
-        reads=frozenset({"evidence", "normalized_data", "intent"}),
-        writes=frozenset({"market_sentiment"}),
-    ),
-    "llm_judge": NodeContract(
-        reads=frozenset({
-            "intent", "normalized_data", "evidence", "plan_context",
-            "fundamental_analysis", "macro_analysis", "market_sentiment",
-            "research_iteration", "retry_questions",
-        }),
-        writes=frozenset({"retry_questions", "retry_reason"}),
-    ),
-    "scenario_scoring": NodeContract(
-        reads=frozenset({
-            "evidence", "fundamental_analysis", "macro_analysis",
-            "market_sentiment", "intent", "plan_context",
-        }),
-        writes=frozenset({"scenarios"}),
-    ),
-    "scenario_debate": NodeContract(
-        reads=frozenset({
-            "scenarios", "evidence",
-            "fundamental_analysis", "macro_analysis", "market_sentiment",
-        }),
-        writes=frozenset({"scenario_debate"}),
-    ),
-    "report_finalize": NodeContract(
-        reads=frozenset({
-            "intent", "evidence",
-            "fundamental_analysis", "macro_analysis", "market_sentiment",
-            "scenarios", "scenario_debate", "plan_context",
-            "research_iteration", "retry_reason",
-        }),
-        writes=frozenset({
-            "narrative_sections", "report_markdown", "report_json",
-            "validation_result", "quality_metrics",
-            "retry_questions", "stop_reason",
-        }),
-    ),
-}
+def _build_contracts() -> dict[str, NodeContract]:
+    # Import here to avoid circular import (registry imports nothing from utils/)
+    from src.server.agents.registry import AGENT_REGISTRY
+    return {
+        agent_id: NodeContract(reads=entry.reads, writes=entry.writes)
+        for agent_id, entry in AGENT_REGISTRY.items()
+    }
+
+
+NODE_CONTRACTS: dict[str, NodeContract] = _build_contracts()

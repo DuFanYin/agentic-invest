@@ -40,6 +40,7 @@ agentic-invest/
 │   │   │   ├── web_research.py     # Tavily web search client
 │   │   │   ├── cache.py            # SQLite TTL cache
 │   │   │   ├── collector.py        # Per-request LLM call collector
+│   │   │   ├── retry.py            # Shared retry/backoff helpers for fetchers
 │   │   │   └── section_queue.py    # Section streaming queue
 │   │   └── utils/               # Stateless runtime helpers
 │   │       ├── __init__.py      
@@ -83,7 +84,7 @@ The request path is:
 
 ### `src/server/config.py`
 
-Loads `.env` once at import time via an upward directory walk (up to 8 levels) and exposes typed module-level constants. All services import configuration here rather than calling `os.getenv` ad hoc.
+Loads `.env` from a fixed repository-root path at import time and exposes typed module-level constants. Startup fails fast if `python-dotenv` is missing or `.env` is not present. All services import configuration here rather than calling `os.getenv` ad hoc.
 
 | Constant | Purpose |
 |---|---|
@@ -91,6 +92,7 @@ Loads `.env` once at import time via an upward directory walk (up to 8 levels) a
 | `LLM_API_KEY` | LLM auth |
 | `TAVILY_API_KEY` | web search auth |
 | `FRED_API_KEY` | FRED macro indicator auth |
+| `REQUEST_TIMEOUT_SECONDS` | request-level orchestration timeout (default 180s) |
 
 ### `src/server/main.py`
 
@@ -111,7 +113,7 @@ Process-wide shutdown signaling shared across async and sync contexts.
 
 Thin transport layer only; no core research logic.
 
-- `health.py`: `GET /health` liveness check
+- `health.py`: `GET /health` readiness check (`200` when `LLM_API_KEY` exists, otherwise `503`)
 - `research.py`: `POST /research` and `POST /research/stream`
 
 `research.py` creates a fresh `OrchestratorAgent` per request. The streaming route emits an initial `agent_status` snapshot immediately, then forwards domain events from `run_stream()` as SSE `event` frames. On failure it maps the error back to the most relevant node when possible and emits both `agent_status` and `error` before `done`.
@@ -159,9 +161,9 @@ Capability groups:
 
 #### `llm_provider.py`
 
-OpenAI-compatible LLM client used by the agent nodes. With the default OpenRouter provider it rotates through a four-model free-tier chain:
+OpenAI-compatible LLM client used by the agent nodes. With the default OpenRouter provider it rotates through a two-model free-tier chain:
 
-`openai/gpt-oss-120b:free → qwen/qwen3-next-80b-a3b-instruct:free → meta-llama/llama-3.3-70b-instruct:free → google/gemma-3-27b-it:free`
+`openai/gpt-oss-120b:free → meta-llama/llama-3.3-70b-instruct:free`
 
 Per model, it retries on 429/5xx with exponential backoff. Internal error classes split retryable failures from immediate failover:
 
@@ -173,9 +175,8 @@ Public interface:
 | Method | Mode | Notes |
 |---|---|---|
 | `complete(prompt)` | JSON | validates JSON before returning |
-| `complete_json(prompt)` | JSON | parses and returns `dict` |
 | `complete_text(prompt)` | text | free-form Markdown; no JSON enforcement |
-| `call_with_retry(prompt, attempts=2)` | JSON | agent-level retry wrapper used by analysis nodes |
+| `call_with_retry(prompt)` | JSON | retries once with simplified prompt if model output is invalid JSON |
 
 The client also emits telemetry to `LLMCallCollector` when one is attached.
 
@@ -193,7 +194,7 @@ Macro data wrapper around FRED and yfinance macro tickers.
 
 #### `web_research.py`
 
-Tavily search wrapper via `httpx`. If `TAVILY_API_KEY` is absent, it degrades gracefully and returns `[]`.
+Tavily search wrapper via `httpx`. If `TAVILY_API_KEY` is absent, it degrades gracefully and returns `[]`. Uses shared retry/backoff helpers from `services/retry.py` for transient transport/HTTP failures.
 
 #### `cache.py`
 
@@ -214,6 +215,14 @@ Per-request LLM telemetry collector used by `OrchestratorAgent` and `LLMClient`.
 - `wait_next()`: async dequeue for streaming `llm_call` events
 - `all()`: snapshot for final `ResearchResponse.llm_calls`
 
+#### `retry.py`
+
+Shared retry helpers for external data fetchers.
+
+- `RetryableFetchError`: marker exception for transient fetch failures
+- `retry_sync(...)`: sync exponential-backoff retry wrapper
+- constants for retryable HTTP status set and default fetch timeout
+
 #### `section_queue.py`
 
 Per-request queue for section streaming during report finalization.
@@ -231,6 +240,8 @@ Stateless runtime helpers.
 - `contract.py`: node read/write contracts (`NODE_CONTRACTS`) and enforcement helpers (`assert_reads`, `assert_writes`)
 - `status.py`: `initial_agent_statuses()` and `update_status()` for `AgentStatus` snapshots without in-place mutation
 - `validation.py`: final validation helpers for scenario scores, evidence completeness, and claim coverage
+
+`contract.py` runtime enforcement is scoped to unit-style checks by default; full integration graph runs are not blocked by undeclared extra state keys unless `CONTRACT_ENFORCE=1` is explicitly set.
 
 ## 11) Frontend
 

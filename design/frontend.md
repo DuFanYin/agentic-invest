@@ -42,7 +42,7 @@ Two columns:
 - Left panel (`left-panel`, fixed `30%` width)
   - Agent header (`Agents`, active/waiting counters)
   - Agent list (`agent-list`): nine agent rows
-    - Planning (`parse_intent`), Research, Fundamental, Macro, Sentiment, LLM Judge, Scenarios (`scenario_scoring`), Debate (`scenario_debate`), Verification (`report_finalize`)
+    - Planning (`parse_intent`), Research, Fundamental, Macro, Sentiment, LLM Judge, Scenarios (`scenario_scoring`), Debate (`scenario_debate`), Report (`report_finalize`)
     - each row shows dot, agent name, current action, status tag
   - Output log area
     - model-call/event stream (`log-box`)

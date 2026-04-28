@@ -25,6 +25,7 @@ The system is an investment research application that accepts a natural-language
 
 - `POST /research`: synchronous research request returning structured final output
 - `POST /research/stream`: streaming research request returning progress events and final output
+- `GET /health`: readiness check (LLM key/provider status)
 - `GET /`: frontend entry page
 
 ## 4) User-Facing Interaction Model
@@ -39,7 +40,7 @@ The system is an investment research application that accepts a natural-language
 - Backend: Python + FastAPI
 - Frontend: React-in-HTML without a build step
 - Orchestration: LangGraph shared-state workflow
-- LLM access: OpenRouter-compatible client
+- LLM access: provider-agnostic OpenAI-compatible client (`openrouter` or `openai`)
 - Data inputs: public finance, macro, news, and web sources
 - Local infrastructure: SQLite-backed cache and request-scoped streaming queues
 

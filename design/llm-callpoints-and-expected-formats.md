@@ -52,7 +52,7 @@ Behavior:
 
 - merged with normalized research metrics before validation
 - treated as a core analysis dependency
-- fail-fast on unusable output
+- degrades gracefully on LLM exhaustion (returns typed degraded output)
 
 ## `macro_analysis`
 
@@ -66,7 +66,7 @@ Expected output type:
 Behavior:
 
 - consumed as a normal downstream analysis artifact
-- fail-fast on unusable output
+- degrades gracefully on LLM exhaustion (returns typed degraded output)
 
 ## `market_sentiment`
 
@@ -80,7 +80,7 @@ Expected output type:
 Behavior:
 
 - used alongside fundamental and macro analysis
-- fail-fast on unusable output
+- degrades gracefully on LLM exhaustion (returns typed degraded output)
 
 ## `llm_judge`
 
@@ -97,7 +97,7 @@ Behavior:
 - may run up to two judge passes
 - combines structural checks with LLM-based adequacy/conflict judgment
 - best-effort rather than fail-fast
-- if the judge is unavailable, the pipeline continues instead of aborting
+- if the judge is unavailable, the pipeline continues with `retry_reason=judge_degraded`
 
 ## `scenario_scoring`
 
@@ -145,7 +145,7 @@ Behavior:
 
 - section failures degrade locally rather than killing the full report
 - validation and quality checks happen mostly in Python after generation
-- hard-fails only on missing core evidence, not on ordinary text-generation failure
+- hard-fails on missing core evidence and on all-analysis-degraded precondition failure
 
 ## Shared client behavior
 
@@ -154,6 +154,7 @@ Most callsites run through JSON mode:
 - `complete(...)` and `call_with_retry(...)`
 - provider-side JSON response enforcement where possible
 - client-side JSON parsing and validation
+- `call_with_retry(...)` also retries once with a simplified prompt on invalid JSON
 
 Final report writing uses text mode:
 
@@ -177,10 +178,8 @@ Fallback-friendly callsites:
 
 Fail-fast callsites:
 
-- `fundamental_analysis`
-- `macro_analysis`
-- `market_sentiment`
 - `scenario_scoring`
+- report precondition checks in `report_finalize` (e.g. no evidence, all analyses degraded)
 
 ## Streaming telemetry
 

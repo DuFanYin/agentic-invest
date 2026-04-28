@@ -1,7 +1,7 @@
 # Test Suite
 
 Current repository test inventory is branch-dependent. Use `PYTHONPATH=. pytest tests/ --collect-only -q` as the source of truth.
-At the time of this update, the suite inventory is **118 tests** (`113 unit + 5 integration`).
+At the time of this update, the suite inventory is **126 tests** (`121 unit + 5 integration`).
 
 - Unit tests (fast): `PYTHONPATH=. pytest tests/unit/ -q`
 - Integration tests: `PYTHONPATH=. pytest tests/integration/ -q`
@@ -17,7 +17,7 @@ At the time of this update, the suite inventory is **118 tests** (`113 unit + 5 
 
 FastAPI endpoint tests via `TestClient` (with mocked LLM wiring). Covers:
 
-- `GET /health` liveness
+- `GET /health` readiness (`200` when LLM key is present, otherwise `503`)
 - `POST /research` payload contract
 - `POST /research/stream` final/done flow
 - stream error path
@@ -57,7 +57,7 @@ FastAPI endpoint tests via `TestClient` (with mocked LLM wiring). Covers:
 `fundamental_analysis_node` core behavior:
 
 - typed output + metrics pass-through
-- fail-fast on LLM error
+- degraded fallback on LLM exhaustion
 - fail-fast on missing evidence
 
 ---
@@ -73,7 +73,7 @@ Intent fallback when planning LLM is unavailable.
 `macro_analysis_node`:
 
 - typed output smoke
-- fail-fast on LLM error
+- degraded fallback on LLM exhaustion
 
 ---
 
@@ -82,7 +82,7 @@ Intent fallback when planning LLM is unavailable.
 `market_sentiment_node`:
 
 - typed output smoke
-- fail-fast on LLM error
+- degraded fallback on LLM exhaustion
 - fail-fast on missing evidence
 
 ---
@@ -98,9 +98,9 @@ Contract enforcement and topology sanity:
 
 ---
 
-### `tests/unit/test_openrouter.py` — 8 tests
+### `tests/unit/test_llm_provider.py` — 8 tests
 
-`OpenRouterClient` resilience-focused behavior:
+`LLMClient` resilience-focused behavior:
 
 - JSON parse path + markdown fence stripping
 - no API key failure
