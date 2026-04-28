@@ -10,12 +10,11 @@ START → parse_intent → research → [parallel] ─────────�
                          ▲         fundamental_analysis                         │
                          │         macro_analysis                              │
                          │         market_sentiment                            │
-                         │       → retry_gate ── (structural|conflict gap?) ──┘
+                         │       → llm_judge ── (structural|conflict gap?) ──┘
                          │                   └── (no gaps) → scenario_scoring
                          │                                    → scenario_debate
                          │                                    → report_finalize
-                         │                                        │ (unsupported claims
-                         └────────────────────────────────────────┘  + pass < 2)
+                         └────────────────────────────────────────┘
                                                                     └── END
 """
 
@@ -30,11 +29,7 @@ from src.server.agents.planning_agent import make_planning_node
 from src.server.agents.market_sentiment import market_sentiment_node
 from src.server.agents.report_finalize import report_finalize_node
 from src.server.agents.research import research_node
-from src.server.agents.retry_gate import (
-    MAX_RESEARCH_ITERATIONS,
-    retry_gate_node,
-    retry_router,
-)
+from src.server.agents.llm_judge import llm_judge_node, llm_judge_router
 from src.server.agents.scenario_debate import scenario_debate_node
 from src.server.agents.scenario_scoring import scenario_scoring_node
 from src.server.models.request import ResearchRequest
@@ -43,14 +38,6 @@ from src.server.models.state import ResearchState
 from src.server.services.collector import LLMCallCollector
 from src.server.services.openrouter import OpenRouterClient
 from src.server.services.section_queue import SectionQueue
-
-
-def _report_router(state: ResearchState) -> str:
-    """Re-route to research if report_finalize found unsupported claims and
-    we still have retry budget; otherwise terminate."""
-    if state.get("retry_questions") and state.get("research_iteration", 0) < MAX_RESEARCH_ITERATIONS:
-        return "research"
-    return END
 
 
 # ── graph builder ──────────────────────────────────────────────────────────
@@ -70,6 +57,9 @@ def build_graph(llm_client: OpenRouterClient | None = None, sq: SectionQueue | N
     async def _sentiment_node(state: ResearchState) -> ResearchState:
         return await market_sentiment_node(state, llm=llm_client)
 
+    async def _judge_node(state: ResearchState) -> ResearchState:
+        return await llm_judge_node(state, llm=llm_client)
+
     async def _scenario_node(state: ResearchState) -> ResearchState:
         return await scenario_scoring_node(state, llm=llm_client)
 
@@ -84,7 +74,7 @@ def build_graph(llm_client: OpenRouterClient | None = None, sq: SectionQueue | N
     builder.add_node("fundamental_analysis", _fundamental_node)
     builder.add_node("macro_analysis", _macro_node)
     builder.add_node("market_sentiment", _sentiment_node)
-    builder.add_node("retry_gate", retry_gate_node)
+    builder.add_node("llm_judge", _judge_node)
     builder.add_node("scenario_scoring", _scenario_node)
     builder.add_node("scenario_debate", _debate_node)
     builder.add_node("report_finalize", _report_node)
@@ -97,24 +87,20 @@ def build_graph(llm_client: OpenRouterClient | None = None, sq: SectionQueue | N
     builder.add_edge("research", "macro_analysis")
     builder.add_edge("research", "market_sentiment")
 
-    # Fan-in: all three analysis nodes → retry_gate
-    builder.add_edge("fundamental_analysis", "retry_gate")
-    builder.add_edge("macro_analysis", "retry_gate")
-    builder.add_edge("market_sentiment", "retry_gate")
+    # Fan-in: all three analysis nodes → llm_judge
+    builder.add_edge("fundamental_analysis", "llm_judge")
+    builder.add_edge("macro_analysis", "llm_judge")
+    builder.add_edge("market_sentiment", "llm_judge")
 
     builder.add_conditional_edges(
-        "retry_gate",
-        retry_router,
+        "llm_judge",
+        llm_judge_router,
         {"research": "research", "scenario_scoring": "scenario_scoring"},
     )
 
     builder.add_edge("scenario_scoring", "scenario_debate")
     builder.add_edge("scenario_debate", "report_finalize")
-    builder.add_conditional_edges(
-        "report_finalize",
-        _report_router,
-        {"research": "research", END: END},
-    )
+    builder.add_edge("report_finalize", END)
 
     return builder.compile()
 
@@ -153,7 +139,7 @@ class OrchestratorAgent:
         ).__aiter__()
         step_task: asyncio.Task | None = asyncio.create_task(anext(stream_iter))
         call_task: asyncio.Task | None = asyncio.create_task(collector.wait_next())
-        section_task: asyncio.Task | None = asyncio.create_task(sq._q.get())
+        section_task: asyncio.Task | None = asyncio.create_task(sq.wait_next())
         graph_done = False
 
         try:
@@ -171,9 +157,9 @@ class OrchestratorAgent:
 
                 if section_task is not None and section_task in done:
                     item = section_task.result()
-                    if item is not sq._SENTINEL:
+                    if item is not sq.SENTINEL:
                         yield {"type": "section_ready", "payload": item}
-                        section_task = asyncio.create_task(sq._q.get())
+                        section_task = asyncio.create_task(sq.wait_next())
                     else:
                         section_task = None  # queue exhausted
 

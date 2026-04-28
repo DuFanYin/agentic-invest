@@ -1,7 +1,7 @@
 # Test Suite
 
 Current repository test inventory is branch-dependent. Use `PYTHONPATH=. pytest tests/ --collect-only -q` as the source of truth.
-At the time of this update, the suite inventory is **117 tests** (`112 unit + 5 integration`).
+At the time of this update, the suite inventory is **118 tests** (`113 unit + 5 integration`).
 
 - Unit tests (fast): `PYTHONPATH=. pytest tests/unit/ -q`
 - Integration tests: `PYTHONPATH=. pytest tests/integration/ -q`
@@ -144,13 +144,14 @@ Contract enforcement and topology sanity:
 
 ---
 
-### `tests/unit/test_research_retry_gate.py` — 4 tests
+### `tests/unit/test_llm_judge.py` — 5 tests
 
-`retry_gate_node` / `retry_router`:
+`llm_judge_node` / `llm_judge_router`:
 
 - retry routing when questions exist
 - clear-after-max-iterations
 - structural-gap retry generation
+- analysis-robustness retry generation
 - conflict-based retry generation
 
 ---

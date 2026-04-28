@@ -131,7 +131,7 @@ class OpenRouterClient:
             except Exception as exc:
                 last_exc = exc
                 logger.warning("call_with_retry attempt %d/%d failed: %s", attempt, attempts, exc)
-        raise RuntimeError(f"LLM call failed after {attempts} attempts") from last_exc
+        raise RuntimeError(f"[openrouter] LLM call failed after {attempts} attempts") from last_exc
 
     # ── internals ──────────────────────────────────────────────────────────
 
@@ -173,7 +173,7 @@ class OpenRouterClient:
         for model_id in self._models:
             for attempt in range(1, self.max_retries + 2):
                 if shutdown.is_set():
-                    raise RuntimeError("server shutting down")
+                    raise RuntimeError("[openrouter] server shutting down")
 
                 call_id = self._next_id()
                 started_at = datetime.now(UTC).isoformat()
@@ -228,7 +228,7 @@ class OpenRouterClient:
                         )
                         # Interruptible backoff that can wake up early on shutdown.
                         if await shutdown.wait_or_timeout(wait):
-                            raise RuntimeError("server shutting down")
+                            raise RuntimeError("[openrouter] server shutting down")
                     else:
                         logger.warning("model %s exhausted retries, trying next", model_id)
 
@@ -266,11 +266,11 @@ class OpenRouterClient:
                             model_id, attempt, self.max_retries + 1, exc, wait,
                         )
                         if await shutdown.wait_or_timeout(wait):
-                            raise RuntimeError("server shutting down")
+                            raise RuntimeError("[openrouter] server shutting down")
                     else:
                         logger.warning("model %s exhausted retries after unexpected error, trying next", model_id)
 
-        raise RuntimeError(f"All models exhausted. Last error: {last_error}") from last_error
+        raise RuntimeError(f"[openrouter] All models exhausted. Last error: {last_error}") from last_error
 
     async def _call(self, model_id: str, prompt: str, *, system: str | None, json_mode: bool) -> tuple[str, dict | None]:
         default_system = (

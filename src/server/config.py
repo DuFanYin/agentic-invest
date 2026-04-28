@@ -29,13 +29,13 @@ if not os.getenv("LLM_API_KEY"):
 LLM_PROVIDER: str = (os.getenv("LLM_PROVIDER") or "openrouter").strip().lower()
 LLM_API_KEY: str | None = os.getenv("LLM_API_KEY") or None
 
-# Optional with sensible defaults
-LLM_BASE_URL: str = (
-    os.getenv("LLM_BASE_URL")
-    or ("https://api.openai.com/v1" if LLM_PROVIDER == "openai" else "https://openrouter.ai/api/v1")
-)
-LLM_HTTP_REFERER: str | None = os.getenv("LLM_HTTP_REFERER") or None
-LLM_APP_TITLE: str | None = os.getenv("LLM_APP_TITLE") or None
+# Derived runtime defaults (not environment-facing)
+LLM_BASE_URL: str = "https://api.openai.com/v1" if LLM_PROVIDER == "openai" else "https://openrouter.ai/api/v1"
+LLM_HTTP_REFERER: str | None = None
+LLM_APP_TITLE: str | None = None
 
 TAVILY_API_KEY: str | None = os.getenv("TAVILY_API_KEY") or None
 FRED_API_KEY: str | None = os.getenv("FRED_API_KEY") or None
+
+# Local persistence (SQLite cache). Keep deterministic across working directories.
+CACHE_DB_PATH: str = "outputs/cache.db"

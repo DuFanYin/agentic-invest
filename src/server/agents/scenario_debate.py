@@ -17,7 +17,7 @@ from src.server.models.analysis import (
 from src.server.models.scenario import Scenario
 from src.server.models.state import ResearchState
 from src.server.services.openrouter import OpenRouterClient
-from src.server.utils.contract import NODE_CONTRACTS, assert_writes
+from src.server.utils.contract import NODE_CONTRACTS, assert_reads, assert_writes
 from src.server.utils.status import update_status
 
 _READS  = NODE_CONTRACTS["scenario_debate"].reads
@@ -316,6 +316,7 @@ async def _run_debate(
 async def scenario_debate_node(
     state: ResearchState, *, llm: OpenRouterClient = _default_llm
 ) -> ResearchState:
+    assert_reads(state, _READS, _NODE)
 
     scenarios = state.get("scenarios") or []
     evidence = state.get("evidence") or []

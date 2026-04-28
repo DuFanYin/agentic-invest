@@ -2,7 +2,7 @@
 LangGraph shared state.
 
 evidence:        operator.add — each research iteration appends new items.
-retry_questions: plain replace — retry_gate writes a single-item list each cycle;
+retry_questions: plain replace — llm_judge writes a single-item list each cycle;
                  accumulation would break the retry-loop termination check.
 agent_statuses:  _last_list — fundamental_analysis and market_sentiment run in
                  parallel and both write this field in the same step; the plain
@@ -100,7 +100,7 @@ class ResearchState(TypedDict, total=False):
     # ── Gap / retry tracking ───────────────────────────────────────────────
     retry_questions: list[str]  # replaced each cycle — do NOT use operator.add
     retry_reason: str           # "structural" | "evidence_conflict" | "none"
-    research_iteration: int     # incremented by research_node; read by retry gate
+    research_iteration: int     # incremented by research_node; read by llm_judge
 
     # ── Scenario scoring & debate ──────────────────────────────────────────
     scenarios: list[Scenario]
@@ -112,7 +112,6 @@ class ResearchState(TypedDict, total=False):
     report_json: dict[str, Any]
     validation_result: ValidationResult
     quality_metrics: QualityMetrics
-    retry_reason: str
     stop_reason: str
 
     # ── Budget ─────────────────────────────────────────────────────────────

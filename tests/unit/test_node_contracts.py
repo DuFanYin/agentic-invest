@@ -30,7 +30,7 @@ def test_all_nodes_have_contracts():
     expected = {
         "parse_intent", "research",
         "fundamental_analysis", "macro_analysis", "market_sentiment",
-        "retry_gate", "scenario_scoring", "scenario_debate", "report_finalize",
+        "llm_judge", "scenario_scoring", "scenario_debate", "report_finalize",
     }
     assert set(NODE_CONTRACTS.keys()) == expected
 
@@ -121,7 +121,7 @@ def test_no_node_writes_to_its_own_inputs():
     # A node should not re-write a field it declared as a primary input.
     # Exclusions:
     #   agent_statuses — global write, every node updates it
-    #   retry_questions — retry_gate and report_finalize legitimately rewrite it
+    #   retry_questions — llm_judge and report_finalize legitimately rewrite it
     #   research_iteration — research increments its own counter each pass
     skip_fields = {"agent_statuses", "retry_questions", "research_iteration"}
     for node, contract in NODE_CONTRACTS.items():

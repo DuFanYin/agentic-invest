@@ -2,7 +2,7 @@
 
 ## 1) System Goal
 
-The goal is to build a multi-agent investment research system. Given any investment query, it should infer intent, collect evidence, run analysis, and output a traceable and verifiable report.
+The goal is to build a multi-agent investment research system that infers intent, collects evidence, runs analysis, and outputs a traceable, verifiable report.
 
 The system is not a fixed linear pipeline. The Orchestrator runs a shared-state graph with parallel analysis stages and conditional retry routing based on gaps and progress.
 
@@ -16,8 +16,9 @@ Shared Research State
 ├── fundamental_analysis
 ├── macro_analysis
 ├── market_sentiment
+├── retry_reason            ← current retry cause (`structural|analysis_robustness|evidence_conflict|none`)
 ├── retry_questions[]        ← replaced each cycle (plain assign)
-├── research_iteration       ← incremented by Research Agent; read by retry_gate
+├── research_iteration       ← incremented by Research Agent; read by llm_judge
 ├── scenarios[]
 ├── scenario_debate
 ├── narrative_sections
@@ -32,9 +33,9 @@ Core principles:
 
 - Every key conclusion must be traceable to evidence.
 - Agents exchange structured objects instead of long free-form text.
-- Agents do not run in a rigid sequence; they can work in parallel and request additional data when gaps are detected.
+- Agents do not run in a rigid sequence; they can run in parallel and request additional data when gaps are detected.
 - Final output must pass validation, especially citation integrity, data completeness, and scenario probability checks (`sum(probability)=1`).
-- Query types are not hardcoded. The Orchestrator dynamically infers intent, subject, time horizon, and required data.
+- Query types are not hardcoded. The planning stage dynamically infers intent, subject, time horizon, and required data from the raw query.
 
 ## 2) Core Inputs and Outputs
 
@@ -42,7 +43,7 @@ Input:
 
 - `query`: user natural-language question
 
-Other fields are not required user inputs. They are inferred from `query` by the Orchestrator:
+Other fields are not required user inputs. They are inferred from `query` by the planning stage:
 
 - `ticker`: stock ticker; nullable if not identifiable
 - `time_horizon`: investment horizon, e.g. `6 months`, `3 years`, `5 years`
@@ -62,11 +63,11 @@ Output:
 - `validation_result`: final validation summary, including missing fields, citation coverage, and probability checks
 - `report_json.quality_metrics`: final quality snapshot (citation coverage, probability validity, debate applied, unresolved issues, confidence)
 
-## 3) Core Data Objects
+## 3) Core Data
 
-### Research Intent Object
+### Research Intent
 
-The Orchestrator converts a natural-language query into a general research intent object.
+The planning stage converts a natural-language query into a general research intent object.
 
 ```json
 {
@@ -79,9 +80,9 @@ The Orchestrator converts a natural-language query into a general research inten
 }
 ```
 
-### Evidence Object
+### Evidence
 
-Each evidence item follows a unified schema for consistent downstream references.
+Each evidence item follows a unified schema for downstream references.
 
 ```json
 {
@@ -97,7 +98,7 @@ Each evidence item follows a unified schema for consistent downstream references
 }
 ```
 
-### Agent Output Object
+### Representative Analysis Output
 
 Each analysis agent outputs a structured result with explicit evidence bindings.
 
@@ -111,26 +112,26 @@ Each analysis agent outputs a structured result with explicit evidence bindings.
       "evidence_ids": ["ev_001", "ev_003"]
     }
   ],
+  "business_quality": { "view": "strong|stable|weak|deteriorating" },
+  "valuation": { "relative_multiple_view": "..." },
+  "fundamental_risks": [],
   "metrics": {},
   "missing_fields": []
 }
 ```
 
-## 4) Collaboration Model and Topology
+## 4) Runtime Topology
 
-The system uses a LangGraph `StateGraph` with a shared `ResearchState`. The graph has one active retry loop after `retry_gate` (evidence adequacy/conflict checks).
+The system uses a LangGraph `StateGraph` with a shared `ResearchState`. It has one active retry loop after `llm_judge`.
 
-Core flow:
+Flow summary:
 
-- `parse_intent` (implemented by planning agent) extracts `ResearchIntent` and planning fields from raw query.
-- `research` collects evidence from financial APIs, macro sources, yfinance news, and Tavily web search. Runs again on retry iterations.
-- `fundamental_analysis`, `macro_analysis`, and `market_sentiment` run **in parallel** after each research iteration.
-- `retry_gate` merges structural gaps (company scope without ticker) and research conflict signals (`normalized_data.conflicts`) to decide whether to retry.
-- If gaps remain and retry budget exists, the graph loops back to `research` for a supplementary iteration.
-- `scenario_scoring` runs once evidence gaps are resolved; probabilities are normalised in Python before constructing `Scenario` objects.
-- `scenario_debate` calibrates scenario probabilities and can fallback to baseline probabilities when debate output is invalid.
-- `report_finalize` generates Markdown via LLM, runs pure-Python validation, and computes quality metrics.
-- The graph terminates after `report_finalize`; validation errors are surfaced in report output and `validation_result`.
+- `parse_intent` extracts planning context from the raw query.
+- `research` collects evidence and may run again on retry iterations.
+- `fundamental_analysis`, `macro_analysis`, and `market_sentiment` run in parallel after each research pass.
+- `llm_judge` decides whether to retry or continue.
+- `scenario_scoring` generates baseline scenarios, then `scenario_debate` recalibrates them.
+- `report_finalize` renders narrative sections, assembles the export report, and runs final validation.
 
 ```text
                               ┌─────────────────────────────────────────┐
@@ -138,7 +139,7 @@ Core flow:
                               │ research_iteration < 2                  │
                               ▼                                          │
 START → parse_intent → research → fundamental_analysis ──┐              │
-                                → macro_analysis       ───┼─→ retry_gate ┤
+                                → macro_analysis       ───┼─→ llm_judge ┤
                                 → market_sentiment    ───┘              │
                                                                          │
                                                           (no gaps) ─────┘
@@ -153,63 +154,66 @@ START → parse_intent → research → fundamental_analysis ──┐          
 
 State mutation rules:
 - `evidence[]`: `operator.add` — each research iteration appends; never overwritten.
-- `retry_questions[]`: plain replace — `retry_gate` (and later `report_finalize`) reset to current cycle list; accumulation would break retry termination.
+- `retry_questions[]`: plain replace — `llm_judge` and `report_finalize` overwrite this cycle's list; accumulation would break retry termination.
 - `agent_statuses[]`: `_last_list` custom reducer — parallel nodes can write this field in the same graph step; plain LastValue would raise `InvalidUpdateError`. The reducer merges per-agent updates and prefers newer `last_update_at` snapshots.
 
-## 5) Agent Responsibilities
+## 5) Runtime Layers
 
-### Orchestrator Agent
+### Orchestration Layer
 
-- Parse user queries and produce an execution plan
-- Infer intent, subjects, horizon, and expected outputs
-- Execute the LangGraph workflow (fan-out/fan-in + conditional retry routing)
-- Handle retry routing and failure surfacing
+The orchestrator is a workflow/runtime coordinator, not a peer analysis agent.
+
+- Build and execute the LangGraph workflow
+- Instantiate and wire per-request runtime dependencies (`OpenRouterClient`, `LLMCallCollector`, `SectionQueue`)
+- Handle retry routing, streaming, and failure surfacing
 - Input: `query`
-- Output: `Research State`, task plan, execution status, and final aggregated context
+- Output: graph execution, streamed runtime events, and final aggregated response
+- Key strategies:
+  - Run analysis nodes in parallel after each research pass
+  - Route retries through `llm_judge` for evidence adequacy/conflict resolution
+  - Interleave graph updates, LLM telemetry, and section-ready events during streaming
+
+### Node Roles
+
+#### Planning Agent
+
+- Role: parse the raw query into structured intent and planning context, and define the canonical report plan plus any query-specific custom sections
+- Input: `query`
+- Output: `intent` + `plan_context`
 - Key strategies:
   - Support mixed intent without hardcoded query classes
-  - Extract subjects automatically and select modules by intent
-  - Run analysis nodes in parallel after each research pass
-  - Route retries through `retry_gate` for evidence adequacy/conflict resolution
+  - Infer subjects, scope, ticker, horizon, and expected outputs from the query
+  - Generate `research_focus`, `must_have_metrics`, and `plan_notes` for downstream use
+  - Fall back to a safe default interpretation if planning output is unusable
 
-### Research Agent
+#### Research Agent
 
-- Retrieve public finance data (`finance_data`: company info, financials, price history, yfinance news) and web sources (`web_research`: Tavily)
-- Retrieve macro data (`macro_data`: FRED + market signal proxies)
-- Assign reliability levels to sources
-- Deduplicate web results by URL within each pass
-- Organize output as `evidence[]`
-- Convert heterogeneous data into normalized `normalized_data`
+- Role: collect finance, macro, and web inputs, then normalize them into reusable evidence and structured data
 - Input: research plan, subjects, keywords, and horizon
 - Output: `evidence[]` + `normalized_data`
 - Key strategies:
   - Prioritize high-quality sources (`financial_api` → `news` → `web`)
+  - Retrieve finance data, macro data, and Tavily web results in a common evidence schema
   - Evidence schema carries `summary`/`reliability`; collectors populate `retrieved_at`; `url` remains optional
+  - Deduplicate web results by URL within each pass
   - Normalize fields and units; mark `missing_fields` when data is absent
   - Include conflict signals (`normalized_data.conflicts`) from cumulative evidence across iterations
   - If no usable evidence can be collected, raise a runtime error (no synthetic low-reliability fallback)
 
-### Fundamental Analysis Agent
+#### Fundamental Analysis Agent
 
-- Analyze business quality: model, competitive advantage, market position, growth drivers
-- Analyze financial performance: revenue, margins, cash flow, leverage, capex
-- Analyze valuation: multiples, historical ranges, comparable peers, optional simplified DCF
-- Analyze fundamental risks: capital structure, regulation, supply chain, customer concentration, execution risks
-- Separate facts, interpretation, and inference
+- Role: evaluate business quality, financial performance, valuation, and core fundamental risks from the collected evidence
 - Input: `evidence[]` + `normalized_data`
-- Output: `fundamental_analysis` (`business_quality`, `financials`, `valuation`, `fundamental_risks`)
+- Output: `fundamental_analysis` (`claims`, `business_quality`, `valuation`, `fundamental_risks`, `missing_fields`, `metrics`)
 - Key strategies:
   - Use normalized metrics context (TTM / three-year average / latest quarter when available)
   - Bind key judgments to `evidence_ids`
   - Write `missing_fields[]` when data is absent; surfaced in final report warnings
   - Cross-check valuation and attach observable risk signals
 
-### Market Sentiment Agent
+#### Market Sentiment Agent
 
-- Analyze news sentiment: recent news, disclosures, analyst views, market focus
-- Analyze price action: short/mid-term trend, volatility, volume, relative strength
-- Analyze market narrative: what story the market is pricing, whether expectations are overheated or cold
-- Analyze sentiment risks: crowded trades, expectation resets, event-driven volatility
+- Role: summarize market-facing signals across news, price action, positioning, and expectation risk
 - Input: `evidence[]` + `normalized_data`
 - Output: `market_sentiment` (`news_sentiment`, `price_action`, `market_narrative`, `sentiment_risks`)
 - Key strategies:
@@ -218,13 +222,10 @@ State mutation rules:
   - Downweight noisy signals
   - Write `missing_fields[]` when coverage is insufficient; surfaced as report warnings
 
-### Scenario Scoring Agent
+#### Scenario Scoring Agent
 
-- Build forward-looking scenario states (3-5 distinct futures), with directional tags as metadata rather than primary buckets
-- Assign probability `probability` (0-1) to each scenario
-- Normalize probabilities before output to ensure total `probability` sum is 1
-- Include key triggers for each scenario
-- Input: `evidence[]` + `normalized_data` + `fundamental_analysis` + `market_sentiment`
+- Role: construct the baseline forward scenarios, assign probabilities, and define the triggers that separate them
+- Input: `evidence[]` + `fundamental_analysis` + `macro_analysis` + `market_sentiment` + planning context
 - Output: `scenarios[]` (`name/description/probability/drivers/triggers/evidence_ids/tags`)
 - Key strategies:
   - Keep at least 3 mutually exclusive scenarios
@@ -232,54 +233,65 @@ State mutation rules:
   - Recompute when core assumptions change
   - State assumptions, triggers, and validation signals
 
-### Macro Analysis Agent
+#### Macro Analysis Agent
 
-- Analyze macro environment: growth/rates regime, key drivers, and macro risks
+- Role: summarize the macro regime, its decision-relevant drivers, and the main external risks
 - Input: `evidence[]` (especially `macro_api`) + intent context
-- Output: `macro_analysis` (`macro_view`, `macro_drivers`, `macro_risks`, regime tags)
+- Output: `macro_analysis` (`macro_view`, `macro_drivers`, `macro_risks`, `rate_environment`, `growth_environment`, `missing_fields`)
 - Key strategies:
   - Keep output concise and decision-relevant
   - Surface missing macro fields via `missing_fields[]` for report warnings
 
-### Scenario Debate Agent
+#### LLM Judge Agent
 
-- Revisit scenario probabilities through structured bull/bear/judge calibration
+- Role: decide whether the pipeline should perform one more research pass before scenario generation
+- Input: analysis outputs + evidence + planning context + conflict signals
+- Output: `retry_questions` + `retry_reason`
+- Key strategies:
+  - Run a two-stage check: analysis robustness first, then conflict severity
+  - Use a structural shortcut for missing company ticker
+  - Bias toward proceeding unless the evidence gap or conflict is material
+  - Treat judge failure as best-effort and continue downstream when needed
+
+#### Scenario Debate Agent
+
+- Role: recalibrate baseline scenario probabilities through structured advocate/arbitrator debate
 - Input: baseline `scenarios[]` + fundamental/macro/sentiment context
 - Output: `scenario_debate` (`debate_summary`, `probability_adjustments`, `calibrated_scenarios`, `debate_flags`)
 - Key strategies:
   - Enforce bounded per-scenario shifts and full scenario coverage
   - Fallback to baseline probabilities on invalid debate output
 
-### Report Finalize Agent
+#### Report Finalize Agent
 
-- Organize scenario implications and decision-relevant contrasts across the generated futures
-- Generate the user-facing research report
-- Check whether every key conclusion is evidence-backed
-- Check scenario probabilities sum to 1
-- Check for obvious internal contradictions
-- Input: `evidence[]` + `normalized_data` + `fundamental_analysis` + `macro_analysis` + `market_sentiment` + `scenarios[]` + `scenario_debate`
-- Output: `narrative_sections` + `report_markdown` + `report_json` + `validation_result` + `quality_metrics`
+- Role: assemble the user-facing report, organize scenario implications, and run final validation
+- Input: `evidence[]` + `fundamental_analysis` + `macro_analysis` + `market_sentiment` + `scenarios[]` + `scenario_debate` + planning context
+- Output: `narrative_sections` + `report_markdown` + `report_json` + `validation_result` + `quality_metrics` (+ cleared `retry_questions`)
 - Key strategies:
   - Require evidence references for key conclusions
   - Show "what we know / uncertainty / what to watch"
-  - Validation always runs in pure Python (no LLM); errors/warnings appended inline
-- Final node clears `retry_questions` and marks workflow completion
+  - Validation always runs in pure Python (no LLM contradiction judge); errors/warnings appended inline
+  - Clear `retry_questions` and mark workflow completion at the final node
 
-## 6) Final Report Structure
+## 6) Report Composition
 
-The final report follows a fixed structure for easier comparison, testing, and frontend rendering.
+The final report is section-based rather than fully fixed. The planning stage provides a canonical `report_plan`, and `report_finalize` can append query-specific `custom_sections`. If planning is unavailable, the backend falls back to a small default section set.
+
+### Section Sources
+
+- Standard sections come from `report_plan.sections`
+- Query-specific additions come from `custom_sections`
+- Structured sections are rendered from typed backend payloads
+- Narrative and custom sections are written by `report_finalize`
+
+### Default Fallback Sections
+
+Typical fallback sections are:
 
 - Executive Summary
-- Company Overview
-- Key Evidence
 - Fundamental Analysis
 - Macro Environment
 - Market Sentiment
-- Valuation View
-- Risk Analysis
 - Future Scenarios
-- Scenario Debate & Calibration
-- Scenario Implications
-- What To Watch Next
-- Sources
-- Disclaimer: Not financial advice.
+- Scenario Calibration
+- Conclusion & What To Watch

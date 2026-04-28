@@ -8,7 +8,7 @@ import logging
 from src.server.models.analysis import MarketSentiment
 from src.server.models.state import ResearchState
 from src.server.services.openrouter import OpenRouterClient
-from src.server.utils.contract import NODE_CONTRACTS, assert_writes
+from src.server.utils.contract import NODE_CONTRACTS, assert_reads, assert_writes
 from src.server.utils.status import update_status
 
 _READS  = NODE_CONTRACTS["market_sentiment"].reads
@@ -74,6 +74,7 @@ PRICE / MARKET DATA:
 async def market_sentiment_node(
     state: ResearchState, *, llm: OpenRouterClient = _default_llm
 ) -> ResearchState:
+    assert_reads(state, _READS, _NODE)
 
     evidence = state.get("evidence") or []
     normalized_data = state.get("normalized_data")
@@ -123,7 +124,7 @@ async def market_sentiment_node(
             ],
         )
         statuses = update_status(
-            statuses, "retry_gate",
+            statuses, "llm_judge",
             lifecycle="active", phase="evaluating_gaps", action="checking for gaps",
         )
 

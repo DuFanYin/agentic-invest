@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 
 from src.server.models.analysis import (
@@ -10,6 +11,7 @@ from src.server.models.analysis import (
     MacroAnalysis,
     MarketSentiment,
     QualityMetrics,
+    ReportPlan,
     ReportSection,
     ScenarioDebate,
 )
@@ -18,7 +20,7 @@ from src.server.models.scenario import Scenario
 from src.server.models.state import ResearchState
 from src.server.services.openrouter import OpenRouterClient
 from src.server.services.section_queue import SectionQueue
-from src.server.utils.contract import NODE_CONTRACTS, assert_writes
+from src.server.utils.contract import NODE_CONTRACTS, assert_reads, assert_writes
 from src.server.utils.status import update_status
 
 _READS  = NODE_CONTRACTS["report_finalize"].reads
@@ -52,6 +54,17 @@ _STRUCTURED_SOURCES = {
     "evidence",
 }
 
+_CANONICAL_SECTION_IDS = {
+    "executive_summary",
+    "fundamental_analysis",
+    "macro_environment",
+    "market_sentiment",
+    "scenarios",
+    "scenario_debate",
+    "conclusion",
+}
+_ALLOWED_SECTION_SOURCES = _STRUCTURED_SOURCES | {"all"}
+
 _FALLBACK_SECTIONS = [
     ReportSection(id="executive_summary",    title="Executive Summary",          source="all",                  required=True),
     ReportSection(id="fundamental_analysis", title="Fundamental Analysis",       source="fundamental_analysis", required=True),
@@ -61,6 +74,59 @@ _FALLBACK_SECTIONS = [
     ReportSection(id="scenario_debate",      title="Scenario Calibration",       source="scenario_debate",      required=True),
     ReportSection(id="conclusion",           title="Conclusion & What To Watch", source="all",                  required=True),
 ]
+_FALLBACK_SECTION_BY_ID = {section.id: section for section in _FALLBACK_SECTIONS}
+
+
+def _validate_report_plan(report_plan: ReportPlan | None) -> tuple[list[ReportSection], list[str], ReportPlan]:
+    """Return usable sections, validation warnings, and the accepted plan.
+
+    Prefer salvaging valid sections over falling back the entire plan.
+    """
+    if report_plan is None:
+        fallback = ReportPlan(report_type="general", sections=list(_FALLBACK_SECTIONS))
+        return list(_FALLBACK_SECTIONS), [], fallback
+
+    warnings: list[str] = []
+    validated: list[ReportSection] = []
+    seen_ids: set[str] = set()
+
+    for section in report_plan.sections:
+        section_id = (section.id or "").strip()
+        source = (section.source or "").strip()
+        title = (section.title or "").strip()
+        if section_id not in _CANONICAL_SECTION_IDS:
+            warnings.append(f"Skipping unknown report_plan section id '{section_id}'")
+            continue
+        if section_id in seen_ids:
+            warnings.append(f"Skipping duplicate report_plan section id '{section_id}'")
+            continue
+
+        canonical = _FALLBACK_SECTION_BY_ID[section_id]
+        if source != canonical.source:
+            warnings.append(
+                f"Normalizing report_plan source for section '{section_id}' from '{source or '<empty>'}' to '{canonical.source}'"
+            )
+            source = canonical.source
+        if not title:
+            warnings.append(f"Using default title for report_plan section '{section_id}'")
+            title = canonical.title
+
+        seen_ids.add(section_id)
+        validated.append(
+            ReportSection(
+                id=section_id,
+                title=title,
+                source=source,
+                required=section.required,
+            )
+        )
+
+    if not validated:
+        warnings.append("No usable report_plan sections — using fallback plan")
+        fallback = ReportPlan(report_type=report_plan.report_type or "general", sections=list(_FALLBACK_SECTIONS))
+        return list(_FALLBACK_SECTIONS), warnings, fallback
+
+    return validated, warnings, ReportPlan(report_type=report_plan.report_type, sections=validated)
 
 
 # ── Source data formatters (used in LLM prompt context only) ──────────────
@@ -215,6 +281,7 @@ async def report_finalize_node(
     llm: OpenRouterClient = _default_llm,
     section_queue: SectionQueue | None = None,
 ) -> ResearchState:
+    assert_reads(state, _READS, _NODE)
 
     intent = state.get("intent")
     evidence = state.get("evidence") or []
@@ -258,7 +325,8 @@ async def report_finalize_node(
     if isinstance(ms, MarketSentiment) and ms.missing_fields:
         warnings.append(f"Missing sentiment fields: {', '.join(ms.missing_fields)}")
 
-    sections = report_plan.sections if report_plan else _FALLBACK_SECTIONS
+    sections, plan_warnings, report_plan = _validate_report_plan(report_plan)
+    warnings.extend(plan_warnings)
 
     # Render sections — narrative ones via LLM, structured ones signalled directly
     narrative_sections: dict[str, str] = {}

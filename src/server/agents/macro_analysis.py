@@ -8,7 +8,7 @@ import logging
 from src.server.models.analysis import MacroAnalysis
 from src.server.models.state import ResearchState
 from src.server.services.openrouter import OpenRouterClient
-from src.server.utils.contract import NODE_CONTRACTS, assert_writes
+from src.server.utils.contract import NODE_CONTRACTS, assert_reads, assert_writes
 from src.server.utils.status import update_status
 
 _READS  = NODE_CONTRACTS["macro_analysis"].reads
@@ -82,6 +82,7 @@ SUPPLEMENTAL EVIDENCE (for context only):
 async def macro_analysis_node(
     state: ResearchState, *, llm: OpenRouterClient = _default_llm
 ) -> ResearchState:
+    assert_reads(state, _READS, _NODE)
 
     evidence = state.get("evidence") or []
     intent = state.get("intent")
@@ -127,7 +128,7 @@ async def macro_analysis_node(
             ],
         )
         statuses = update_status(
-            statuses, "retry_gate",
+            statuses, "llm_judge",
             lifecycle="active", phase="evaluating_gaps", action="checking for gaps",
         )
 

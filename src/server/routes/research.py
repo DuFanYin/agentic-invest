@@ -28,6 +28,16 @@ def run_research_stream(request: ResearchRequest) -> StreamingResponse:
 
         orchestrator = OrchestratorAgent()
 
+        def current_phase(statuses: list[dict], node: str | None) -> str:
+            if node:
+                for item in statuses:
+                    if item.get("agent") == node and item.get("phase"):
+                        return item["phase"]
+            for item in statuses:
+                if item.get("lifecycle") == "active" and item.get("phase"):
+                    return item["phase"]
+            return "unknown"
+
         # Emit initial statuses immediately — UI never blank after clicking Run
         boot_statuses = [s.model_dump() for s in initial_agent_statuses(running="parse_intent")]
         last_statuses: list[dict] = boot_statuses
@@ -40,6 +50,7 @@ def run_research_stream(request: ResearchRequest) -> StreamingResponse:
                         "timestamp": datetime.now(UTC).isoformat(),
                         "message": "research stream interrupted: server shutting down",
                         "node": "shutdown",
+                        "phase": "shutdown",
                     })
                     yield emit("done", {})
                     return
@@ -86,11 +97,13 @@ def run_research_stream(request: ResearchRequest) -> StreamingResponse:
                     item["last_error"] = message
                 next_statuses.append(item)
             statuses = next_statuses
+            phase = current_phase(statuses, node)
             yield emit("agent_status", statuses)
             yield emit("error", {
                 "timestamp": datetime.now(UTC).isoformat(),
                 "message": message,
                 "node": node or "unknown",
+                "phase": phase,
             })
 
         yield emit("done", {})

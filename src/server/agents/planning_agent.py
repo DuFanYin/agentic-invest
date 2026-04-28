@@ -10,7 +10,7 @@ from src.server.models.analysis import CustomSection, PlanContext, ReportPlan, R
 from src.server.models.intent import ResearchIntent
 from src.server.models.state import ResearchState
 from src.server.services.openrouter import OpenRouterClient
-from src.server.utils.contract import NODE_CONTRACTS, assert_writes
+from src.server.utils.contract import NODE_CONTRACTS, assert_reads, assert_writes
 from src.server.utils.status import initial_agent_statuses, update_status
 
 _READS  = NODE_CONTRACTS["parse_intent"].reads
@@ -167,6 +167,7 @@ async def parse_intent(query: str, llm_client: OpenRouterClient) -> ResearchInte
 
 def make_planning_node(llm_client: OpenRouterClient):
     async def planning_agent_node(state: ResearchState) -> ResearchState:
+        assert_reads(state, _READS, _NODE)
         statuses = initial_agent_statuses(running=_NODE)
         result = await plan(state["query"], llm_client)
 

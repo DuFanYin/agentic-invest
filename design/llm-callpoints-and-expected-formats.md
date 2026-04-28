@@ -1,208 +1,194 @@
 # LLM Callpoints and Expected Return Formats
 
-This document lists all active LLM callpoints in `src/server/agents/*`, the expected response shape at each point, and how each output is validated or post-processed.
+This document records the active LLM callsites in the agent pipeline, what each one is broadly responsible for, and what kind of output the rest of the system expects.
 
-## Overview
+It is intentionally higher-level than the code. The goal is to clarify:
 
-| Node | File | Call API | Expected Output |
-|---|---|---|---|
-| `parse_intent` | `src/server/agents/planning_agent.py` | `llm_client.complete(...)` | JSON object (Intent + planning schema) |
-| `fundamental_analysis` | `src/server/agents/fundamental_analysis.py` | `llm.call_with_retry(...)` | JSON object (`FundamentalAnalysis`) |
-| `macro_analysis` | `src/server/agents/macro_analysis.py` | `llm.call_with_retry(...)` | JSON object (`MacroAnalysis`) |
-| `market_sentiment` | `src/server/agents/market_sentiment.py` | `llm.call_with_retry(...)` | JSON object (`MarketSentiment`) |
-| `scenario_scoring` | `src/server/agents/scenario_scoring.py` | `llm.call_with_retry(...)` | JSON object (`{"scenarios":[...]}` preferred) |
-| `scenario_debate` | `src/server/agents/scenario_debate.py` | `llm.call_with_retry(...)` (N advocate calls + 1 arbitrator call) | JSON object (`ScenarioDebate`-like payload) |
-| `report_finalize` | `src/server/agents/report_finalize.py` | `llm.complete_text(...)` | Markdown report text |
+- which stage uses an LLM
+- what job that LLM call is doing
+- whether the output is structured JSON or narrative text
+- whether the system treats failures as recoverable or fatal
 
----
+## Active callsites
 
-## 1) `parse_intent` (Planning Agent)
+| Node | Call site | Role |
+|---|---|---|
+| `parse_intent` | Planning-stage intent and report-plan generation | Turn the raw query into intent plus downstream planning context |
+| `fundamental_analysis` | Fundamental analysis generation | Produce structured company, quality, valuation, and risk analysis |
+| `macro_analysis` | Macro regime analysis generation | Produce a structured macro view with drivers and risks |
+| `market_sentiment` | Sentiment and price-action analysis generation | Produce a structured market narrative and sentiment view |
+| `llm_judge` | Retry decision gate | Decide whether another research pass is worth doing before scenarios/reporting |
+| `scenario_scoring` | Baseline scenario generation | Produce the initial scenario set and raw probability weights |
+| `scenario_debate` | Scenario calibration workflow | Stress-test and recalibrate the baseline scenarios |
+| `report_finalize` | Narrative section writing | Write the final report sections in markdown |
 
-- **Location**: `src/server/agents/planning_agent.py`
-- **Call**: `llm_client.complete(prompt, system=_SYSTEM, node="parse_intent")`
-- **Expected format**: JSON object
-- **Expected keys**:
-  - `intent` (enum-like string)
-  - `subjects` (string array)
-  - `scope` (`company|sector|theme|macro|event|mixed`)
-  - `ticker` (string or `null`)
-  - `time_horizon` (string or `null`)
-  - `risk_level` (`low|medium|high|null`)
-  - `required_outputs` (string array)
-  - `research_focus` (string array)
-  - `must_have_metrics` (string array)
-  - `plan_notes` (string array)
-- **Post-processing / validation**:
-  1. Parse with `json.loads(raw)`.
-  2. Build `ResearchIntent(...)`.
-  3. If planning fields are empty, derive minimal defaults.
-  4. On any failure, return safe fallback intent + fallback planning fields (no exception thrown).
+## `parse_intent`
 
----
+This is the planning-stage LLM call. It turns a raw user query into structured intent plus a lightweight plan for the rest of the pipeline.
 
-## 2) `fundamental_analysis`
+Expected output type:
 
-- **Location**: `src/server/agents/fundamental_analysis.py` (`fundamental_analysis_node`)
-- **Call**: `llm.call_with_retry(prompt, system=_SYSTEM, node="fundamental_analysis")`
-- **Expected format**: strict JSON object
-- **Expected content**:
-  - `claims[]` with `statement`, `confidence`, `evidence_ids`
-  - `business_quality`
-  - `financials`
-  - `valuation`
-  - `fundamental_risks[]`
-  - `missing_fields[]`
-- **Post-processing / validation**:
-  1. Parse JSON.
-  2. Attach `metrics` from normalized research data.
-  3. Validate via `FundamentalAnalysis.model_validate(...)`.
-  4. If invalid/unavailable, raise `RuntimeError("[fundamental_analysis] ...")`.
+- structured JSON
+- intent-level fields
+- planning context for downstream research and reporting
 
----
+Behavior:
 
-## 3) `macro_analysis`
+- parsed into typed planning objects
+- fallback-friendly rather than fail-fast
+- if the call is unusable, the system falls back to a safe default interpretation instead of stopping the run
 
-- **Location**: `src/server/agents/macro_analysis.py` (`macro_analysis_node`)
-- **Call**: `llm.call_with_retry(prompt, system=_SYSTEM, node="macro_analysis")`
-- **Expected format**: strict JSON object
-- **Expected content**:
-  - `macro_view`
-  - `rate_environment`, `growth_environment`
-  - `macro_drivers[]`
-  - `macro_risks[]`
-  - `missing_fields[]`
-- **Post-processing / validation**:
-  1. Parse JSON.
-  2. Validate via `MacroAnalysis.model_validate(...)`.
-  3. If invalid/unavailable, raise `RuntimeError("[macro_analysis] ...")`.
+## `fundamental_analysis`
 
----
+This call generates the structured fundamental view: business quality, valuation framing, core claims, and major risks.
 
-## 4) `market_sentiment`
+Expected output type:
 
-- **Location**: `src/server/agents/market_sentiment.py` (`market_sentiment_node`)
-- **Call**: `llm.call_with_retry(prompt, system=_SYSTEM, node="market_sentiment")`
-- **Expected format**: strict JSON object
-- **Expected content**:
-  - `claims[]`
-  - `news_sentiment`
-  - `price_action`
-  - `market_narrative`
-  - `sentiment_risks[]`
-  - `missing_fields[]`
-- **Post-processing / validation**:
-  1. Parse JSON.
-  2. Validate via `MarketSentiment.model_validate(...)`.
-  3. If invalid/unavailable, raise `RuntimeError("[market_sentiment] ...")`.
+- structured JSON
+- validated as typed fundamental-analysis output
+- expected to include evidence-linked reasoning, not just prose
 
----
+Behavior:
 
-## 5) `scenario_scoring`
+- merged with normalized research metrics before validation
+- treated as a core analysis dependency
+- fail-fast on unusable output
 
-- **Location**: `src/server/agents/scenario_scoring.py` (`scenario_scoring_node`)
-- **Call**: `llm.call_with_retry(prompt, system=_SYSTEM, node="scenario_scoring")`
-- **Expected format**: JSON object with top-level `scenarios` array (parser also tolerates direct array)
-- **Expected structure**:
-  - `scenarios` length must be `3..5`
-  - each scenario includes:
-    - `name`, `description`
-    - `raw_probability`
-    - `drivers[]`, `triggers[]`
-    - `evidence_ids[]`
-    - `tags[]` (parser defaults to `["neutral"]` when missing/empty; prompt asks for magnitude tag)
-- **Post-processing / validation**:
-  1. Parse JSON and unwrap `data["scenarios"]` if present.
-  2. Convert to `Scenario` objects with `_parse_llm_scenarios(...)`.
-  3. Normalize probabilities with `_normalise(...)`.
-  4. Sort by probability descending.
-  5. If generation fails, raise `RuntimeError("[scenario_scoring] unable to generate scenarios from LLM output")`.
+## `macro_analysis`
 
----
+This call produces the macro layer of the report: regime view, main drivers, and major risks.
 
-## 6) `scenario_debate`
+Expected output type:
 
-- **Location**: `src/server/agents/scenario_debate.py` (`scenario_debate_node`)
-- **Call pattern**:
-  1. Round-1 advocates: one `llm.call_with_retry(..., system=_SYSTEM_ADVOCATE, node="scenario_debate")` per scenario (concurrent).
-  2. Round-2 arbitrator: one `llm.call_with_retry(..., system=_SYSTEM_ARBITRATOR, node="scenario_debate")`.
-- **Expected format**: JSON object
-- **Expected content**:
-  - `debate_summary`
-  - `probability_adjustments[]`
-  - `calibrated_scenarios[]`
-  - `confidence`
-  - `debate_flags[]`
-- **Post-processing / validation**:
-  1. Parse JSON.
-  2. Enforce hard constraints in `_validate_and_fix(...)`:
-     - per-scenario delta cap (`<= 0.15`)
-     - calibrated scenario coverage must include all baseline scenarios
-     - probability normalization if needed
-  3. On parse/LLM failure or invalid coverage, fallback to baseline via `_fallback_debate(...)` (no exception thrown).
+- structured JSON
+- validated as typed macro-analysis output
 
----
+Behavior:
 
-## 7) `report_finalize`
+- consumed as a normal downstream analysis artifact
+- fail-fast on unusable output
 
-- **Location**: `src/server/agents/report_finalize.py` (`report_finalize_node`)
-- **Call**: `llm.complete_text(prompt, system=_SYSTEM, node="report_finalize")` (invoked per narrative section)
-- **Expected format**: Markdown text (non-JSON)
-- **Expected content**:
-  - section-level narrative markdown (non-JSON), one section per call
-  - evidence ID citations where relevant
-  - report export includes disclaimer text: `Not financial advice.`
-- **Post-processing / validation**:
-  1. Accept non-empty content with minimal length check (`> 50` chars).
-  2. Always run Python validations:
-     - scenario probability checks
-     - evidence completeness
-     - claim coverage
-  3. Append `## Validation Errors` / `## Validation Warnings` to report markdown when present.
-  4. Compute `quality_metrics` (citation coverage, probability validity, debate_applied, unresolved issues, confidence).
-  5. Narrative section failures degrade to `*Section unavailable.*`; node hard-fails only on missing evidence.
+## `market_sentiment`
 
----
+This call produces the market-facing layer of the report: news/sentiment read, market narrative, and sentiment risks.
 
-## `OpenRouterClient` Common Behavior
+Expected output type:
 
-- **File**: `src/server/services/openrouter.py`
-- `complete(...)` and `call_with_retry(...)` run in JSON mode by default:
-  - sends `response_format: {"type": "json_object"}`
-  - strips fenced wrappers when needed
-  - validates response JSON
-  - treats invalid JSON and several transport/provider errors as retryable
-- `complete_text(...)` runs with `json_mode=False`:
-  - no JSON enforcement
-  - used for final Markdown report generation
+- structured JSON
+- validated as typed sentiment-analysis output
 
-Retry / failover semantics:
-- per-model retries with exponential backoff (`max_retries` controls attempts per model)
-- retryable HTTP/network/timeout/invalid-JSON paths stay on current model until exhausted
-- fatal errors skip directly to next model
-- raises only after all models are exhausted
+Behavior:
 
----
+- used alongside fundamental and macro analysis
+- fail-fast on unusable output
 
-## Failure-Handling Notes
+## `llm_judge`
 
-- `parse_intent`, `scenario_debate`, and report narrative rendering are fallback-friendly:
-  - `parse_intent`: returns default intent/planning on failure
-  - `scenario_debate`: returns baseline probabilities with `fallback_to_baseline` flag
-- analysis/scoring nodes are fail-fast:
-  - `fundamental_analysis`, `macro_analysis`, `market_sentiment`, `scenario_scoring` raise `RuntimeError` if LLM output is unusable
+This node is the retry decision point. It uses small structured judge calls to decide whether the pipeline should do one more evidence pass before moving on.
 
----
+Expected output type:
 
-## `llm_call` Streaming Telemetry
+- small structured JSON judge result
+- retry / no-retry decision
+- optional targeted retry question
 
-- **Related files**:
-  - `src/server/services/collector.py`
-  - `src/server/services/openrouter.py`
-  - `src/server/agents/orchestrator.py`
-- **Mechanism**:
-  1. `OpenRouterClient` emits lifecycle events (`calling/success/retry/failed`) into `LLMCallCollector`.
-  2. Collector stores full history and pushes real-time events to an `asyncio.Queue`.
-  3. `OrchestratorAgent.run_stream(...)` interleaves graph progress with queue events.
-- **Result**:
-  - near real-time `llm_call` SSE updates during execution
-  - final response still includes full `llm_calls` history for auditability
+Behavior:
+
+- may run up to two judge passes
+- combines structural checks with LLM-based adequacy/conflict judgment
+- best-effort rather than fail-fast
+- if the judge is unavailable, the pipeline continues instead of aborting
+
+## `scenario_scoring`
+
+This call generates the baseline scenario set for the rest of the pipeline.
+
+Expected output type:
+
+- structured JSON
+- 3 to 5 scenarios
+- raw probability weights plus scenario descriptions and support
+
+Behavior:
+
+- post-processed in Python into typed `Scenario` objects
+- probabilities are normalized after generation
+- fail-fast on unusable output
+
+## `scenario_debate`
+
+This stage is not a single call but a small workflow. It first gathers competing scenario arguments, then asks a follow-up judge/arbitrator call to recalibrate probabilities.
+
+Expected output type:
+
+- structured JSON
+- calibrated scenario output
+- summary of adjustments and confidence
+
+Behavior:
+
+- multi-call pattern rather than single-shot generation
+- Python-side validation constrains how far probabilities can move
+- fallback-friendly: if debate output is unusable, the system falls back to baseline scenarios instead of failing the run
+
+## `report_finalize`
+
+This is the narrative-writing stage. It is the only active callsite that primarily expects markdown text rather than structured JSON.
+
+Expected output type:
+
+- markdown section text
+- readable final-report prose
+- suitable for section-by-section assembly into the export report
+
+Behavior:
+
+- section failures degrade locally rather than killing the full report
+- validation and quality checks happen mostly in Python after generation
+- hard-fails only on missing core evidence, not on ordinary text-generation failure
+
+## Shared client behavior
+
+Most callsites run through JSON mode:
+
+- `complete(...)` and `call_with_retry(...)`
+- provider-side JSON response enforcement where possible
+- client-side JSON parsing and validation
+
+Final report writing uses text mode:
+
+- `complete_text(...)`
+- no JSON enforcement
+
+Retry and failover behavior are shared across the client:
+
+- retryable transport / timeout / invalid-JSON failures can stay on the current model for retries
+- fatal failures can skip directly to the next model
+- the client only gives up after all configured models are exhausted
+
+## Failure-handling summary
+
+Fallback-friendly callsites:
+
+- `parse_intent`
+- `llm_judge`
+- `scenario_debate`
+- section-level narrative rendering inside `report_finalize`
+
+Fail-fast callsites:
+
+- `fundamental_analysis`
+- `macro_analysis`
+- `market_sentiment`
+- `scenario_scoring`
+
+## Streaming telemetry
+
+Every LLM call emits lifecycle events into `LLMCallCollector`:
+
+- `calling`
+- `success`
+- `retry`
+- `failed`
+
+`OrchestratorAgent.run_stream(...)` interleaves those events with graph execution updates, so the frontend can show near-real-time `llm_call` status while the workflow is still running.

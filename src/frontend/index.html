@@ -29,7 +29,7 @@ const AGENTS = [
   { id:'F', name:'Fundamental',  color:'var(--agent-F)' },
   { id:'X', name:'Macro',        color:'#8b5cf6' },
   { id:'M', name:'Sentiment',    color:'var(--agent-M)' },
-  { id:'G', name:'Retry Gate',   color:'#f59e0b' },
+  { id:'G', name:'LLM Judge',    color:'#f59e0b' },
   { id:'S', name:'Scenarios',    color:'var(--agent-S)' },
   { id:'D', name:'Debate',       color:'#06b6d4' },
   { id:'V', name:'Report',       color:'var(--agent-V)' },
@@ -41,7 +41,7 @@ const AGENT_ID_BY_NAME = {
   fundamental_analysis: 'F',
   macro_analysis: 'X',
   market_sentiment: 'M',
-  retry_gate: 'G',
+  llm_judge: 'G',
   scenario_scoring: 'S',
   scenario_debate: 'D',
   report_finalize: 'V',
@@ -694,6 +694,7 @@ function App() {
   const logRef = useRef(null);
   const streamResearchRef = useRef(null);
   const hydratedRef = useRef(false);
+  const warnedUnknownSectionsRef = useRef(new Set());
 
   const applyAgentStatuses = useCallback((statuses) => {
     if (!Array.isArray(statuses)) return;
@@ -858,6 +859,7 @@ function App() {
     setLogLines([]);
     setReportData(null);
     setLlmCalls([]);
+    warnedUnknownSectionsRef.current = new Set();
 
     try {
       await streamResearch(trimmed);
@@ -1079,7 +1081,12 @@ function App() {
                 if (src === 'scenario_debate')      return <DebateSection      key={section.id} debate={debateData}                         loading={isLoading} />;
                 if (src === 'evidence')             return <EvidenceSection    key={section.id} evidence={reportData?.evidence} />;
                 if (section.id === 'executive_summary') return <SummarySection key={section.id} validationBadge={validationBadge} narrativeContent={narrativeContent} intent={reportData?.intent} />;
-                return <MarkdownSection key={section.id} section={section} content={narrativeContent} />;
+                if (src === 'all' || src === 'custom') return <MarkdownSection key={section.id} section={section} content={narrativeContent} />;
+                if (!warnedUnknownSectionsRef.current.has(section.id)) {
+                  warnedUnknownSectionsRef.current.add(section.id);
+                  console.warn('Unknown report_plan section skipped', { id: section.id, source: src, title: section.title });
+                }
+                return null;
               })}
 
               {/* ── Custom sections — order and titles from planning, skeleton until content arrives ── */}

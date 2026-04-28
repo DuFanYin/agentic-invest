@@ -7,12 +7,13 @@ import logging
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
+from src.server.config import CACHE_DB_PATH
 from src.server.config import FRED_API_KEY
 from src.server.services.cache import Cache
 
 logger = logging.getLogger(__name__)
 
-_cache = Cache()
+_cache = Cache(db_path=CACHE_DB_PATH)
 _FRED_TTL = 6 * 3600   # 6 hours — economic indicators don't change intra-day
 _MARKET_TTL = 15 * 60  # 15 minutes — VIX/yields move throughout the day
 

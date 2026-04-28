@@ -10,11 +10,12 @@ from datetime import UTC, datetime
 from src.server.models.analysis import Conflict, MetricsBlock, NormalizedData
 from src.server.models.evidence import Evidence
 from src.server.models.state import ResearchState
+from src.server.config import CACHE_DB_PATH
 from src.server.services.cache import Cache
 from src.server.services.finance_data import FinanceDataClient
 from src.server.services.macro_data import MacroDataClient
 from src.server.services.web_research import WebResearchClient
-from src.server.utils.contract import NODE_CONTRACTS, assert_writes
+from src.server.utils.contract import NODE_CONTRACTS, assert_reads, assert_writes
 from src.server.utils.status import update_status
 
 _READS  = NODE_CONTRACTS["research"].reads
@@ -25,7 +26,7 @@ logger = logging.getLogger(__name__)
 _finance = FinanceDataClient()
 _macro = MacroDataClient()
 _web = WebResearchClient()
-_cache = Cache()
+_cache = Cache(db_path=CACHE_DB_PATH)
 
 _FINANCE_TTL = 3600       # 1 hour — financial data changes infrequently
 _WEB_TTL = 900            # 15 min — news is more time-sensitive
@@ -73,6 +74,7 @@ def _detect_conflicts(evidence: list[Evidence]) -> list[dict]:
 
 
 async def research_node(state: ResearchState) -> ResearchState:
+    assert_reads(state, _READS, "research")
 
     query = state["query"]
     intent = state.get("intent")
@@ -291,7 +293,7 @@ async def research_node(state: ResearchState) -> ResearchState:
     # ── Web search (Tavily) — runs for any query, ticker or not ───────────
     subject = intent.subjects[0] if intent and intent.subjects else query
     if retry_questions:
-        # retry_questions[0] is a targeted hint from retry_gate (structural or conflict-specific)
+        # retry_questions[0] is a targeted hint from llm_judge (structural or conflict-specific)
         web_query = f"{subject} {retry_questions[0]}"
     elif research_focus:
         # Use the first planning focus area to guide the search

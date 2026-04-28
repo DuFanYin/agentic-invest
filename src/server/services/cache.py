@@ -14,9 +14,11 @@ import threading
 import time
 from pathlib import Path
 
+from src.server.config import CACHE_DB_PATH
+
 
 class Cache:
-    def __init__(self, db_path: str = "cache.db", default_ttl: int = 3600) -> None:
+    def __init__(self, db_path: str = CACHE_DB_PATH, default_ttl: int = 3600) -> None:
         self._db_path = db_path
         self._default_ttl = default_ttl
         self._lock = threading.Lock()

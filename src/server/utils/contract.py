@@ -112,12 +112,14 @@ NODE_CONTRACTS: dict[str, NodeContract] = {
         writes=frozenset({"macro_analysis"}),
     ),
     "market_sentiment": NodeContract(
-        reads=frozenset({"evidence", "normalized_data"}),
+        reads=frozenset({"evidence", "normalized_data", "intent"}),
         writes=frozenset({"market_sentiment"}),
     ),
-    "retry_gate": NodeContract(
+    "llm_judge": NodeContract(
         reads=frozenset({
-            "intent", "normalized_data", "research_iteration",
+            "intent", "normalized_data", "evidence", "plan_context",
+            "fundamental_analysis", "macro_analysis", "market_sentiment",
+            "research_iteration", "retry_questions",
         }),
         writes=frozenset({"retry_questions", "retry_reason"}),
     ),
@@ -140,6 +142,7 @@ NODE_CONTRACTS: dict[str, NodeContract] = {
             "intent", "evidence",
             "fundamental_analysis", "macro_analysis", "market_sentiment",
             "scenarios", "scenario_debate", "plan_context",
+            "research_iteration",
         }),
         writes=frozenset({
             "narrative_sections", "report_markdown", "report_json",

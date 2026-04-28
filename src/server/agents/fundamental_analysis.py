@@ -8,7 +8,7 @@ import logging
 from src.server.models.analysis import FundamentalAnalysis
 from src.server.models.state import ResearchState
 from src.server.services.openrouter import OpenRouterClient
-from src.server.utils.contract import NODE_CONTRACTS, assert_writes
+from src.server.utils.contract import NODE_CONTRACTS, assert_reads, assert_writes
 from src.server.utils.status import update_status
 
 _READS  = NODE_CONTRACTS["fundamental_analysis"].reads
@@ -105,6 +105,7 @@ MISSING DATA: {', '.join(missing_fields) if missing_fields else 'none reported'}
 async def fundamental_analysis_node(
     state: ResearchState, *, llm: OpenRouterClient = _default_llm
 ) -> ResearchState:
+    assert_reads(state, _READS, _NODE)
 
     evidence = state.get("evidence") or []
     normalized_data = state.get("normalized_data")
@@ -157,7 +158,7 @@ async def fundamental_analysis_node(
             details=[f"claims={len(result.claims)}"],
         )
         statuses = update_status(
-            statuses, "retry_gate",
+            statuses, "llm_judge",
             lifecycle="active", phase="evaluating_gaps", action="checking for gaps",
         )
 
