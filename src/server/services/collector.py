@@ -41,3 +41,11 @@ class LLMCallCollector:
         """Return all calls (for final response assembly)."""
         with self._lock:
             return list(self._calls)
+
+    def totals(self) -> tuple[float, int, int]:
+        """Return (total_cost_usd, total_prompt_tokens, total_completion_tokens)."""
+        with self._lock:
+            cost = sum(c.cost_usd or 0.0 for c in self._calls)
+            prompt = sum(c.prompt_tokens or 0 for c in self._calls)
+            completion = sum(c.completion_tokens or 0 for c in self._calls)
+            return round(cost, 6), prompt, completion

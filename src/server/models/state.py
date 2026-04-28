@@ -26,6 +26,7 @@ from src.server.models.analysis import (
     MarketSentiment,
     NormalizedData,
     QualityMetrics,
+    ReportPlan,
     ScenarioDebate,
 )
 from src.server.models.evidence import Evidence
@@ -105,6 +106,7 @@ class ResearchState(TypedDict, total=False):
     research_focus: list[str]       # key areas the research should cover
     must_have_metrics: list[str]    # metrics that must be present in evidence
     plan_notes: list[str]           # specific questions/flags for downstream agents
+    report_plan: ReportPlan | None  # customised report structure from planning agent
 
     # ── Research agent ─────────────────────────────────────────────────────
     evidence: Annotated[list[Evidence], operator.add]   # append across passes
@@ -127,7 +129,8 @@ class ResearchState(TypedDict, total=False):
     scenario_debate: ScenarioDebate
 
     # ── Report & validation ────────────────────────────────────────────────
-    report_markdown: str
+    narrative_sections: dict[str, str]   # section_id → LLM-written markdown
+    report_markdown: str                 # full export document
     report_json: dict[str, Any]
     validation_result: ValidationResult
     quality_metrics: QualityMetrics

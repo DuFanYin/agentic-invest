@@ -127,6 +127,16 @@ class MacroAnalysis(BaseModel):
 
 # ── ScenarioDebate ─────────────────────────────────────────────────────────
 
+class ScenarioAdvocacy(BaseModel):
+    """Output from one scenario advocate in round 1."""
+    scenario_name: str
+    advocacy_thesis: str
+    probability_claim: float = Field(..., ge=0, le=1)
+    supporting_arguments: list[str] = Field(default_factory=list)
+    evidence_refs: list[str] = Field(default_factory=list)
+    contested_scenarios: list[str] = Field(default_factory=list)
+
+
 class ProbabilityAdjustment(BaseModel):
     scenario_name: str
     before: float = Field(..., ge=0, le=1)
@@ -138,10 +148,25 @@ class ProbabilityAdjustment(BaseModel):
 
 class ScenarioDebate(BaseModel):
     debate_summary: str
+    advocacy_summaries: list[dict[str, Any]] = Field(default_factory=list)
     probability_adjustments: list[ProbabilityAdjustment] = Field(default_factory=list)
     calibrated_scenarios: list[Any] = Field(default_factory=list)  # list[Scenario] — avoids circular import
     confidence: Literal["high", "medium", "low"] = "medium"
     debate_flags: list[str] = Field(default_factory=list)
+
+
+# ── ReportPlan ────────────────────────────────────────────────────────────
+
+class ReportSection(BaseModel):
+    id: str
+    title: str
+    source: str  # which intermediate result fills this section
+    required: bool = True
+
+
+class ReportPlan(BaseModel):
+    report_type: str  # e.g. "valuation", "comparison", "risk_review", "scenario", "general"
+    sections: list[ReportSection]
 
 
 # ── QualityMetrics ─────────────────────────────────────────────────────────

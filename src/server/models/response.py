@@ -74,6 +74,9 @@ class LLMCall(BaseModel):
     started_at: str | None = None
     finished_at: str | None = None
     error: str | None = None
+    prompt_tokens: int | None = None
+    completion_tokens: int | None = None
+    cost_usd: float | None = None
 
 
 class ResearchResponse(BaseModel):
@@ -89,3 +92,7 @@ class ResearchResponse(BaseModel):
     agent_statuses: list[AgentStatus] = Field(default_factory=list)
     validation_result: ValidationResult = Field(default_factory=ValidationResult)
     llm_calls: list[LLMCall] = Field(default_factory=list)
+    total_cost_usd: float = 0.0
+    total_prompt_tokens: int = 0
+    total_completion_tokens: int = 0
+    narrative_sections: dict[str, str] = Field(default_factory=dict)

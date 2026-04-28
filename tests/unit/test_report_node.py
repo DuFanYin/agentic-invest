@@ -152,11 +152,17 @@ def test_missing_fields_produce_warnings():
     assert result["retry_questions"] == []
 
 
-# ── raises on LLM failure (no stub fallback) ──────────────────────────────
+# ── LLM failure produces placeholder sections, not a crash ───────────────
 
-def test_raises_when_llm_raises():
-    with pytest.raises(RuntimeError, match="report_finalize"):
-        _run(report_finalize_node(_state(), llm=_mock_llm(raises=RuntimeError("all models failed"))))
+def test_llm_failure_still_returns_report():
+    # Section-by-section rendering: LLM failures degrade to placeholder text
+    result = _run(report_finalize_node(_state(), llm=_mock_llm(raises=RuntimeError("all models failed"))))
+    md = result["report_markdown"]
+    assert isinstance(md, str) and len(md) > 50
+    # Scenarios section is Python-rendered — always present when scenarios exist
+    assert "Future Scenarios" in md
+    # Narrative sections degrade to placeholder text
+    assert "*Section unavailable.*" in md
 
 
 def test_raises_when_no_evidence():

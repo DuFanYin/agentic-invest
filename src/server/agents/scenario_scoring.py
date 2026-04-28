@@ -184,11 +184,10 @@ async def scenario_scoring_node(
     research_focus: list[str] = state.get("research_focus") or []
     plan_notes: list[str] = state.get("plan_notes") or []
     statuses = list(state.get("agent_statuses") or [])
-    if statuses:
-        statuses = update_status(
-            statuses, "scenario_scoring",
-            lifecycle="active", phase="scoring_scenarios", action="building scenarios",
-        )
+    statuses = update_status(
+        statuses, "scenario_scoring",
+        lifecycle="active", phase="scoring_scenarios", action="building scenarios",
+    )
 
     evidence_ids = [ev.id for ev in evidence]
     scenarios: list[Scenario] | None = None
@@ -223,19 +222,18 @@ async def scenario_scoring_node(
 
     prob_sum = round(sum(s.probability for s in scenarios), 6)
 
-    if statuses:
-        statuses = update_status(
-            statuses, "scenario_scoring",
-            lifecycle="standby", phase="scoring_scenarios", action="scenarios ready",
-            details=[
-                f"scenarios={len(scenarios)}",
-                f"prob_sum={prob_sum}",
-                f"llm={'yes' if llm_used else 'no'}",
-            ],
-        )
-        statuses = update_status(
-            statuses, "report_finalize",
-            lifecycle="active", phase="generating_report", action="generating report",
-        )
+    statuses = update_status(
+        statuses, "scenario_scoring",
+        lifecycle="standby", phase="scoring_scenarios", action="scenarios ready",
+        details=[
+            f"scenarios={len(scenarios)}",
+            f"prob_sum={prob_sum}",
+            f"llm={'yes' if llm_used else 'no'}",
+        ],
+    )
+    statuses = update_status(
+        statuses, "scenario_debate",
+        lifecycle="active", phase="debating_scenarios", action="starting debate",
+    )
 
     return {"scenarios": scenarios, "agent_statuses": statuses}

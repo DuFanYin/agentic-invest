@@ -42,6 +42,7 @@ from src.server.models.response import LLMCall, ResearchResponse, ValidationResu
 from src.server.models.state import ResearchState
 from src.server.services.collector import LLMCallCollector
 from src.server.services.openrouter import OpenRouterClient
+from src.server.services.section_queue import SectionQueue
 
 
 def _report_router(state: ResearchState) -> str:
@@ -54,8 +55,9 @@ def _report_router(state: ResearchState) -> str:
 
 # ── graph builder ──────────────────────────────────────────────────────────
 
-def build_graph(llm_client: OpenRouterClient | None = None) -> StateGraph:
+def build_graph(llm_client: OpenRouterClient | None = None, sq: SectionQueue | None = None) -> StateGraph:
     llm_client = llm_client or OpenRouterClient()
+    sq = sq  # captured by _report_node closure
 
     builder = StateGraph(ResearchState)
 
@@ -75,7 +77,7 @@ def build_graph(llm_client: OpenRouterClient | None = None) -> StateGraph:
         return await scenario_debate_node(state, llm=llm_client)
 
     async def _report_node(state: ResearchState) -> ResearchState:
-        return await report_finalize_node(state, llm=llm_client)
+        return await report_finalize_node(state, llm=llm_client, section_queue=sq)
 
     builder.add_node("parse_intent", make_planning_node(llm_client))
     builder.add_node("research", research_node)
@@ -132,15 +134,18 @@ class OrchestratorAgent:
 
     async def run(self, request: ResearchRequest) -> ResearchResponse:
         collector = LLMCallCollector()
+        sq = SectionQueue()
         client = self._client_for_request(collector)
-        graph = build_graph(client)
+        graph = build_graph(client, sq=sq)
         final_state = await graph.ainvoke({"query": request.query})
-        return _state_to_response(final_state, llm_calls=collector.all())
+        cost, prompt_tok, completion_tok = collector.totals()
+        return _state_to_response(final_state, llm_calls=collector.all(), total_cost_usd=cost, total_prompt_tokens=prompt_tok, total_completion_tokens=completion_tok)
 
     async def run_stream(self, request: ResearchRequest) -> AsyncGenerator[dict, None]:
         collector = LLMCallCollector()
+        sq = SectionQueue()
         client = self._client_for_request(collector)
-        graph = build_graph(client)
+        graph = build_graph(client, sq=sq)
         final_state: ResearchState = {}
         stream_iter = graph.astream(
             {"query": request.query},
@@ -148,11 +153,12 @@ class OrchestratorAgent:
         ).__aiter__()
         step_task: asyncio.Task | None = asyncio.create_task(anext(stream_iter))
         call_task: asyncio.Task | None = asyncio.create_task(collector.wait_next())
+        section_task: asyncio.Task | None = asyncio.create_task(sq._q.get())
         graph_done = False
 
         try:
             while True:
-                wait_tasks = [t for t in (step_task, call_task) if t is not None]
+                wait_tasks = [t for t in (step_task, call_task, section_task) if t is not None]
                 if not wait_tasks:
                     break
 
@@ -162,6 +168,14 @@ class OrchestratorAgent:
                     item = call_task.result()
                     yield {"type": "llm_call", "payload": item.model_dump()}
                     call_task = asyncio.create_task(collector.wait_next())
+
+                if section_task is not None and section_task in done:
+                    item = section_task.result()
+                    if item is not sq._SENTINEL:
+                        yield {"type": "section_ready", "payload": item}
+                        section_task = asyncio.create_task(sq._q.get())
+                    else:
+                        section_task = None  # queue exhausted
 
                 if step_task is not None and step_task in done:
                     try:
@@ -182,7 +196,7 @@ class OrchestratorAgent:
                             final_state = payload
                         step_task = asyncio.create_task(anext(stream_iter))
 
-                if graph_done and collector.pending_count() == 0:
+                if graph_done and collector.pending_count() == 0 and section_task is None:
                     if call_task is not None:
                         call_task.cancel()
                         try:
@@ -192,10 +206,10 @@ class OrchestratorAgent:
                         call_task = None
                     break
         finally:
-            for task in (step_task, call_task):
+            for task in (step_task, call_task, section_task):
                 if task is not None and not task.done():
                     task.cancel()
-            for task in (step_task, call_task):
+            for task in (step_task, call_task, section_task):
                 if task is not None:
                     try:
                         await task
@@ -203,13 +217,14 @@ class OrchestratorAgent:
                         pass
 
         all_llm_calls = collector.all()
-        response = _state_to_response(final_state, llm_calls=all_llm_calls)
+        cost, prompt_tok, completion_tok = collector.totals()
+        response = _state_to_response(final_state, llm_calls=all_llm_calls, total_cost_usd=cost, total_prompt_tokens=prompt_tok, total_completion_tokens=completion_tok)
         yield {"type": "final", "payload": response}
 
 
 # ── helpers ────────────────────────────────────────────────────────────────
 
-def _state_to_response(state: ResearchState, *, llm_calls: list[LLMCall] | None = None) -> ResearchResponse:
+def _state_to_response(state: ResearchState, *, llm_calls: list[LLMCall] | None = None, total_cost_usd: float = 0.0, total_prompt_tokens: int = 0, total_completion_tokens: int = 0) -> ResearchResponse:
     from src.server.models.analysis import (
         FundamentalAnalysis,
         MacroAnalysis,
@@ -233,4 +248,8 @@ def _state_to_response(state: ResearchState, *, llm_calls: list[LLMCall] | None 
         agent_statuses=state.get("agent_statuses") or [],
         validation_result=state.get("validation_result") or ValidationResult(),
         llm_calls=llm_calls or [],
+        total_cost_usd=total_cost_usd,
+        total_prompt_tokens=total_prompt_tokens,
+        total_completion_tokens=total_completion_tokens,
+        narrative_sections=state.get("narrative_sections") or {},
     )

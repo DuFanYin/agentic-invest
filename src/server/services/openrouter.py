@@ -53,6 +53,26 @@ _OPENAI_MODELS = [
     "gpt-4.1",
 ]
 
+# Cost per 1M tokens (input, output) in USD — OpenAI public pricing
+_OPENAI_PRICING: dict[str, tuple[float, float]] = {
+    "gpt-4.1":            (2.00,  8.00),
+    "gpt-4.1-mini":       (0.40,  1.60),
+    "gpt-4.1-nano":       (0.10,  0.40),
+    "gpt-4o":             (2.50, 10.00),
+    "gpt-4o-mini":        (0.15,  0.60),
+    "o3":                 (10.0,  40.0),
+    "o4-mini":            (1.10,   4.40),
+}
+
+def _compute_cost(model: str, prompt_tokens: int, completion_tokens: int) -> float | None:
+    for key, (input_cost, output_cost) in _OPENAI_PRICING.items():
+        if model.startswith(key):
+            return round(
+                (prompt_tokens * input_cost + completion_tokens * output_cost) / 1_000_000,
+                8,
+            )
+    return None
+
 _RETRYABLE_CODES = {429, 500, 502, 503, 504}
 
 
@@ -166,8 +186,15 @@ class OpenRouterClient:
                 ))
 
                 try:
-                    content = await self._call(model_id, prompt, system=system, json_mode=json_mode)
+                    content, usage = await self._call(model_id, prompt, system=system, json_mode=json_mode)
                     finished_at = datetime.now(UTC).isoformat()
+                    prompt_tokens = usage.get("prompt_tokens") if usage else None
+                    completion_tokens = usage.get("completion_tokens") if usage else None
+                    cost_usd = (
+                        _compute_cost(model_id, prompt_tokens or 0, completion_tokens or 0)
+                        if (prompt_tokens is not None or completion_tokens is not None)
+                        else None
+                    )
                     self._emit(LLMCall(
                         id=call_id, node=node,
                         agent_tag=AGENT_TAG_BY_NODE.get(node, "?"),
@@ -175,6 +202,9 @@ class OpenRouterClient:
                         status="success",
                         latency_ms=_latency_ms(started_at, finished_at),
                         started_at=started_at, finished_at=finished_at,
+                        prompt_tokens=prompt_tokens,
+                        completion_tokens=completion_tokens,
+                        cost_usd=cost_usd,
                     ))
                     return content
 
@@ -242,7 +272,7 @@ class OpenRouterClient:
 
         raise RuntimeError(f"All models exhausted. Last error: {last_error}") from last_error
 
-    async def _call(self, model_id: str, prompt: str, *, system: str | None, json_mode: bool) -> str:
+    async def _call(self, model_id: str, prompt: str, *, system: str | None, json_mode: bool) -> tuple[str, dict | None]:
         default_system = (
             "Return only valid JSON. Do not include markdown, comments, or extra text."
             if json_mode else None
@@ -308,7 +338,8 @@ class OpenRouterClient:
             except json.JSONDecodeError as exc:
                 raise _RetryableError(f"invalid JSON from model: {content[:120]}") from exc
 
-        return content
+        usage: dict | None = data.get("usage") if isinstance(data, dict) else None
+        return content, usage
 
 
 # ── helpers ────────────────────────────────────────────────────────────────
