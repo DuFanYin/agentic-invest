@@ -42,13 +42,14 @@ This document defines the peripheral specification for the investment research s
 - `POST /research`
   - request: `{ "query": "..." }`
   - note: only `query` is accepted by the API request model; planning derives fields such as ticker/time_horizon/risk_level into `intent`
-  - response: typed `ResearchResponse` JSON with fields `report_markdown`, `report_json`, `intent`, `evidence`, `fundamental_analysis`, `macro_analysis`, `market_sentiment`, `scenarios`, `scenario_debate`, `agent_statuses`, `validation_result`, `llm_calls`
+  - response: typed `ResearchResponse` JSON with fields `report_markdown`, `report_json`, `intent`, `evidence`, `fundamental_analysis`, `macro_analysis`, `market_sentiment`, `scenarios`, `scenario_debate`, `agent_statuses`, `validation_result`, `llm_calls`, `narrative_sections`
 - `POST /research/stream`
   - request: `{ "query": "..." }`
   - response: `text/event-stream`
   - events:
     - `agent_status`: full agent-status list snapshots (`agent`, `lifecycle`, `phase`, `action`, `details`, timestamps, wait/progress/retry/error fields)
     - `llm_call`: real-time LLM call telemetry (`calling/success/retry/failed`)
+    - `section_ready`: progressive section payload (`id`, `content`, `source`, `title`)
     - `final`: final full report object (same shape as `POST /research`)
     - `error`: terminal error payload when stream execution fails
     - `done`: stream completion marker
@@ -88,7 +89,7 @@ This document defines the peripheral specification for the investment research s
 
 ### Integration Tests
 - Use mocked API responses to verify end-to-end flow
-- Verify SSE contract (`agent_status`, `final`, `error`, `done`) and `/research` response contract
+- Verify SSE contract (`agent_status`, `llm_call`, `section_ready`, `final`, `error`, `done`) and `/research` response contract
 - Verify multi-scenario output shape (at least 3 scenarios + probability sum equals 1 in mocked flow)
 
 ### Regression Tests

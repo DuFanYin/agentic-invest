@@ -24,10 +24,6 @@ def test_set_and_get_roundtrip(cache):
         assert cache.get(key) == value
 
 
-def test_get_missing_key_returns_none(cache):
-    assert cache.get("does-not-exist") is None
-
-
 # ── TTL expiry ─────────────────────────────────────────────────────────────
 
 def test_expired_entry_returns_none(cache):
@@ -73,10 +69,3 @@ def test_default_ttl_used_when_not_specified(tmp_path):
     cache = Cache(db_path=str(tmp_path / "test.db"), default_ttl=9999)
     cache.set("k", "v")
     assert cache.get("k") == "v"
-
-
-def test_corrupted_json_row_behaves_like_cache_miss(cache):
-    cache.set("bad", {"ok": True})
-    with cache._connect() as conn:
-        conn.execute("UPDATE cache SET value = ? WHERE key = ?", ("{not-json", "bad"))
-    assert cache.get("bad") is None

@@ -291,6 +291,7 @@ async def research_node(state: ResearchState) -> ResearchState:
     # ── Web search (Tavily) — runs for any query, ticker or not ───────────
     subject = intent.subjects[0] if intent and intent.subjects else query
     if retry_questions:
+        # retry_questions[0] is a targeted hint from retry_gate (structural or conflict-specific)
         web_query = f"{subject} {retry_questions[0]}"
     elif research_focus:
         # Use the first planning focus area to guide the search
@@ -363,10 +364,6 @@ async def research_node(state: ResearchState) -> ResearchState:
     )
 
     if statuses:
-        statuses = update_status(
-            statuses, "research",
-            lifecycle="active", phase="collecting_evidence", action="collecting evidence",
-        )
         statuses = update_status(
             statuses, "research",
             lifecycle="standby", phase="collecting_evidence", action="evidence collected",

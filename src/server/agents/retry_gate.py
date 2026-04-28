@@ -1,14 +1,16 @@
-"""Retry gate agent.
+"""Retry gate — deterministic routing based on structural gaps and evidence conflicts.
 
-Boundary:
-- This agent decides retries only from evidence adequacy signals
-  (structural gaps, analysis follow-up questions, conflict signals).
-- It does NOT evaluate report delivery quality.
+Retries only when there is a concrete reason to believe new evidence can be obtained:
+  - structural: intent lacks ticker (company scope cannot proceed without it)
+  - evidence_conflict: normalized_data.conflicts present (supplementary search may resolve)
+
+LLM missing_fields (analysis wishlist) no longer trigger retries — they are recorded
+in the report as data limitations, not routed back to research.
 """
 
 from __future__ import annotations
 
-from src.server.models.state import ResearchState, _RESET
+from src.server.models.state import ResearchState
 from src.server.utils.contract import NODE_CONTRACTS, assert_writes
 from src.server.utils.status import update_status
 
@@ -25,32 +27,26 @@ def retry_gate_node(state: ResearchState) -> ResearchState:
     current_iteration = state.get("research_iteration", 1)
     statuses = list(state.get("agent_statuses") or [])
 
-    # Structural checks
-    new_questions: list[str] = []
-    scope = (intent.scope if intent else "").lower()
-    if intent and scope == "company" and not intent.ticker:
-        new_questions.append("Need clearer company/ticker mapping from query context")
-    if intent and scope == "company" and not intent.time_horizon:
-        new_questions.append("Need explicit investment horizon to refine scenario assumptions")
+    retry_question: str | None = None
+    retry_reason: str = "none"
 
-    # Agent-sourced questions from parallel analysis nodes
-    agent_questions: list[str] = list(state.get("agent_questions") or [])
-    new_questions.extend(agent_questions)
+    if current_iteration < MAX_RESEARCH_ITERATIONS:
+        scope = (intent.scope if intent else "").lower()
 
-    # Conflict signals from research
-    conflicts = normalized_data.conflicts if normalized_data else []
-    if conflicts:
-        new_questions.append(
-            f"Conflicting evidence detected across {len(conflicts)} topic(s): "
-            + ", ".join(getattr(c, "topic", str(c)) for c in conflicts)
-            + ". Supplementary research may resolve these."
-        )
+        # Structural gap: company scope without ticker — research cannot proceed correctly
+        if intent and scope == "company" and not intent.ticker:
+            retry_question = "Need clearer company/ticker mapping from query context"
+            retry_reason = "structural"
 
-    # Cap retries
-    if current_iteration >= MAX_RESEARCH_ITERATIONS:
-        new_questions = []
+        # Evidence conflict: contradictory signals across sources
+        elif normalized_data and normalized_data.conflicts:
+            topics = ", ".join(
+                getattr(c, "topic", str(c)) for c in normalized_data.conflicts
+            )
+            retry_question = f"Conflicting evidence on: {topics} — search for authoritative source"
+            retry_reason = "evidence_conflict"
 
-    will_retry = bool(new_questions)
+    will_retry = retry_question is not None
 
     if statuses:
         statuses = update_status(
@@ -58,11 +54,7 @@ def retry_gate_node(state: ResearchState) -> ResearchState:
             lifecycle="waiting" if will_retry else "standby",
             phase="gap_retry_required" if will_retry else "gap_resolved",
             action="retrying research" if will_retry else "gaps resolved",
-            details=[
-                f"retry_questions={len(new_questions)}",
-                f"agent_sourced={len(agent_questions)}",
-                f"conflicts={len(conflicts)}",
-            ],
+            details=[f"reason={retry_reason}"],
         )
         if will_retry:
             statuses = update_status(
@@ -76,8 +68,8 @@ def retry_gate_node(state: ResearchState) -> ResearchState:
             )
 
     delta = {
-        "retry_questions": new_questions,
-        "agent_questions": [_RESET],  # sentinel: reducer clears list for next cycle
+        "retry_questions": [retry_question] if will_retry else [],
+        "retry_reason": retry_reason,
         "agent_statuses": statuses,
     }
     assert_writes(delta, _WRITES, "retry_gate")

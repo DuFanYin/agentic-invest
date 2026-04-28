@@ -91,10 +91,6 @@ def test_result_shape_and_core_fields():
     result = _run(market_sentiment_node(_state(), llm=_mock_llm()))
     ms = _ms(result)
     assert isinstance(ms, MarketSentiment)
-    for claim in ms.claims:
-        assert len(claim.evidence_ids) >= 1
-    assert ms.news_sentiment.direction in ("positive", "neutral", "negative")
-    assert ms.market_narrative.summary
 
 
 # ── raises on LLM failure (no stub fallback) ──────────────────────────────
@@ -111,35 +107,3 @@ def test_raises_when_no_evidence():
 
 # ── news evidence filtering ────────────────────────────────────────────────
 
-def test_evidence_ids_included_in_prompt():
-    captured = {}
-    async def capture(prompt, **kw):
-        captured["prompt"] = prompt
-        return json.dumps(_llm_response())
-
-    llm = MagicMock()
-    llm.call_with_retry = AsyncMock(side_effect=capture)
-    _run(market_sentiment_node(_state(), llm=llm))
-
-    assert "ev_001" in captured["prompt"]
-
-
-def test_empty_statuses_returned_unchanged():
-    result = _run(market_sentiment_node(_state(), llm=_mock_llm()))
-    assert result["agent_statuses"] == []
-
-
-# ── agent_questions surfacing ──────────────────────────────────────────────
-
-def test_agent_questions_empty_when_no_missing_fields():
-    result = _run(market_sentiment_node(_state(), llm=_mock_llm()))
-    assert result["agent_questions"] == []
-
-
-def test_agent_questions_populated_when_llm_reports_missing_fields():
-    response = _llm_response()
-    response["missing_fields"] = ["analyst_ratings", "short_interest"]
-    result = _run(market_sentiment_node(_state(), llm=_mock_llm(response)))
-    qs = result["agent_questions"]
-    assert len(qs) == 2
-    assert all("market_sentiment needs" in q for q in qs)

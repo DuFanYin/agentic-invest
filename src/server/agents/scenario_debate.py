@@ -324,12 +324,6 @@ async def scenario_debate_node(
     sentiment = state.get("market_sentiment")
     statuses = list(state.get("agent_statuses") or [])
 
-    statuses = update_status(
-        statuses, "scenario_debate",
-        lifecycle="active", phase="debating_scenarios",
-        action="starting debate",
-    )
-
     if not scenarios:
         debate = _fallback_debate([])
     else:

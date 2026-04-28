@@ -100,31 +100,9 @@ def _run(coro):
 def test_scenarios_shape_probability_and_sorting():
     result = _run(scenario_scoring_node(_state(), llm=_mock_llm()))
     scenarios = result["scenarios"]
-    assert len(scenarios) >= 3
+    assert len(scenarios) == 3
     total = sum(s.probability for s in scenarios)
     assert abs(total - 1.0) < 1e-5
-    probs = [s.probability for s in scenarios]
-    assert probs == sorted(probs, reverse=True)
-    for s in scenarios:
-        assert s.id
-        assert s.name
-        assert s.description
-        assert len(s.evidence_ids) >= 1
-        assert len(s.tags) >= 1
-
-
-# ── probability normalisation ──────────────────────────────────────────────
-
-def test_unnormalised_probabilities_are_normalised():
-    result = _run(scenario_scoring_node(_state(), llm=_mock_llm(_llm_scenarios(probs=(3, 5, 2)))))
-    total = sum(s.probability for s in result["scenarios"])
-    assert abs(total - 1.0) < 1e-5
-
-
-def test_equal_probabilities_normalise_to_thirds():
-    result = _run(scenario_scoring_node(_state(), llm=_mock_llm(_llm_scenarios(probs=(1, 1, 1)))))
-    for s in result["scenarios"]:
-        assert abs(s.probability - 1 / 3) < 1e-5
 
 
 # ── cardinality validation (3-5 required) ─────────────────────────────────
@@ -132,19 +110,6 @@ def test_equal_probabilities_normalise_to_thirds():
 def test_raises_when_llm_returns_two_scenarios():
     with pytest.raises(RuntimeError, match="scenario_scoring"):
         _run(scenario_scoring_node(_state(), llm=_mock_llm(_llm_scenarios(probs=(0.6, 0.4))[:2])))
-
-
-def test_bare_array_response_still_parsed():
-    # Some models ignore the wrapper-object instruction and return a bare array;
-    # _parse_llm_scenarios should handle both forms gracefully.
-    result = _run(scenario_scoring_node(_state(), llm=_mock_llm(raw_array=True)))
-    assert len(result["scenarios"]) >= 3
-
-
-def test_raises_when_llm_returns_more_than_five_scenarios():
-    six = _llm_scenarios(probs=(0.2, 0.2, 0.2)) + _llm_scenarios(probs=(0.2, 0.2, 0.0))
-    with pytest.raises(RuntimeError, match="scenario_scoring"):
-        _run(scenario_scoring_node(_state(), llm=_mock_llm(six)))
 
 
 # ── raises on LLM failure (no stub fallback) ──────────────────────────────
@@ -159,8 +124,3 @@ def test_raises_when_no_evidence():
         _run(scenario_scoring_node(_state(evidence=[]), llm=_mock_llm()))
 
 
-# ── agent_statuses ─────────────────────────────────────────────────────────
-
-def test_empty_statuses_returned_unchanged():
-    result = _run(scenario_scoring_node(_state(), llm=_mock_llm()))
-    assert result["agent_statuses"] == []

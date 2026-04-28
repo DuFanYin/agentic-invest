@@ -11,7 +11,7 @@ This document lists all active LLM callpoints in `src/server/agents/*`, the expe
 | `macro_analysis` | `src/server/agents/macro_analysis.py` | `llm.call_with_retry(...)` | JSON object (`MacroAnalysis`) |
 | `market_sentiment` | `src/server/agents/market_sentiment.py` | `llm.call_with_retry(...)` | JSON object (`MarketSentiment`) |
 | `scenario_scoring` | `src/server/agents/scenario_scoring.py` | `llm.call_with_retry(...)` | JSON object (`{"scenarios":[...]}` preferred) |
-| `scenario_debate` | `src/server/agents/scenario_debate.py` | `llm.call_with_retry(...)` | JSON object (`ScenarioDebate`-like payload) |
+| `scenario_debate` | `src/server/agents/scenario_debate.py` | `llm.call_with_retry(...)` (N advocate calls + 1 arbitrator call) | JSON object (`ScenarioDebate`-like payload) |
 | `report_finalize` | `src/server/agents/report_finalize.py` | `llm.complete_text(...)` | Markdown report text |
 
 ---
@@ -70,7 +70,6 @@ This document lists all active LLM callpoints in `src/server/agents/*`, the expe
   - `rate_environment`, `growth_environment`
   - `macro_drivers[]`
   - `macro_risks[]`
-  - `macro_signals[]`
   - `missing_fields[]`
 - **Post-processing / validation**:
   1. Parse JSON.
@@ -108,9 +107,8 @@ This document lists all active LLM callpoints in `src/server/agents/*`, the expe
   - each scenario includes:
     - `name`, `description`
     - `raw_probability`
-    - `drivers[]`, `triggers[]`, `signals[]`
+    - `drivers[]`, `triggers[]`
     - `evidence_ids[]`
-    - optional `time_horizon`
     - `tags[]` (parser defaults to `["neutral"]` when missing/empty; prompt asks for magnitude tag)
 - **Post-processing / validation**:
   1. Parse JSON and unwrap `data["scenarios"]` if present.
@@ -124,7 +122,9 @@ This document lists all active LLM callpoints in `src/server/agents/*`, the expe
 ## 6) `scenario_debate`
 
 - **Location**: `src/server/agents/scenario_debate.py` (`scenario_debate_node`)
-- **Call**: `llm.call_with_retry(prompt, system=_SYSTEM, node="scenario_debate")`
+- **Call pattern**:
+  1. Round-1 advocates: one `llm.call_with_retry(..., system=_SYSTEM_ADVOCATE, node="scenario_debate")` per scenario (concurrent).
+  2. Round-2 arbitrator: one `llm.call_with_retry(..., system=_SYSTEM_ARBITRATOR, node="scenario_debate")`.
 - **Expected format**: JSON object
 - **Expected content**:
   - `debate_summary`
@@ -145,22 +145,21 @@ This document lists all active LLM callpoints in `src/server/agents/*`, the expe
 ## 7) `report_finalize`
 
 - **Location**: `src/server/agents/report_finalize.py` (`report_finalize_node`)
-- **Call**: `llm.complete_text(prompt, system=_SYSTEM, node="report_finalize")`
+- **Call**: `llm.complete_text(prompt, system=_SYSTEM, node="report_finalize")` (invoked per narrative section)
 - **Expected format**: Markdown text (non-JSON)
 - **Expected content**:
-  - fixed section sequence (Executive Summary -> Disclaimer)
+  - section-level narrative markdown (non-JSON), one section per call
   - evidence ID citations where relevant
-  - scenario debate calibration summary section
-  - required disclaimer text: `Not financial advice.`
+  - report export includes disclaimer text: `Not financial advice.`
 - **Post-processing / validation**:
-  1. Accept non-empty content with minimal length check (`> 100` chars).
+  1. Accept non-empty content with minimal length check (`> 50` chars).
   2. Always run Python validations:
      - scenario probability checks
      - evidence completeness
      - claim coverage
   3. Append `## Validation Errors` / `## Validation Warnings` to report markdown when present.
   4. Compute `quality_metrics` (citation coverage, probability validity, debate_applied, unresolved issues, confidence).
-  5. If report generation fails, raise `RuntimeError("[report_finalize] ...")`.
+  5. Narrative section failures degrade to `*Section unavailable.*`; node hard-fails only on missing evidence.
 
 ---
 
@@ -186,11 +185,11 @@ Retry / failover semantics:
 
 ## Failure-Handling Notes
 
-- `parse_intent` and `scenario_debate` are fallback-friendly:
+- `parse_intent`, `scenario_debate`, and report narrative rendering are fallback-friendly:
   - `parse_intent`: returns default intent/planning on failure
   - `scenario_debate`: returns baseline probabilities with `fallback_to_baseline` flag
-- analysis/scoring/report nodes are fail-fast:
-  - `fundamental_analysis`, `macro_analysis`, `market_sentiment`, `scenario_scoring`, `report_finalize` raise `RuntimeError` if LLM output is unusable
+- analysis/scoring nodes are fail-fast:
+  - `fundamental_analysis`, `macro_analysis`, `market_sentiment`, `scenario_scoring` raise `RuntimeError` if LLM output is unusable
 
 ---
 

@@ -116,10 +116,6 @@ async def macro_analysis_node(
             )
         raise RuntimeError(msg)
 
-    agent_questions: list[str] = [
-        f"macro_analysis needs: {f}" for f in result.missing_fields
-    ]
-
     if statuses:
         statuses = update_status(
             statuses, "macro_analysis",
@@ -128,7 +124,6 @@ async def macro_analysis_node(
                 f"rate_env={result.rate_environment}",
                 f"growth_env={result.growth_environment}",
                 f"drivers={len(result.macro_drivers)}",
-                f"questions={len(agent_questions)}",
             ],
         )
         statuses = update_status(
@@ -139,7 +134,6 @@ async def macro_analysis_node(
     delta = {
         "macro_analysis": result,
         "agent_statuses": statuses,
-        "agent_questions": agent_questions,
     }
     assert_writes(delta, _WRITES, "macro_analysis")
     return delta

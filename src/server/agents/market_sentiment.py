@@ -113,11 +113,6 @@ async def market_sentiment_node(
             )
         raise RuntimeError(msg)
 
-    # Surface missing fields as open questions so retry gate has agent-sourced signal
-    agent_questions: list[str] = [
-        f"market_sentiment needs: {f}" for f in result.missing_fields
-    ]
-
     if statuses:
         statuses = update_status(
             statuses, "market_sentiment",
@@ -125,7 +120,6 @@ async def market_sentiment_node(
             details=[
                 f"claims={len(result.claims)}",
                 f"direction={result.news_sentiment.direction}",
-                f"questions={len(agent_questions)}",
             ],
         )
         statuses = update_status(
@@ -136,7 +130,6 @@ async def market_sentiment_node(
     delta = {
         "market_sentiment": result,
         "agent_statuses": statuses,
-        "agent_questions": agent_questions,
     }
     assert_writes(delta, _WRITES, "market_sentiment")
     return delta

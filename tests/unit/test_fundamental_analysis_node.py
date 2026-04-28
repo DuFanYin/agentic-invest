@@ -119,24 +119,3 @@ def test_raises_when_no_evidence():
         _run(fundamental_analysis_node(_state(evidence=[]), llm=_mock_llm()))
 
 
-# ── agent_statuses untouched when empty ───────────────────────────────────
-
-def test_empty_statuses_returned_unchanged():
-    result = _run(fundamental_analysis_node(_state(), llm=_mock_llm()))
-    assert result["agent_statuses"] == []
-
-
-# ── agent_questions surfacing ──────────────────────────────────────────────
-
-def test_agent_questions_empty_when_no_missing_fields():
-    result = _run(fundamental_analysis_node(_state(), llm=_mock_llm()))
-    assert result["agent_questions"] == []
-
-
-def test_agent_questions_populated_when_llm_reports_missing_fields():
-    response = _llm_response()
-    response["missing_fields"] = ["free_cash_flow", "capex"]
-    result = _run(fundamental_analysis_node(_state(), llm=_mock_llm(response)))
-    qs = result["agent_questions"]
-    assert len(qs) == 2
-    assert all("fundamental_analysis needs" in q for q in qs)

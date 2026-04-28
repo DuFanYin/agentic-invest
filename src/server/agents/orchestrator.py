@@ -7,10 +7,10 @@ Graph topology
                          │  (retry: retry_questions detected, iteration < 2)    │
                          ▼                                                      │
 START → parse_intent → research → [parallel] ───────────────────────────────── ┤
-                         ▲         fundamental_analysis  (writes agent_questions)│
-                         │         macro_analysis        (writes agent_questions)│
-                         │         market_sentiment      (writes agent_questions)│
-                         │       → retry_gate ───────────── (gaps?) ────────────┘
+                         ▲         fundamental_analysis                         │
+                         │         macro_analysis                              │
+                         │         market_sentiment                            │
+                         │       → retry_gate ── (structural|conflict gap?) ──┘
                          │                   └── (no gaps) → scenario_scoring
                          │                                    → scenario_debate
                          │                                    → report_finalize

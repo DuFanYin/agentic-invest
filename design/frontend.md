@@ -6,7 +6,7 @@ This frontend design is a single-page React prototype mounted into `#root`, with
 
 1. Top command bar (`top-bar`)
 2. Main workspace (`main-area`) split into left operations panel and right report panel
-3. Conditional report footer (shown when run completes)
+3. Runtime report footer (shown during running/complete/error states)
 
 The interface is intentionally operator-style: compact typography, status-driven UI, and progressive reveal of report sections.
 
@@ -50,7 +50,7 @@ Two columns:
 - Right panel (`right-panel`, fluid width)
   - idle state: centered placeholder icon + state text
   - active state: report sections in a single vertical reading flow (`report-wrap`)
-  - complete state: bottom `report-footer` with source count and disclaimer
+  - runtime footer: bottom `report-footer` with elapsed time, token/cost/source counters, and validation status
 
 ---
 
@@ -81,7 +81,7 @@ Core UI state variables:
 - `query`: current input text
 - `agentStatuses`: per-agent runtime lifecycle/phase/action map
 - `logLines`: chronological event log
-- `sections`: set of currently revealed report sections
+- `readySections`: streamed section registry (`section_id -> {content, source, title}`)
 
 Run behavior:
 
@@ -94,9 +94,10 @@ Run behavior:
 - log auto-scrolls to latest entry
 
 Current implementation no longer relies on local mock `STREAM`/`REPORT`; report content is rendered from backend `final` payload.
-SSE parser handles `agent_status`, `llm_call`, `final`, `error`, `done`.
+SSE parser handles `agent_status`, `llm_call`, `section_ready`, `final`, `error`, `done`.
 `llm_call` entries are merged by call `id` (status progression such as `calling -> success/retry/failed`), and log lines are updated in place for the same call.
-`final` marks run `complete`, stores full report payload, and triggers progressive section reveal.
+`section_ready` progressively reveals report sections (including custom sections) before stream completion.
+`final` marks run `complete`, stores full report payload, and backfills any declared plan sections not yet marked ready.
 `error` marks run `error` and appends a system error log.
 `done` is treated as stream-termination marker only; if stream ends with `done` but without `final`/`error`, frontend treats it as interrupted/cancelled (`STREAM_DONE_WITHOUT_FINAL`).
 
@@ -129,7 +130,7 @@ Runtime mapping and stream helpers:
 - `AGENT_ID_BY_NAME`: backend node name -> UI row ID map (`parse_intent`, `research`, `fundamental_analysis`, `macro_analysis`, `market_sentiment`, `retry_gate`, `scenario_scoring`, `scenario_debate`, `report_finalize`)
 - `applyAgentStatuses`: applies backend lifecycle/phase/action updates from `agent_status`
 - `processBlock`: parses SSE blocks (`event:` + `data:`) and dispatches to state handlers
-  - handled event types: `agent_status`, `llm_call`, `final`, `error`, `done`
+  - handled event types: `agent_status`, `llm_call`, `section_ready`, `final`, `error`, `done`
 
 ---
 

@@ -123,8 +123,7 @@ def test_no_node_writes_to_its_own_inputs():
     #   agent_statuses — global write, every node updates it
     #   retry_questions — retry_gate and report_finalize legitimately rewrite it
     #   research_iteration — research increments its own counter each pass
-    # agent_questions: retry_gate reads accumulated questions then resets via sentinel
-    skip_fields = {"agent_statuses", "retry_questions", "research_iteration", "agent_questions"}
+    skip_fields = {"agent_statuses", "retry_questions", "research_iteration"}
     for node, contract in NODE_CONTRACTS.items():
         overlap = (contract.reads & contract.writes) - skip_fields
         assert not overlap, f"{node} reads and writes same fields: {overlap}"

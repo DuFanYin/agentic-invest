@@ -10,22 +10,21 @@ The system is not a fixed linear pipeline. The Orchestrator runs a shared-state 
 Shared Research State
 ├── query
 ├── intent
-├── research_focus[]         ← planning output
-├── must_have_metrics[]      ← planning output
-├── plan_notes[]             ← planning output
+├── plan_context             ← planning output bundle (focus/metrics/notes/report plan/custom sections)
 ├── evidence[]               ← appended across iterations (operator.add)
 ├── normalized_data
 ├── fundamental_analysis
 ├── macro_analysis
 ├── market_sentiment
-├── agent_questions[]        ← appended from parallel analysis nodes (_accumulate_or_reset)
 ├── retry_questions[]        ← replaced each cycle (plain assign)
-├── research_iteration       ← incremented by Research Agent; read by retry_gate/report router
+├── research_iteration       ← incremented by Research Agent; read by retry_gate
 ├── scenarios[]
 ├── scenario_debate
+├── narrative_sections
 ├── report_markdown
 ├── report_json
 ├── validation_result
+├── quality_metrics
 └── agent_statuses[]         ← _last_list reducer (merges per-agent parallel writes)
 ```
 
@@ -119,19 +118,19 @@ Each analysis agent outputs a structured result with explicit evidence bindings.
 
 ## 4) Collaboration Model and Topology
 
-The system uses a LangGraph `StateGraph` with a shared `ResearchState`. The graph has two conditional retry checks: one after `retry_gate` (evidence adequacy) and one after `report_finalize` (delivery citation integrity).
+The system uses a LangGraph `StateGraph` with a shared `ResearchState`. The graph has one active retry loop after `retry_gate` (evidence adequacy/conflict checks).
 
 Core flow:
 
 - `parse_intent` (implemented by planning agent) extracts `ResearchIntent` and planning fields from raw query.
 - `research` collects evidence from financial APIs, macro sources, yfinance news, and Tavily web search. Runs again on retry iterations.
 - `fundamental_analysis`, `macro_analysis`, and `market_sentiment` run **in parallel** after each research iteration.
-- `retry_gate` merges structural gaps (for company scope), analysis-node `agent_questions`, and research conflict signals (`normalized_data.conflicts`) to decide whether to retry.
+- `retry_gate` merges structural gaps (company scope without ticker) and research conflict signals (`normalized_data.conflicts`) to decide whether to retry.
 - If gaps remain and retry budget exists, the graph loops back to `research` for a supplementary iteration.
 - `scenario_scoring` runs once evidence gaps are resolved; probabilities are normalised in Python before constructing `Scenario` objects.
 - `scenario_debate` calibrates scenario probabilities and can fallback to baseline probabilities when debate output is invalid.
 - `report_finalize` generates Markdown via LLM, runs pure-Python validation, and computes quality metrics.
-- If final delivery validation detects citation-integrity issues and retry budget remains, the graph re-routes to `research`; otherwise it terminates.
+- The graph terminates after `report_finalize`; validation errors are surfaced in report output and `validation_result`.
 
 ```text
                               ┌─────────────────────────────────────────┐
@@ -149,21 +148,11 @@ START → parse_intent → research → fundamental_analysis ──┐          
                                                       scenario_debate
                                                                ↓
                                                      report_finalize
-                                                               │
-               ┌───────────────────────────────────────────────┴──────────────────────────────┐
-               │ retry: unsupported/missing evidence claims detected, research_iteration < 2  │
-               └───────────────────────────────────────────────┬──────────────────────────────┘
-                                                               ▼
-                                                            research
-                                                               │
-                                                           (otherwise)
-                                                               ▼
                                                                END
 ```
 
 State mutation rules:
 - `evidence[]`: `operator.add` — each research iteration appends; never overwritten.
-- `agent_questions[]`: `_accumulate_or_reset` — parallel analysis nodes append missing-field questions; `retry_gate` drains and resets via sentinel for the next cycle.
 - `retry_questions[]`: plain replace — `retry_gate` (and later `report_finalize`) reset to current cycle list; accumulation would break retry termination.
 - `agent_statuses[]`: `_last_list` custom reducer — parallel nodes can write this field in the same graph step; plain LastValue would raise `InvalidUpdateError`. The reducer merges per-agent updates and prefers newer `last_update_at` snapshots.
 
@@ -181,7 +170,7 @@ State mutation rules:
   - Support mixed intent without hardcoded query classes
   - Extract subjects automatically and select modules by intent
   - Run analysis nodes in parallel after each research pass
-  - Route retries through `retry_gate` (evidence adequacy) and `report_finalize` (citation-integrity delivery checks)
+  - Route retries through `retry_gate` for evidence adequacy/conflict resolution
 
 ### Research Agent
 
@@ -212,7 +201,7 @@ State mutation rules:
 - Key strategies:
   - Use normalized metrics context (TTM / three-year average / latest quarter when available)
   - Bind key judgments to `evidence_ids`
-  - Write `missing_fields[]` when data is absent; `retry_gate` reads this to decide retries
+  - Write `missing_fields[]` when data is absent; surfaced in final report warnings
   - Cross-check valuation and attach observable risk signals
 
 ### Market Sentiment Agent
@@ -227,16 +216,16 @@ State mutation rules:
   - Separate long-term fundamental change from short-term sentiment
   - Bind sentiment conclusions to market evidence
   - Downweight noisy signals
-  - Write `missing_fields[]` when coverage is insufficient; `retry_gate` reads this to decide retries
+  - Write `missing_fields[]` when coverage is insufficient; surfaced as report warnings
 
 ### Scenario Scoring Agent
 
 - Build forward-looking scenario states (3-5 distinct futures), with directional tags as metadata rather than primary buckets
 - Assign probability `probability` (0-1) to each scenario
 - Normalize probabilities before output to ensure total `probability` sum is 1
-- Include key triggers and validation signals for each scenario
+- Include key triggers for each scenario
 - Input: `evidence[]` + `normalized_data` + `fundamental_analysis` + `market_sentiment`
-- Output: `scenarios[]` (`name/description/probability/triggers/signals/evidence_ids`)
+- Output: `scenarios[]` (`name/description/probability/drivers/triggers/evidence_ids/tags`)
 - Key strategies:
   - Keep at least 3 mutually exclusive scenarios
   - Normalize probabilities in Python to sum to 1 (post-LLM parsing)
@@ -247,10 +236,10 @@ State mutation rules:
 
 - Analyze macro environment: growth/rates regime, key drivers, and macro risks
 - Input: `evidence[]` (especially `macro_api`) + intent context
-- Output: `macro_analysis` (`macro_view`, `macro_drivers`, `macro_risks`, `macro_signals`, regime tags)
+- Output: `macro_analysis` (`macro_view`, `macro_drivers`, `macro_risks`, regime tags)
 - Key strategies:
   - Keep output concise and decision-relevant
-  - Surface missing macro fields via `missing_fields[]` for retry routing
+  - Surface missing macro fields via `missing_fields[]` for report warnings
 
 ### Scenario Debate Agent
 
@@ -269,12 +258,12 @@ State mutation rules:
 - Check scenario probabilities sum to 1
 - Check for obvious internal contradictions
 - Input: `evidence[]` + `normalized_data` + `fundamental_analysis` + `macro_analysis` + `market_sentiment` + `scenarios[]` + `scenario_debate`
-- Output: `report_markdown` + `report_json` + `validation_result` + `quality_metrics`
+- Output: `narrative_sections` + `report_markdown` + `report_json` + `validation_result` + `quality_metrics`
 - Key strategies:
   - Require evidence references for key conclusions
   - Show "what we know / uncertainty / what to watch"
   - Validation always runs in pure Python (no LLM); errors/warnings appended inline
-- Unsupported/missing-evidence claim errors are surfaced as `retry_questions`; the graph may re-route to `research` when retry budget remains
+- Final node clears `retry_questions` and marks workflow completion
 
 ## 6) Final Report Structure
 

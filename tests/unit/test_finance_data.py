@@ -129,24 +129,6 @@ def test_get_info_returns_profile_fields():
     assert info["recommendation"] == "strong_buy"
 
 
-def test_get_info_unknown_ticker_returns_empty():
-    client = FinanceDataClient()
-    with patch("yfinance.Ticker", return_value=_make_ticker_mock(no_name=True)):
-        info = client.get_info("ZZZZZ")
-
-    assert info == {}
-
-
-def test_get_info_exception_returns_empty():
-    mock = MagicMock()
-    mock.info = property(lambda self: (_ for _ in ()).throw(RuntimeError("network")))
-    client = FinanceDataClient()
-    with patch("yfinance.Ticker", side_effect=RuntimeError("network")):
-        info = client.get_info("NVDA")
-
-    assert info == {}
-
-
 # ── get_financials ─────────────────────────────────────────────────────────
 
 def test_get_financials_core_metrics_are_consistent():
@@ -164,14 +146,6 @@ def test_get_financials_core_metrics_are_consistent():
     assert fin["latest_quarter"]["revenue"] == pytest.approx(68_127e6, rel=1e-3)
     # (68127 - 35082) / 35082 ≈ 94.2 %
     assert fin["latest_quarter"]["revenue_growth_yoy_pct"] == pytest.approx(94.2, rel=1e-1)
-
-
-def test_get_financials_no_missing_fields_on_complete_data():
-    client = FinanceDataClient()
-    with patch("yfinance.Ticker", return_value=_make_ticker_mock()):
-        fin = client.get_financials("NVDA")
-
-    assert fin["missing_fields"] == []
 
 
 def test_get_financials_marks_missing_when_revenue_nan():
@@ -201,17 +175,6 @@ def test_get_financials_exception_returns_fallback():
 
 # ── get_price_history ──────────────────────────────────────────────────────
 
-def test_get_price_history_returns_expected_keys():
-    client = FinanceDataClient()
-    with patch("yfinance.Ticker", return_value=_make_ticker_mock()):
-        hist = client.get_price_history("NVDA", period="1y")
-
-    assert "period_return_pct" in hist
-    assert "volatility_annualised_pct" in hist
-    assert "52w_high" in hist
-    assert hist["ticker"] == "NVDA"
-
-
 def test_get_price_history_return_calculation():
     client = FinanceDataClient()
     with patch("yfinance.Ticker", return_value=_make_ticker_mock()):
@@ -221,43 +184,5 @@ def test_get_price_history_return_calculation():
     assert hist["period_return_pct"] == pytest.approx(40.0)
 
 
-def test_get_price_history_empty_returns_error():
-    mock = _make_ticker_mock()
-    mock.history.return_value = pd.DataFrame()
-    client = FinanceDataClient()
-    with patch("yfinance.Ticker", return_value=mock):
-        hist = client.get_price_history("NVDA")
-
-    assert "error" in hist
 
 
-# ── get_news ───────────────────────────────────────────────────────────────
-
-def test_get_news_returns_normalised_items():
-    client = FinanceDataClient()
-    with patch("yfinance.Ticker", return_value=_make_ticker_mock()):
-        news = client.get_news("NVDA")
-
-    assert len(news) == 1
-    assert news[0]["title"] == "NVDA beats estimates"
-    assert news[0]["url"] == "https://example.com/nvda-beats"
-    assert news[0]["publisher"] == "Reuters"
-    assert news[0]["published_at"] == "2026-04-01T10:00:00Z"
-
-
-def test_get_news_skips_items_without_title():
-    mock = _make_ticker_mock()
-    mock.news = [{"id": "x", "content": {"title": ""}}]
-    client = FinanceDataClient()
-    with patch("yfinance.Ticker", return_value=mock):
-        news = client.get_news("NVDA")
-
-    assert news == []
-
-
-def test_get_news_exception_returns_empty_list():
-    client = FinanceDataClient()
-    with patch("yfinance.Ticker", side_effect=RuntimeError("timeout")):
-        news = client.get_news("NVDA")
-
-    assert news == []

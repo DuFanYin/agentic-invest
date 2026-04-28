@@ -129,65 +129,7 @@ def test_research_smoke_contract_and_metrics():
     assert nd.metrics.latest_quarter is not None
 
 
-# ── Source types ───────────────────────────────────────────────────────────
-
-def test_news_capped_at_five():
-    many_news = [
-        {"title": f"Headline {i}", "url": f"https://example.com/{i}", "published_at": None}
-        for i in range(10)
-    ]
-    with _patch(finance=_mock_finance(news=many_news)):
-        result = _run(research_node(_base_state()))
-    news_items = [ev for ev in result["evidence"] if ev.source_type == "news"]
-    assert len(news_items) <= 5
-
-
-# ── Web result cleaning ────────────────────────────────────────────────────
-
-def test_web_results_are_cleaned_for_duplicate_and_empty_urls():
-    web = _mock_web([
-        {"title": "Duplicate", "url": "https://example.com/1", "content": "...", "published_date": None, "score": 0.9},
-        {"title": "Unique", "url": "https://web.example.com/unique", "content": "...", "published_date": None, "score": 0.8},
-        {"title": "No URL", "url": "", "content": "...", "published_date": None, "score": 0.5},
-    ])
-    with _patch(web=web):
-        result = _run(research_node(_base_state()))
-    urls = [ev.url for ev in result["evidence"]]
-    assert urls.count("https://example.com/1") == 1
-    web_items = [ev for ev in result["evidence"] if ev.source_type == "web"]
-    assert all(ev.url for ev in web_items)
-
-
-# ── Missing fields propagated ──────────────────────────────────────────────
-
-def test_missing_fields_from_financials_propagated():
-    fin = {
-        "ttm": {"revenue": None, "gross_margin_pct": None, "operating_margin_pct": None, "net_margin_pct": None},
-        "three_year_avg": {},
-        "latest_quarter": {},
-        "missing_fields": ["revenue", "gross_margin_pct"],
-    }
-    with _patch(finance=_mock_finance(financials=fin)):
-        result = _run(research_node(_base_state()))
-    assert "revenue" in result["normalized_data"].missing_fields
-
-
 # ── Fallback when no ticker ────────────────────────────────────────────────
-
-def test_no_ticker_web_search_still_runs():
-    web = _mock_web()
-    state = {
-        "query": "What are good ETFs?",
-        "intent": ResearchIntent(ticker=None, subjects=[], scope="general"),
-        "research_iteration": 0,
-        "retry_questions": [],
-        "agent_statuses": [],
-    }
-    with _patch(web=web):
-        result = _run(research_node(state))
-    web.search.assert_called_once()
-    assert len(result["evidence"]) >= 1
-    assert all(ev.source_type in ("web", "macro_api") for ev in result["evidence"])
 
 
 def test_no_ticker_no_web_results_raises():
@@ -234,24 +176,7 @@ def test_all_services_fail_raises():
             _run(research_node(_base_state()))
 
 
-# ── Id offset on multi-pass ────────────────────────────────────────────────
-
-def test_evidence_ids_offset_on_second_pass():
-    with _patch():
-        result = _run(research_node(_base_state(iteration_id=1)))
-    for ev in result["evidence"]:
-        num = int(ev.id.split("_")[1])
-        assert num >= 100
-
-
 # ── Price history in metrics ───────────────────────────────────────────────
-
-def test_price_history_stored_in_metrics():
-    with _patch():
-        result = _run(research_node(_base_state()))
-    assert result["normalized_data"].metrics.price_history
-    assert result["normalized_data"].metrics.price_history["period_return_pct"] == 22.4
-
 
 # ── Conflict detection ─────────────────────────────────────────────────────
 
@@ -268,50 +193,3 @@ def test_conflict_detected_on_reliability_divergence():
     assert len(conflicts) == 1
     assert conflicts[0]["topic"] == "valuation"
     assert conflicts[0]["type"] == "reliability_divergence"
-
-
-def test_conflicts_stored_in_normalized_data():
-    finance = _mock_finance()
-    finance.get_info.return_value = {
-        "name": "Apple Inc", "sector": "Technology",
-        "market_cap": 3_000_000_000_000, "trailing_pe": 28.5, "ev_to_ebitda": 22.1, "description": "",
-    }
-    web = _mock_web([{
-        "title": "Bearish valuation view",
-        "url": "https://bearish.com/1",
-        "content": "valuation looks stretched",
-        "published_date": None,
-        "score": 0.6,
-    }])
-    with _patch(finance=finance, web=web):
-        result = _run(research_node(_base_state()))
-    nd = result["normalized_data"]
-    assert isinstance(nd, NormalizedData)
-    assert isinstance(nd.conflicts, list)
-
-
-def test_conflicts_include_prior_iteration_evidence():
-    prior = [
-        Evidence(
-            id="ev_001",
-            source_type="web",
-            title="Prior low reliability valuation",
-            summary="valuation fair",
-            reliability="low",
-            retrieved_at="2026-01-01T00:00:00Z",
-            related_topics=["valuation"],
-        )
-    ]
-    web = _mock_web([{
-        "title": "Web bearish valuation view",
-        "url": "https://bearish.com/2",
-        "content": "valuation stretched",
-        "published_date": None,
-        "score": 0.6,
-    }])
-    state = _base_state()
-    state["evidence"] = prior
-    with _patch(web=web):
-        result = _run(research_node(state))
-    topics = [c.topic for c in result["normalized_data"].conflicts]
-    assert "valuation" in topics

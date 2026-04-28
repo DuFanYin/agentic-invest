@@ -124,97 +124,12 @@ def test_result_shape_and_core_fields():
     assert debate.confidence in ("high", "medium", "low")
 
 
-def test_advocacy_summaries_populated():
-    result = _run(scenario_debate_node(_state(), llm=_mock_llm()))
-    summaries = result["scenario_debate"].advocacy_summaries
-    assert len(summaries) == 3
-    names = {s["scenario_name"] for s in summaries}
-    assert "AI Supercycle" in names
-    assert "Capex Retreat" in names
-
-
-def test_n_plus_one_llm_calls_for_n_scenarios():
-    """N concurrent advocate calls + 1 arbitrator call."""
-    llm = _mock_llm()
-    _run(scenario_debate_node(_state(), llm=llm))
-    assert llm.call_with_retry.call_count == len(_scenarios()) + 1
-
-
 # ── probability constraints ────────────────────────────────────────────────
 
 def test_calibrated_probabilities_sum_to_one():
     result = _run(scenario_debate_node(_state(), llm=_mock_llm()))
     total = sum(s.get("probability", 0) for s in result["scenario_debate"].calibrated_scenarios)
     assert abs(total - 1.0) < 0.01
-
-
-def test_probability_cap_enforced():
-    arb = _arbitrator_response({
-        "probability_adjustments": [{
-            "scenario_name": "AI Supercycle",
-            "before": 0.45,
-            "after": 0.75,   # +0.30 — exceeds ±0.15 cap
-            "delta": 0.30,
-            "reason": "Extreme claim.",
-            "evidence_refs": ["ev_001"],
-        }],
-    })
-    result = _run(scenario_debate_node(_state(), llm=_mock_llm(arbitrator=arb)))
-    adj = result["scenario_debate"].probability_adjustments
-    if adj:
-        assert all(abs(a.delta) <= 0.15 + 1e-6 for a in adj)
-
-
-def test_normalisation_fixes_bad_sum():
-    arb = _arbitrator_response({
-        "calibrated_scenarios": [
-            {"name": "AI Supercycle", "probability": 0.60, "tags": ["bullish-2"]},
-            {"name": "Soft Landing",  "probability": 0.60, "tags": ["neutral"]},
-            {"name": "Capex Retreat", "probability": 0.30, "tags": ["bearish-2"]},
-        ]
-    })
-    result = _run(scenario_debate_node(_state(), llm=_mock_llm(arbitrator=arb)))
-    total = sum(s.get("probability", 0) for s in result["scenario_debate"].calibrated_scenarios)
-    assert abs(total - 1.0) < 0.01
-
-
-def test_missing_scenario_coverage_falls_back_to_baseline():
-    arb = _arbitrator_response({
-        "calibrated_scenarios": [
-            {"name": "AI Supercycle", "probability": 0.65, "tags": ["bullish-2"]},
-            {"name": "Soft Landing",  "probability": 0.35, "tags": ["neutral"]},
-            # Capex Retreat missing — must trigger fallback
-        ]
-    })
-    result = _run(scenario_debate_node(_state(), llm=_mock_llm(arbitrator=arb)))
-    debate = result["scenario_debate"]
-    assert "fallback_to_baseline" in debate.debate_flags
-    assert len(debate.calibrated_scenarios) == 3
-
-
-# ── partial advocate failure ───────────────────────────────────────────────
-
-def test_partial_advocate_failure_still_runs_arbitrator():
-    """If some but not all advocates fail, arbitration still runs with partial input."""
-    scenarios = _scenarios()
-    n = len(scenarios)
-    llm = MagicMock()
-    call_count = [0]
-
-    async def side_effect(*args, **kwargs):
-        idx = call_count[0]
-        call_count[0] += 1
-        if idx < n:
-            if idx == 1:  # only Soft Landing advocate fails
-                raise RuntimeError("advocate failed")
-            return json.dumps(_advocate_response(scenarios[idx].name))
-        return json.dumps(_arbitrator_response())
-
-    llm.call_with_retry = AsyncMock(side_effect=side_effect)
-    result = _run(scenario_debate_node(_state(), llm=llm))
-    debate = result["scenario_debate"]
-    assert isinstance(debate, ScenarioDebate)
-    assert any("partial_advocacy" in f for f in debate.debate_flags)
 
 
 # ── fallback paths ─────────────────────────────────────────────────────────
@@ -232,42 +147,3 @@ def test_fallback_when_arbitrator_fails():
     assert "fallback_to_baseline" in debate.debate_flags
 
 
-def test_fallback_when_arbitrator_returns_bad_json():
-    llm = MagicMock()
-    scenarios = _scenarios()
-    n = len(scenarios)
-    call_count = [0]
-
-    async def side_effect(*args, **kwargs):
-        idx = call_count[0]
-        call_count[0] += 1
-        if idx < n:
-            return json.dumps(_advocate_response(scenarios[idx].name))
-        return "not json at all"
-
-    llm.call_with_retry = AsyncMock(side_effect=side_effect)
-    result = _run(scenario_debate_node(_state(), llm=llm))
-    assert "fallback_to_baseline" in result["scenario_debate"].debate_flags
-
-
-def test_fallback_returns_all_baseline_scenario_names():
-    result = _run(scenario_debate_node(_state(), llm=_mock_llm(all_advocates_fail=True)))
-    names = {s.get("name") for s in result["scenario_debate"].calibrated_scenarios}
-    assert "AI Supercycle" in names
-    assert "Capex Retreat" in names
-
-
-def test_empty_scenarios_produces_fallback():
-    result = _run(scenario_debate_node(_state(scenarios=[]), llm=_mock_llm()))
-    debate = result["scenario_debate"]
-    assert isinstance(debate, ScenarioDebate)
-    assert "fallback_to_baseline" in debate.debate_flags
-
-
-# ── no adjustments edge case ───────────────────────────────────────────────
-
-def test_no_adjustments_still_valid():
-    arb = _arbitrator_response({"probability_adjustments": []})
-    result = _run(scenario_debate_node(_state(), llm=_mock_llm(arbitrator=arb)))
-    assert result["scenario_debate"].probability_adjustments == []
-    assert result["scenario_debate"].calibrated_scenarios

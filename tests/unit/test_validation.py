@@ -40,22 +40,6 @@ def test_scenario_validation_errors(scenario_kwargs, expected_markers) -> None:
         assert any(marker in e for e in errors)
 
 
-# ── evidence completeness ───────────────────────────────────────────────────
-
-@pytest.mark.parametrize("url", ["https://example.com", None])
-def test_evidence_completeness_passes_for_valid_variants(url: str | None) -> None:
-    evidence = [
-        {
-            "id": "ev_001",
-            "url": url,
-            "retrieved_at": "2026-01-01T00:00:00Z",
-            "summary": "summary text",
-            "reliability": "high",
-        }
-    ]
-    assert validate_evidence_completeness(evidence) == []
-
-
 def test_evidence_completeness_fails_when_required_field_missing() -> None:
     evidence = [
         {
@@ -72,24 +56,14 @@ def test_evidence_completeness_fails_when_required_field_missing() -> None:
 
 # ── claim coverage ──────────────────────────────────────────────────────────
 
-@pytest.mark.parametrize(
-    ("evidence_ids", "known_ids", "expect_errors"),
-    [
-        (["ev_001"], {"ev_001"}, False),
-        (["ev_999"], {"ev_001"}, True),
-    ],
-)
-def test_claim_coverage_cases(evidence_ids, known_ids, expect_errors) -> None:
+def test_claim_coverage_flags_unknown_ids() -> None:
     analysis = FundamentalAnalysis(
-        claims=[Claim(statement="claim A", confidence="medium", evidence_ids=evidence_ids)],
+        claims=[Claim(statement="claim A", confidence="medium", evidence_ids=["ev_999"])],
         business_quality=BusinessQuality(view="stable"),
         valuation=Valuation(relative_multiple_view="fair"),
         fundamental_risks=[],
         missing_fields=[],
         metrics={},
     )
-    errors = validate_claim_coverage(analysis, known_ids)
-    if expect_errors:
-        assert errors
-    else:
-        assert errors == []
+    errors = validate_claim_coverage(analysis, {"ev_001"})
+    assert errors

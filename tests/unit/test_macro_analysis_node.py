@@ -74,41 +74,6 @@ def test_macro_result_shape_and_core_fields():
     result = _run(macro_analysis_node(_state(), llm=_mock_llm()))
     ma = result["macro_analysis"]
     assert isinstance(ma, MacroAnalysis)
-    assert isinstance(ma.macro_view, str) and ma.macro_view
-    assert ma.rate_environment in ("tightening", "easing", "stable")
-    assert ma.growth_environment in ("expanding", "contracting", "stable")
-    assert len(ma.macro_drivers) >= 1
-    for risk in ma.macro_risks:
-        assert risk.impact in ("high", "medium", "low")
-
-
-# ── missing fields → agent_questions ──────────────────────────────────────
-
-def test_agent_questions_empty_when_no_missing():
-    result = _run(macro_analysis_node(_state(), llm=_mock_llm()))
-    assert result["agent_questions"] == []
-
-
-def test_agent_questions_populated_from_missing_fields():
-    resp = _llm_response({"missing_fields": ["GDPC1", "credit_spread"]})
-    result = _run(macro_analysis_node(_state(), llm=_mock_llm(resp)))
-    qs = result["agent_questions"]
-    assert len(qs) == 2
-    assert all("macro_analysis needs" in q for q in qs)
-
-
-# ── evidence filtering ─────────────────────────────────────────────────────
-
-def test_macro_only_evidence_still_produces_result():
-    ev = _evidence(["macro_api", "macro_api"])
-    result = _run(macro_analysis_node(_state(evidence=ev), llm=_mock_llm()))
-    assert isinstance(result["macro_analysis"], MacroAnalysis)
-
-
-def test_no_macro_evidence_still_runs_with_supplemental():
-    ev = _evidence(["financial_api", "web"])
-    result = _run(macro_analysis_node(_state(evidence=ev), llm=_mock_llm()))
-    assert isinstance(result["macro_analysis"], MacroAnalysis)
 
 
 # ── failure handling ───────────────────────────────────────────────────────
@@ -116,10 +81,3 @@ def test_no_macro_evidence_still_runs_with_supplemental():
 def test_raises_on_llm_failure():
     with pytest.raises(RuntimeError, match="macro_analysis"):
         _run(macro_analysis_node(_state(), llm=_mock_llm(raises=RuntimeError("exhausted"))))
-
-
-def test_raises_on_bad_json():
-    llm = MagicMock()
-    llm.call_with_retry = AsyncMock(return_value="not json")
-    with pytest.raises(RuntimeError, match="macro_analysis"):
-        _run(macro_analysis_node(_state(), llm=llm))

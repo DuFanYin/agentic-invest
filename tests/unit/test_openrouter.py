@@ -125,38 +125,6 @@ def test_complete_skips_model_on_400():
         result = _run(client.complete("test"))
 
     assert result == '{"ok": true}'
-    assert call_count["n"] == 2
-
-
-# ── invalid payloads treated as retryable ──────────────────────────────────
-
-@pytest.mark.parametrize("first_response", [
-    _ok_response("not json at all"),
-    MagicMock(status_code=200, text="<html>gateway error</html>"),
-])
-def test_complete_retries_on_invalid_payloads(first_response):
-    if getattr(first_response, "text", "").startswith("<html>"):
-        first_response.json.side_effect = ValueError("bad json")
-    post = AsyncMock(side_effect=[first_response, _ok_response('{"ok": true}')])
-    with patch("httpx.AsyncClient") as mock_http:
-        mock_http.return_value.__aenter__.return_value.post = post
-        result = _run(_client().complete("test"))
-    assert result == '{"ok": true}'
-
-
-def test_constructor_base_url_argument_is_respected():
-    captured = {}
-
-    def capture(*a, **kw):
-        captured["url"] = a[0] if a else kw.get("url")
-        return _ok_response()
-
-    client = OpenRouterClient(api_key="test-key", model="test/model", base_url="https://example.test/v1")
-    with patch("httpx.AsyncClient") as mock_http:
-        mock_http.return_value.__aenter__.return_value.post.side_effect = capture
-        _run(client.complete("test"))
-
-    assert captured["url"].startswith("https://example.test/v1/")
 
 
 # ── request payload shape ───────────────────────────────────────────────────

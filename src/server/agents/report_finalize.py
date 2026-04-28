@@ -386,10 +386,6 @@ async def report_finalize_node(
         "validation": {"errors": errors, "warnings": warnings, "uncovered_sections": uncovered},
     }
 
-    citation_errors = [e for e in errors if "unknown evidence" in e or "missing evidence" in e]
-    retry_questions = [f"report_finalize: {e}" for e in citation_errors]
-    stop_reason = "" if retry_questions else "complete"
-
     if statuses:
         statuses = update_status(
             statuses, "report_finalize",
@@ -407,8 +403,8 @@ async def report_finalize_node(
         "report_json": report_json,
         "validation_result": ValidationResult(is_valid=not errors, errors=errors, warnings=warnings),
         "quality_metrics": quality_metrics,
-        "retry_questions": retry_questions,
-        "stop_reason": stop_reason,
+        "retry_questions": [],
+        "stop_reason": "complete",
         "agent_statuses": statuses,
     }
     assert_writes(delta, _WRITES, "report_finalize")

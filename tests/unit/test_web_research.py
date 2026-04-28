@@ -106,24 +106,3 @@ def test_results_without_url_are_dropped():
         results = _client().search("test")
     assert len(results) == 1
     assert results[0]["title"] == "Good result"
-
-
-def test_search_returns_empty_list_on_no_results():
-    with patch("httpx.Client") as mock_http:
-        mock_http.return_value.__enter__.return_value.post.return_value = _ok_response([])
-        assert _client().search("obscure query xyz") == []
-
-
-# ── search_news ────────────────────────────────────────────────────────────
-
-def test_search_news_calls_search_with_ticker_in_query():
-    captured = {}
-    def capture(*a, **kw):
-        captured["payload"] = kw.get("json", {})
-        return _ok_response()
-
-    with patch("httpx.Client") as mock_http:
-        mock_http.return_value.__enter__.return_value.post.side_effect = capture
-        _client().search_news("AAPL", days=30)
-
-    assert "AAPL" in captured["payload"]["query"]

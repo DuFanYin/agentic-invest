@@ -2,10 +2,7 @@
 LangGraph shared state.
 
 evidence:        operator.add — each research iteration appends new items.
-agent_questions: _accumulate_or_reset — both parallel analysis nodes append in
-                 the same step; retry_gate resets by returning the sentinel
-                 [_RESET], which this reducer treats as a clear instruction.
-retry_questions: plain replace — retry_gate writes the merged list each cycle;
+retry_questions: plain replace — retry_gate writes a single-item list each cycle;
                  accumulation would break the retry-loop termination check.
 agent_statuses:  _last_list — fundamental_analysis and market_sentiment run in
                  parallel and both write this field in the same step; the plain
@@ -33,20 +30,6 @@ from src.server.models.evidence import Evidence
 from src.server.models.intent import ResearchIntent
 from src.server.models.response import AgentStatus, ValidationResult
 from src.server.models.scenario import Scenario
-
-
-_RESET = object()  # sentinel — retry_gate returns [_RESET] to clear agent_questions
-
-
-def _accumulate_or_reset(left: list, right: list) -> list:
-    """
-    Reducer for agent_questions.
-    Normal writes (from parallel analysis nodes) append to the existing list.
-    retry_gate resets via [_RESET], which replaces the list with [].
-    """
-    if right and right[0] is _RESET:
-        return []
-    return left + right
 
 
 def _last_list(left: list, right: list) -> list:
@@ -115,10 +98,8 @@ class ResearchState(TypedDict, total=False):
     market_sentiment: MarketSentiment
 
     # ── Gap / retry tracking ───────────────────────────────────────────────
-    # agent_questions: accumulated by analysis nodes per iteration; retry gate
-    # reads and resets each cycle.
-    agent_questions: Annotated[list[str], _accumulate_or_reset]
     retry_questions: list[str]  # replaced each cycle — do NOT use operator.add
+    retry_reason: str           # "structural" | "evidence_conflict" | "none"
     research_iteration: int     # incremented by research_node; read by retry gate
 
     # ── Scenario scoring & debate ──────────────────────────────────────────

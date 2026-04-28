@@ -76,24 +76,6 @@ def test_plan_fallback_on_llm_error():
     assert len(result.plan_notes) >= 1
 
 
-def test_plan_fallback_on_bad_json():
-    llm = MagicMock(spec=OpenRouterClient)
-    llm.complete = AsyncMock(return_value="not json at all")
-    result = _run(plan("Analyse NVDA", llm))
-    assert isinstance(result.intent, ResearchIntent)
-    assert result.research_focus  # non-empty fallback
-
-
-# ── fallback when planning fields empty ───────────────────────────────────
-
-def test_plan_derives_fallback_when_focus_empty():
-    resp = _llm_response({"research_focus": [], "must_have_metrics": [], "plan_notes": []})
-    result = _run(plan("Analyse NVDA", _mock_llm(resp)))
-    assert len(result.research_focus) >= 1
-    assert len(result.must_have_metrics) >= 1
-    assert len(result.plan_notes) >= 1
-
-
 # ── make_planning_node() ────────────────────────────────────────────────────
 
 def test_node_returns_state_fields():

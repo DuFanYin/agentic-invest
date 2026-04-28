@@ -150,19 +150,11 @@ async def fundamental_analysis_node(
             )
         raise RuntimeError(msg)
 
-    # Surface missing fields as open questions so retry gate has agent-sourced signal
-    agent_questions: list[str] = [
-        f"fundamental_analysis needs: {f}" for f in result.missing_fields
-    ]
-
     if statuses:
         statuses = update_status(
             statuses, "fundamental_analysis",
             lifecycle="standby", phase="analyzing_fundamentals", action="fundamentals ready",
-            details=[
-                f"claims={len(result.claims)}",
-                f"questions={len(agent_questions)}",
-            ],
+            details=[f"claims={len(result.claims)}"],
         )
         statuses = update_status(
             statuses, "retry_gate",
@@ -172,7 +164,6 @@ async def fundamental_analysis_node(
     delta = {
         "fundamental_analysis": result,
         "agent_statuses": statuses,
-        "agent_questions": agent_questions,
     }
     assert_writes(delta, _WRITES, "fundamental_analysis")
     return delta
