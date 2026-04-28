@@ -1,13 +1,14 @@
 from typing import Literal, TypeAlias
 
 from pydantic import BaseModel, Field
+
 AgentLifecycle: TypeAlias = Literal[
     "standby",
     "active",
     "waiting",
     "blocked",
     "degraded",  # best-effort: node ran but returned a degraded result, pipeline continues
-    "failed",    # hard failure: node raised, pipeline stopped
+    "failed",  # hard failure: node raised, pipeline stopped
 ]
 
 AgentPhase: TypeAlias = Literal[

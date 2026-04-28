@@ -27,16 +27,18 @@ def detect_conflicts(evidence: list[Evidence]) -> list[dict]:
         source_types = {ev.source_type for ev in items}
         reliabilities = {ev.reliability for ev in items}
         if "high" in reliabilities and "low" in reliabilities and len(source_types) > 1:
-            conflicts.append({
-                "topic": topic,
-                "type": "reliability_divergence",
-                "evidence_ids": [ev.id for ev in items],
-                "note": (
-                    f"Topic '{topic}' covered by both high and low-reliability sources "
-                    f"({', '.join(sorted(source_types))}). Downstream agents should "
-                    f"prefer high-reliability evidence."
-                ),
-            })
+            conflicts.append(
+                {
+                    "topic": topic,
+                    "type": "reliability_divergence",
+                    "evidence_ids": [ev.id for ev in items],
+                    "note": (
+                        f"Topic '{topic}' covered by both high and low-reliability sources "
+                        f"({', '.join(sorted(source_types))}). Downstream agents should "
+                        f"prefer high-reliability evidence."
+                    ),
+                }
+            )
     return conflicts
 
 

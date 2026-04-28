@@ -31,7 +31,9 @@ _DEFAULT_RESULTS = [
 def _ok_response(results: list[dict] | None = None) -> MagicMock:
     resp = MagicMock()
     resp.status_code = 200
-    resp.json.return_value = {"results": _DEFAULT_RESULTS if results is None else results}
+    resp.json.return_value = {
+        "results": _DEFAULT_RESULTS if results is None else results
+    }
     return resp
 
 
@@ -57,6 +59,7 @@ def _fast_retry_sync(monkeypatch):
 
 # ── result shape ───────────────────────────────────────────────────────────
 
+
 def test_result_has_required_fields():
     with patch("httpx.Client") as mock_http:
         mock_http.return_value.__enter__.return_value.post.return_value = _ok_response()
@@ -71,10 +74,14 @@ def test_result_has_required_fields():
 
 # ── missing API key ────────────────────────────────────────────────────────
 
-@pytest.mark.parametrize("method,args", [
-    ("search", ("Apple",)),
-    ("search_news", ("AAPL",)),
-])
+
+@pytest.mark.parametrize(
+    "method,args",
+    [
+        ("search", ("Apple",)),
+        ("search_news", ("AAPL",)),
+    ],
+)
 def test_methods_return_empty_when_no_api_key(method, args):
     with patch("src.server.services.web_research.TAVILY_API_KEY", None):
         client = WebResearchClient()
@@ -83,14 +90,18 @@ def test_methods_return_empty_when_no_api_key(method, args):
 
 # ── HTTP error responses ───────────────────────────────────────────────────
 
+
 @pytest.mark.parametrize("status", [401, 429, 500])
 def test_search_returns_empty_on_http_errors(status):
     with patch("httpx.Client") as mock_http:
-        mock_http.return_value.__enter__.return_value.post.return_value = _error_response(status)
+        mock_http.return_value.__enter__.return_value.post.return_value = (
+            _error_response(status)
+        )
         assert _client().search("Apple") == []
 
 
 # ── network failures ───────────────────────────────────────────────────────
+
 
 @pytest.mark.parametrize(
     "exc",
@@ -104,14 +115,22 @@ def test_search_returns_empty_on_network_failures(exc):
 
 # ── URL filtering ──────────────────────────────────────────────────────────
 
+
 def test_results_without_url_are_dropped():
     raw = [
-        {"title": "Good result", "url": "https://example.com/good", "content": "...", "score": 0.9},
+        {
+            "title": "Good result",
+            "url": "https://example.com/good",
+            "content": "...",
+            "score": 0.9,
+        },
         {"title": "No URL result", "url": "", "content": "...", "score": 0.5},
         {"title": "Missing URL key", "content": "...", "score": 0.3},
     ]
     with patch("httpx.Client") as mock_http:
-        mock_http.return_value.__enter__.return_value.post.return_value = _ok_response(raw)
+        mock_http.return_value.__enter__.return_value.post.return_value = _ok_response(
+            raw
+        )
         results = _client().search("test")
     assert len(results) == 1
     assert results[0]["title"] == "Good result"

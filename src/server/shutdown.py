@@ -33,7 +33,9 @@ def is_set() -> bool:
     # Only active while server lifecycle has enabled shutdown signaling.
     if not enabled:
         return False
-    return (async_event.is_set() if async_event is not None else False) or event.is_set()
+    return (
+        async_event.is_set() if async_event is not None else False
+    ) or event.is_set()
 
 
 async def wait_or_timeout(timeout: float) -> bool:

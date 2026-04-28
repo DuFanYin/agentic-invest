@@ -41,16 +41,24 @@ async def fetch_macro_evidence(
                     f"{item.get('label', series_id)}: {val} ({item.get('direction', 'stable')})"
                 )
             if fred_lines:
-                evidence.append(Evidence(
-                    id=f"ev_{ev_id:03d}",
-                    source_type="macro_api",
-                    title="FRED Economic Indicators",
-                    url="https://fred.stlouisfed.org",
-                    retrieved_at=retrieved_at,
-                    summary="Key economic indicators: " + "; ".join(fred_lines),
-                    reliability="high",
-                    related_topics=["macro", "interest_rates", "inflation", "gdp", "employment"],
-                ))
+                evidence.append(
+                    Evidence(
+                        id=f"ev_{ev_id:03d}",
+                        source_type="macro_api",
+                        title="FRED Economic Indicators",
+                        url="https://fred.stlouisfed.org",
+                        retrieved_at=retrieved_at,
+                        summary="Key economic indicators: " + "; ".join(fred_lines),
+                        reliability="high",
+                        related_topics=[
+                            "macro",
+                            "interest_rates",
+                            "inflation",
+                            "gdp",
+                            "employment",
+                        ],
+                    )
+                )
                 ev_id += 1
 
         if signals:
@@ -63,16 +71,18 @@ async def fetch_macro_evidence(
                     f"{item.get('label', ticker_sym)}: {val} ({item.get('direction', 'stable')})"
                 )
             if sig_lines:
-                evidence.append(Evidence(
-                    id=f"ev_{ev_id:03d}",
-                    source_type="macro_api",
-                    title="Macro Market Signals",
-                    url="https://finance.yahoo.com",
-                    retrieved_at=retrieved_at,
-                    summary="Market signals: " + "; ".join(sig_lines),
-                    reliability="high",
-                    related_topics=["macro", "vix", "rates", "dollar"],
-                ))
+                evidence.append(
+                    Evidence(
+                        id=f"ev_{ev_id:03d}",
+                        source_type="macro_api",
+                        title="Macro Market Signals",
+                        url="https://finance.yahoo.com",
+                        retrieved_at=retrieved_at,
+                        summary="Market signals: " + "; ".join(sig_lines),
+                        reliability="high",
+                        related_topics=["macro", "vix", "rates", "dollar"],
+                    )
+                )
                 ev_id += 1
     except Exception:
         logger.warning("macro data collection failed", exc_info=True)

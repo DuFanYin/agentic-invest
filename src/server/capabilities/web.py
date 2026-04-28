@@ -17,6 +17,7 @@ _WEB_TTL = 900  # 15 min
 
 def _cache_key(prefix: str, *parts: str) -> str:
     import hashlib
+
     payload = ":".join(parts)
     return f"{prefix}:{hashlib.sha256(payload.encode()).hexdigest()[:16]}"
 
@@ -74,7 +75,13 @@ async def fetch_web_evidence(
 
     results = await asyncio.gather(
         *[
-            _fetch_single(q, retrieved_at=retrieved_at, seen_urls=seen_urls, cache=cache, client=client)
+            _fetch_single(
+                q,
+                retrieved_at=retrieved_at,
+                seen_urls=seen_urls,
+                cache=cache,
+                client=client,
+            )
             for q in queries
         ]
     )
@@ -83,17 +90,19 @@ async def fetch_web_evidence(
     ev_id = ev_id_start
     for items in results:
         for item in items:
-            evidence.append(Evidence(
-                id=f"ev_{ev_id:03d}",
-                source_type="web",
-                title=item.get("title", "Web result"),
-                url=item.get("url") or None,
-                published_at=item.get("published_date"),
-                retrieved_at=retrieved_at,
-                summary=item.get("content", item.get("title", "")),
-                reliability="medium",
-                related_topics=["web"],
-            ))
+            evidence.append(
+                Evidence(
+                    id=f"ev_{ev_id:03d}",
+                    source_type="web",
+                    title=item.get("title", "Web result"),
+                    url=item.get("url") or None,
+                    published_at=item.get("published_date"),
+                    retrieved_at=retrieved_at,
+                    summary=item.get("content", item.get("title", "")),
+                    reliability="medium",
+                    related_topics=["web"],
+                )
+            )
             ev_id += 1
 
     return WebFetchResult(evidence=evidence, next_ev_id=ev_id)

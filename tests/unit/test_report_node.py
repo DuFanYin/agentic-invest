@@ -54,44 +54,110 @@ def _evidence(n: int = 3) -> list[Evidence]:
 
 def _scenarios() -> list[Scenario]:
     return [
-        Scenario(name="Rate plateau stalls growth", description="Downside.", tags=["bearish-1"],
-                 probability=0.2, drivers=["d"], triggers=["t"], evidence_ids=["ev_001"]),
-        Scenario(name="AI capex supercycle", description="Base.", tags=["neutral"],
-                 probability=0.5, drivers=["d"], triggers=["t"], evidence_ids=["ev_001"]),
-        Scenario(name="Margin expansion", description="Upside.", tags=["bullish-1"],
-                 probability=0.3, drivers=["d"], triggers=["t"], evidence_ids=["ev_001"]),
+        Scenario(
+            name="Rate plateau stalls growth",
+            description="Downside.",
+            tags=["bearish-1"],
+            probability=0.2,
+            drivers=["d"],
+            triggers=["t"],
+            evidence_ids=["ev_001"],
+        ),
+        Scenario(
+            name="AI capex supercycle",
+            description="Base.",
+            tags=["neutral"],
+            probability=0.5,
+            drivers=["d"],
+            triggers=["t"],
+            evidence_ids=["ev_001"],
+        ),
+        Scenario(
+            name="Margin expansion",
+            description="Upside.",
+            tags=["bullish-1"],
+            probability=0.3,
+            drivers=["d"],
+            triggers=["t"],
+            evidence_ids=["ev_001"],
+        ),
     ]
 
 
 def _fa(evidence_ids=None) -> FundamentalAnalysis:
     ids = evidence_ids or ["ev_001", "ev_002"]
-    return FundamentalAnalysis.model_validate({
-        "claims": [{"statement": "Stable margins.", "confidence": "high", "evidence_ids": ids}],
-        "business_quality": {"view": "stable", "drivers": ["brand"]},
-        "financials": {"profitability_trend": "improving", "cash_flow_quality": "high"},
-        "valuation": {"relative_multiple_view": "near median", "simplified_dcf_view": "fair"},
-        "fundamental_risks": [{"name": "Margin risk", "impact": "medium", "signal": "GM declining", "evidence_ids": ids}],
-        "missing_fields": [],
-        "metrics": {},
-    })
+    return FundamentalAnalysis.model_validate(
+        {
+            "claims": [
+                {
+                    "statement": "Stable margins.",
+                    "confidence": "high",
+                    "evidence_ids": ids,
+                }
+            ],
+            "business_quality": {"view": "stable", "drivers": ["brand"]},
+            "financials": {
+                "profitability_trend": "improving",
+                "cash_flow_quality": "high",
+            },
+            "valuation": {
+                "relative_multiple_view": "near median",
+                "simplified_dcf_view": "fair",
+            },
+            "fundamental_risks": [
+                {
+                    "name": "Margin risk",
+                    "impact": "medium",
+                    "signal": "GM declining",
+                    "evidence_ids": ids,
+                }
+            ],
+            "missing_fields": [],
+            "metrics": {},
+        }
+    )
 
 
 def _ms(evidence_ids=None) -> MarketSentiment:
     ids = evidence_ids or ["ev_002", "ev_003"]
-    return MarketSentiment.model_validate({
-        "claims": [{"statement": "Sentiment positive.", "confidence": "medium", "evidence_ids": ids}],
-        "news_sentiment": {"direction": "positive", "confidence": "medium"},
-        "price_action": {"trend": "upward", "return_30d_pct": 3.1, "volatility": "medium"},
-        "market_narrative": {"summary": "Investors optimistic.", "crowding_risk": "low"},
-        "sentiment_risks": [{"name": "Reversal risk", "impact": "low", "signal": "weak guidance", "evidence_ids": ids}],
-        "missing_fields": [],
-    })
+    return MarketSentiment.model_validate(
+        {
+            "claims": [
+                {
+                    "statement": "Sentiment positive.",
+                    "confidence": "medium",
+                    "evidence_ids": ids,
+                }
+            ],
+            "news_sentiment": {"direction": "positive", "confidence": "medium"},
+            "price_action": {
+                "trend": "upward",
+                "return_30d_pct": 3.1,
+                "volatility": "medium",
+            },
+            "market_narrative": {
+                "summary": "Investors optimistic.",
+                "crowding_risk": "low",
+            },
+            "sentiment_risks": [
+                {
+                    "name": "Reversal risk",
+                    "impact": "low",
+                    "signal": "weak guidance",
+                    "evidence_ids": ids,
+                }
+            ],
+            "missing_fields": [],
+        }
+    )
 
 
 def _state(evidence=None, fa=None, ms=None, scenarios=None):
     return {
         "query": "Analyse AAPL",
-        "intent": ResearchIntent(ticker="AAPL", subjects=["Apple"], scope="company", time_horizon="3 years"),
+        "intent": ResearchIntent(
+            ticker="AAPL", subjects=["Apple"], scope="company", time_horizon="3 years"
+        ),
         "evidence": evidence if evidence is not None else _evidence(),
         "fundamental_analysis": fa if fa is not None else _fa(),
         "market_sentiment": ms if ms is not None else _ms(),
@@ -116,6 +182,7 @@ def _run(coro):
 
 # ── section headers ────────────────────────────────────────────────────────
 
+
 def test_llm_report_contains_required_sections():
     result = _run(report_finalize_node(_state(), llm=_mock_llm()))
     md = result["report_markdown"]
@@ -125,25 +192,54 @@ def test_llm_report_contains_required_sections():
 
 # ── validation ─────────────────────────────────────────────────────────────
 
+
 def test_validation_errors_appended_to_report():
     bad_scenarios = [
-        Scenario(name="Upside", description=".", tags=["bullish-1"], probability=0.5,
-                 drivers=["d"], triggers=["t"], evidence_ids=["ev_001"]),
-        Scenario(name="Base", description=".", tags=["neutral"], probability=0.5,
-                 drivers=["d"], triggers=["t"], evidence_ids=["ev_001"]),
-        Scenario(name="Downside", description=".", tags=["bearish-1"], probability=0.5,
-                 drivers=["d"], triggers=["t"], evidence_ids=["ev_001"]),
+        Scenario(
+            name="Upside",
+            description=".",
+            tags=["bullish-1"],
+            probability=0.5,
+            drivers=["d"],
+            triggers=["t"],
+            evidence_ids=["ev_001"],
+        ),
+        Scenario(
+            name="Base",
+            description=".",
+            tags=["neutral"],
+            probability=0.5,
+            drivers=["d"],
+            triggers=["t"],
+            evidence_ids=["ev_001"],
+        ),
+        Scenario(
+            name="Downside",
+            description=".",
+            tags=["bearish-1"],
+            probability=0.5,
+            drivers=["d"],
+            triggers=["t"],
+            evidence_ids=["ev_001"],
+        ),
     ]
-    result = _run(report_finalize_node(_state(scenarios=bad_scenarios), llm=_mock_llm()))
+    result = _run(
+        report_finalize_node(_state(scenarios=bad_scenarios), llm=_mock_llm())
+    )
     assert "Validation Errors" in result["report_markdown"]
     assert result["validation_result"].is_valid is False
 
 
 # ── LLM failure produces placeholder sections, not a crash ───────────────
 
+
 def test_llm_failure_still_returns_report():
     # Section-by-section rendering: LLM failures degrade to placeholder text
-    result = _run(report_finalize_node(_state(), llm=_mock_llm(raises=RuntimeError("all models failed"))))
+    result = _run(
+        report_finalize_node(
+            _state(), llm=_mock_llm(raises=RuntimeError("all models failed"))
+        )
+    )
     md = result["report_markdown"]
     assert isinstance(md, str) and len(md) > 50
     # Scenarios section is Python-rendered — always present when scenarios exist
@@ -158,6 +254,7 @@ def test_raises_when_no_evidence():
 
 
 # ── degraded node disclosure ───────────────────────────────────────────────
+
 
 def _degraded_fa() -> FundamentalAnalysis:
     return FundamentalAnalysis(
@@ -205,7 +302,9 @@ def test_debate_degraded_produces_warning():
     state = _state()
     state["scenario_debate"] = ScenarioDebate(
         debate_summary="Debate unavailable.",
-        calibrated_scenarios=[{"name": s.name, "probability": s.probability} for s in _scenarios()],
+        calibrated_scenarios=[
+            {"name": s.name, "probability": s.probability} for s in _scenarios()
+        ],
         confidence="low",
         debate_flags=["debate_degraded"],
         degraded=True,

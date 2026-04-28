@@ -17,14 +17,22 @@ def cache(tmp_path):
 
 # ── set / get roundtrip ────────────────────────────────────────────────────
 
+
 def test_set_and_get_roundtrip(cache):
     """Covers serialization for multiple value types."""
-    for key, value in [("s", "hello"), ("d", {"x": 1}), ("l", [1, 2]), ("i", 42), ("n", None)]:
+    for key, value in [
+        ("s", "hello"),
+        ("d", {"x": 1}),
+        ("l", [1, 2]),
+        ("i", 42),
+        ("n", None),
+    ]:
         cache.set(key, value)
         assert cache.get(key) == value
 
 
 # ── TTL expiry ─────────────────────────────────────────────────────────────
+
 
 def test_expired_entry_returns_none(cache):
     cache.set("k", "value", ttl_seconds=0)
@@ -33,6 +41,7 @@ def test_expired_entry_returns_none(cache):
 
 
 # ── overwrite ──────────────────────────────────────────────────────────────
+
 
 def test_set_overwrites_existing_key_and_ttl(cache):
     cache.set("k", "first")
@@ -46,6 +55,7 @@ def test_set_overwrites_existing_key_and_ttl(cache):
 
 # ── delete ─────────────────────────────────────────────────────────────────
 
+
 def test_explicit_delete(cache):
     cache.set("k", "value")
     cache.delete("k")
@@ -53,6 +63,7 @@ def test_explicit_delete(cache):
 
 
 # ── clear_expired ──────────────────────────────────────────────────────────
+
 
 def test_clear_expired_removes_only_expired_rows(cache):
     cache.set("expired", "v", ttl_seconds=0)
@@ -64,6 +75,7 @@ def test_clear_expired_removes_only_expired_rows(cache):
 
 
 # ── default TTL and key isolation ─────────────────────────────────────────
+
 
 def test_default_ttl_used_when_not_specified(tmp_path):
     cache = Cache(db_path=str(tmp_path / "test.db"), default_ttl=9999)

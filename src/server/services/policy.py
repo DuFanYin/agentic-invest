@@ -17,7 +17,9 @@ class PolicyInput(BaseModel):
     fa_degraded: bool
     macro_degraded: bool
     ms_degraded: bool
-    judge_reason: str  # structural|analysis_robustness|evidence_conflict|none|judge_degraded
+    judge_reason: (
+        str  # structural|analysis_robustness|evidence_conflict|none|judge_degraded
+    )
     judge_retry_question: str
     max_iterations: int
 

@@ -19,6 +19,7 @@ from src.server.utils.contract import (
 
 # ── Helpers ────────────────────────────────────────────────────────────────
 
+
 def _state(*keys: str) -> dict:
     """Build a minimal state dict with the given keys set to sentinel values."""
     return {k: f"__{k}__" for k in keys}
@@ -26,17 +27,25 @@ def _state(*keys: str) -> dict:
 
 # ── Contract table completeness ────────────────────────────────────────────
 
+
 def test_all_nodes_have_contracts():
     expected = {
-        "parse_intent", "research",
-        "fundamental_analysis", "macro_analysis", "market_sentiment",
-        "llm_judge", "policy_router",
-        "scenario_scoring", "scenario_debate", "report_finalize",
+        "parse_intent",
+        "research",
+        "fundamental_analysis",
+        "macro_analysis",
+        "market_sentiment",
+        "llm_judge",
+        "policy_router",
+        "scenario_scoring",
+        "scenario_debate",
+        "report_finalize",
     }
     assert set(NODE_CONTRACTS.keys()) == expected
 
 
 # ── assert_reads enforcement ───────────────────────────────────────────────
+
 
 @pytest.mark.parametrize("node", list(NODE_CONTRACTS.keys()))
 def test_declared_reads_do_not_raise(node):
@@ -63,6 +72,7 @@ def test_global_reads_always_allowed():
 
 # ── assert_writes enforcement ──────────────────────────────────────────────
 
+
 @pytest.mark.parametrize("node", list(NODE_CONTRACTS.keys()))
 def test_declared_writes_do_not_raise(node):
     contract = NODE_CONTRACTS[node]
@@ -87,6 +97,7 @@ def test_agent_statuses_always_allowed_in_writes():
 
 
 # ── Topology sanity: write → read coverage ────────────────────────────────
+
 
 def test_research_writes_are_readable_by_analysis_nodes():
     research_writes = NODE_CONTRACTS["research"].writes - {"agent_statuses"}
@@ -125,7 +136,12 @@ def test_no_node_writes_to_its_own_inputs():
     #   retry_questions — llm_judge and report_finalize legitimately rewrite it
     #   research_iteration — research increments its own counter each pass
     # policy_router reads the judge's hint then overwrites it with the engine decision
-    skip_fields = {"agent_statuses", "retry_questions", "research_iteration", "policy_decision"}
+    skip_fields = {
+        "agent_statuses",
+        "retry_questions",
+        "research_iteration",
+        "policy_decision",
+    }
     for node, contract in NODE_CONTRACTS.items():
         overlap = (contract.reads & contract.writes) - skip_fields
         assert not overlap, f"{node} reads and writes same fields: {overlap}"

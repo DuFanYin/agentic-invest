@@ -13,12 +13,11 @@ from src.server.services.llm_provider import LLMClient
 
 # ── helpers ────────────────────────────────────────────────────────────────
 
+
 def _ok_response(content: str = '{"ok": true}', status: int = 200) -> MagicMock:
     resp = MagicMock()
     resp.status_code = status
-    resp.json.return_value = {
-        "choices": [{"message": {"content": content}}]
-    }
+    resp.json.return_value = {"choices": [{"message": {"content": content}}]}
     resp.text = content
     return resp
 
@@ -62,6 +61,7 @@ def test_complete_raises_without_api_key():
 
 # ── retry on 429 ──────────────────────────────────────────────────────────
 
+
 def test_complete_retries_on_429_then_succeeds():
     post = AsyncMock(side_effect=[_error_response(429), _ok_response()])
     with patch("httpx.AsyncClient") as mock_http:
@@ -73,6 +73,7 @@ def test_complete_retries_on_429_then_succeeds():
 
 def test_complete_falls_back_to_next_model_after_exhausted_retries():
     call_count = {"n": 0}
+
     def side_effect(*a, **kw):
         call_count["n"] += 1
         payload = kw.get("json") or {}
@@ -99,15 +100,19 @@ def test_complete_raises_when_all_models_exhausted():
     client.retry_backoff = 0.0
 
     with patch("httpx.AsyncClient") as mock_http:
-        mock_http.return_value.__aenter__.return_value.post.return_value = _error_response(429)
+        mock_http.return_value.__aenter__.return_value.post.return_value = (
+            _error_response(429)
+        )
         with pytest.raises(RuntimeError, match="All models exhausted"):
             _run(client.complete("test"))
 
 
 # ── fatal errors skip immediately ─────────────────────────────────────────
 
+
 def test_complete_skips_model_on_400():
     call_count = {"n": 0}
+
     def side_effect(*a, **kw):
         call_count["n"] += 1
         payload = kw.get("json") or {}
@@ -126,6 +131,7 @@ def test_complete_skips_model_on_400():
 
 
 # ── call_with_retry JSON fail → simplified prompt ─────────────────────────
+
 
 def test_call_with_retry_uses_simplified_prompt_on_json_fail():
     """First call returns invalid JSON; second call (simplified prompt) succeeds."""
@@ -157,6 +163,7 @@ def test_call_with_retry_uses_simplified_prompt_on_json_fail():
 
 def test_call_with_retry_raises_when_simplified_prompt_also_fails():
     """Both attempts fail — RuntimeError propagates."""
+
     async def fake_complete(prompt: str, *, system=None, node="unknown") -> str:
         raise RuntimeError("invalid JSON from model: still broken")
 
@@ -183,6 +190,7 @@ def test_call_with_retry_propagates_non_json_errors_immediately():
 
 
 # ── request payload shape ───────────────────────────────────────────────────
+
 
 def test_complete_sends_expected_payload_shape():
     captured = {}

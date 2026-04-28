@@ -13,7 +13,11 @@ import logging
 from datetime import UTC, datetime
 from typing import Any
 
-from src.server.models.finance import CompanyInfo, FinancialsPayload, PriceHistoryPayload
+from src.server.models.finance import (
+    CompanyInfo,
+    FinancialsPayload,
+    PriceHistoryPayload,
+)
 from src.server.services.retry import retry_sync
 
 logger = logging.getLogger(__name__)
@@ -27,6 +31,7 @@ def _safe(value: Any) -> Any:
     try:
         import math
         import numpy as np  # type: ignore[import]
+
         if isinstance(value, (np.integer,)):
             return int(value)
         if isinstance(value, (np.floating,)):
@@ -66,6 +71,7 @@ class FinanceDataClient:
         """
         try:
             import yfinance as yf
+
             t = yf.Ticker(ticker)
             info = retry_sync(
                 lambda: t.info,
@@ -91,7 +97,9 @@ class FinanceDataClient:
                 "ev_to_ebitda": _safe(info.get("enterpriseToEbitda")),
                 "trailing_eps": _safe(info.get("trailingEps")),
                 "forward_eps": _safe(info.get("forwardEps")),
-                "revenue_growth_yoy": _safe(info.get("revenueGrowth")),  # decimal, e.g. 0.73
+                "revenue_growth_yoy": _safe(
+                    info.get("revenueGrowth")
+                ),  # decimal, e.g. 0.73
                 "gross_margins": _safe(info.get("grossMargins")),
                 "operating_margins": _safe(info.get("operatingMargins")),
                 "profit_margins": _safe(info.get("profitMargins")),
@@ -115,49 +123,66 @@ class FinanceDataClient:
         """
         try:
             import yfinance as yf
+
             t = yf.Ticker(ticker)
-            inc = retry_sync(lambda: t.income_stmt, retry_on=(Exception,), op_name=f"yfinance.income_stmt.{ticker}")  # annual, newest column first
-            q_inc = retry_sync(lambda: t.quarterly_income_stmt, retry_on=(Exception,), op_name=f"yfinance.quarterly_income_stmt.{ticker}")
-            cf = retry_sync(lambda: t.cashflow, retry_on=(Exception,), op_name=f"yfinance.cashflow.{ticker}")
-            bs = retry_sync(lambda: t.balance_sheet, retry_on=(Exception,), op_name=f"yfinance.balance_sheet.{ticker}")
+            inc = retry_sync(
+                lambda: t.income_stmt,
+                retry_on=(Exception,),
+                op_name=f"yfinance.income_stmt.{ticker}",
+            )  # annual, newest column first
+            q_inc = retry_sync(
+                lambda: t.quarterly_income_stmt,
+                retry_on=(Exception,),
+                op_name=f"yfinance.quarterly_income_stmt.{ticker}",
+            )
+            cf = retry_sync(
+                lambda: t.cashflow,
+                retry_on=(Exception,),
+                op_name=f"yfinance.cashflow.{ticker}",
+            )
+            bs = retry_sync(
+                lambda: t.balance_sheet,
+                retry_on=(Exception,),
+                op_name=f"yfinance.balance_sheet.{ticker}",
+            )
 
             # ── annual metrics ──────────────────────────────────────────
-            rev_latest  = _row(inc, "Total Revenue", 0)
-            rev_prior   = _row(inc, "Total Revenue", 1)
-            gp_latest   = _row(inc, "Gross Profit", 0)
-            op_latest   = _row(inc, "Operating Income", 0)
-            ni_latest   = _row(inc, "Net Income", 0)
-            eps_latest  = _row(inc, "Diluted EPS", 0)
+            rev_latest = _row(inc, "Total Revenue", 0)
+            rev_prior = _row(inc, "Total Revenue", 1)
+            gp_latest = _row(inc, "Gross Profit", 0)
+            op_latest = _row(inc, "Operating Income", 0)
+            ni_latest = _row(inc, "Net Income", 0)
+            eps_latest = _row(inc, "Diluted EPS", 0)
 
-            rev_prior2  = _row(inc, "Total Revenue", 2)  # for 3y avg
-            gp_prior    = _row(inc, "Gross Profit", 1)
-            op_prior    = _row(inc, "Operating Income", 1)
+            rev_prior2 = _row(inc, "Total Revenue", 2)  # for 3y avg
+            gp_prior = _row(inc, "Gross Profit", 1)
+            op_prior = _row(inc, "Operating Income", 1)
 
-            fcf_latest  = _row(cf, "Free Cash Flow", 0)
-            capex       = _row(cf, "Capital Expenditure", 0)
-            total_debt  = _row(bs, "Total Debt", 0)
+            fcf_latest = _row(cf, "Free Cash Flow", 0)
+            capex = _row(cf, "Capital Expenditure", 0)
+            total_debt = _row(bs, "Total Debt", 0)
 
             # ── quarterly metrics ───────────────────────────────────────
-            q_rev       = _row(q_inc, "Total Revenue", 0)
-            q_gp        = _row(q_inc, "Gross Profit", 0)
-            q_op        = _row(q_inc, "Operating Income", 0)
-            q_rev_prior = _row(q_inc, "Total Revenue", 4)   # same Q prior year
+            q_rev = _row(q_inc, "Total Revenue", 0)
+            q_gp = _row(q_inc, "Gross Profit", 0)
+            q_op = _row(q_inc, "Operating Income", 0)
+            q_rev_prior = _row(q_inc, "Total Revenue", 4)  # same Q prior year
 
             # ── derived metrics ─────────────────────────────────────────
             ttm = {
-                "revenue":              rev_latest,
+                "revenue": rev_latest,
                 "revenue_growth_yoy_pct": (
                     round((rev_latest - rev_prior) / abs(rev_prior) * 100, 2)
                     if rev_latest is not None and rev_prior not in (None, 0)
                     else None
                 ),
-                "gross_margin_pct":     _pct(gp_latest, rev_latest),
+                "gross_margin_pct": _pct(gp_latest, rev_latest),
                 "operating_margin_pct": _pct(op_latest, rev_latest),
-                "net_margin_pct":       _pct(ni_latest, rev_latest),
-                "diluted_eps":          eps_latest,
-                "free_cash_flow":       fcf_latest,
-                "capex":                capex,
-                "total_debt":           total_debt,
+                "net_margin_pct": _pct(ni_latest, rev_latest),
+                "diluted_eps": eps_latest,
+                "free_cash_flow": fcf_latest,
+                "capex": capex,
+                "total_debt": total_debt,
             }
 
             # 3-year compound revenue growth (latest vs 2 years ago)
@@ -168,24 +193,28 @@ class FinanceDataClient:
             # 3-year average operating margin
             op_margins = [
                 _pct(op_latest, rev_latest),
-                _pct(op_prior,  rev_prior),
+                _pct(op_prior, rev_prior),
             ]
             op_margins_clean = [x for x in op_margins if x is not None]
-            avg_op_margin = round(sum(op_margins_clean) / len(op_margins_clean), 2) if op_margins_clean else None
+            avg_op_margin = (
+                round(sum(op_margins_clean) / len(op_margins_clean), 2)
+                if op_margins_clean
+                else None
+            )
 
             three_year_avg = {
-                "revenue_cagr_pct":       cagr_3y,
+                "revenue_cagr_pct": cagr_3y,
                 "avg_operating_margin_pct": avg_op_margin,
             }
 
             latest_quarter = {
-                "revenue":              q_rev,
+                "revenue": q_rev,
                 "revenue_growth_yoy_pct": (
                     round((q_rev - q_rev_prior) / abs(q_rev_prior) * 100, 2)
                     if q_rev is not None and q_rev_prior not in (None, 0)
                     else None
                 ),
-                "gross_margin_pct":     _pct(q_gp, q_rev),
+                "gross_margin_pct": _pct(q_gp, q_rev),
                 "operating_margin_pct": _pct(q_op, q_rev),
             }
 
@@ -211,7 +240,9 @@ class FinanceDataClient:
         except Exception as exc:
             logger.error("get_financials(%s) failed: %s", ticker, exc)
             payload = {
-                "ttm": {}, "three_year_avg": {}, "latest_quarter": {},
+                "ttm": {},
+                "three_year_avg": {},
+                "latest_quarter": {},
                 "missing_fields": ["all — data unavailable"],
                 "retrieved_at": datetime.now(UTC).isoformat(),
                 "error": str(exc),
@@ -225,6 +256,7 @@ class FinanceDataClient:
         """
         try:
             import yfinance as yf
+
             t = yf.Ticker(ticker)
             hist = retry_sync(
                 lambda: t.history(period=period),
@@ -232,18 +264,27 @@ class FinanceDataClient:
                 op_name=f"yfinance.price_history.{ticker}",
             )
             if hist.empty:
-                return PriceHistoryPayload(error=f"no price history for {ticker}").model_dump(by_alias=True)
+                return PriceHistoryPayload(
+                    error=f"no price history for {ticker}"
+                ).model_dump(by_alias=True)
 
             close = hist["Close"]
             first, last = float(close.iloc[0]), float(close.iloc[-1])
             total_return_pct = round((last - first) / first * 100, 2)
 
             # 30-day return (or full period if shorter)
-            close_30d = hist["Close"].iloc[-min(22, len(hist)):]
-            ret_30d = round((float(close_30d.iloc[-1]) - float(close_30d.iloc[0])) / float(close_30d.iloc[0]) * 100, 2)
+            close_30d = hist["Close"].iloc[-min(22, len(hist)) :]
+            ret_30d = round(
+                (float(close_30d.iloc[-1]) - float(close_30d.iloc[0]))
+                / float(close_30d.iloc[0])
+                * 100,
+                2,
+            )
 
             daily_returns = close.pct_change().dropna()
-            volatility_annualised_pct = round(float(daily_returns.std()) * (252 ** 0.5) * 100, 2)
+            volatility_annualised_pct = round(
+                float(daily_returns.std()) * (252**0.5) * 100, 2
+            )
 
             payload = {
                 "ticker": ticker,
@@ -269,9 +310,10 @@ class FinanceDataClient:
         """
         try:
             import yfinance as yf
+
             t = yf.Ticker(ticker)
             raw_news = retry_sync(
-                lambda: (t.news or []),
+                lambda: t.news or [],
                 retry_on=(Exception,),
                 op_name=f"yfinance.news.{ticker}",
             )
@@ -284,16 +326,20 @@ class FinanceDataClient:
                 canonical = content.get("canonicalUrl") or {}
                 url = canonical.get("url") if isinstance(canonical, dict) else None
                 provider = content.get("provider") or {}
-                publisher = provider.get("displayName") if isinstance(provider, dict) else None
+                publisher = (
+                    provider.get("displayName") if isinstance(provider, dict) else None
+                )
                 published_at = content.get("pubDate") or content.get("displayTime")
                 summary = content.get("summary") or content.get("description") or ""
-                results.append({
-                    "title": title,
-                    "url": url,
-                    "publisher": publisher,
-                    "published_at": published_at,
-                    "summary": summary[:300] if summary else "",
-                })
+                results.append(
+                    {
+                        "title": title,
+                        "url": url,
+                        "publisher": publisher,
+                        "published_at": published_at,
+                        "summary": summary[:300] if summary else "",
+                    }
+                )
             return results
         except Exception as exc:
             logger.error("get_news(%s) failed: %s", ticker, exc)

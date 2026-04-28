@@ -14,6 +14,7 @@ from src.server.services.finance_data import FinanceDataClient
 
 # ── helper builders ────────────────────────────────────────────────────────
 
+
 def _make_income_stmt(
     rev=(215_938e6, 130_497e6, 60_922e6, 26_974e6),
     gp=(153_463e6, 97_858e6, 44_301e6, 15_356e6),
@@ -24,11 +25,11 @@ def _make_income_stmt(
     cols = pd.to_datetime(["2026-01-31", "2025-01-31", "2024-01-31", "2023-01-31"])
     return pd.DataFrame(
         {
-            "Total Revenue":   [np.float64(v) for v in rev],
-            "Gross Profit":    [np.float64(v) for v in gp],
-            "Operating Income":[np.float64(v) for v in op],
-            "Net Income":      [np.float64(v) for v in ni],
-            "Diluted EPS":     [np.float64(v) for v in eps],
+            "Total Revenue": [np.float64(v) for v in rev],
+            "Gross Profit": [np.float64(v) for v in gp],
+            "Operating Income": [np.float64(v) for v in op],
+            "Net Income": [np.float64(v) for v in ni],
+            "Diluted EPS": [np.float64(v) for v in eps],
         },
         index=cols,
     ).T
@@ -37,7 +38,10 @@ def _make_income_stmt(
 def _make_cashflow(fcf=96_676e6, capex=-6_042e6) -> pd.DataFrame:
     cols = pd.to_datetime(["2026-01-31"])
     return pd.DataFrame(
-        {"Free Cash Flow": [np.float64(fcf)], "Capital Expenditure": [np.float64(capex)]},
+        {
+            "Free Cash Flow": [np.float64(fcf)],
+            "Capital Expenditure": [np.float64(capex)],
+        },
         index=cols,
     ).T
 
@@ -55,9 +59,9 @@ def _make_quarterly_income(
         ["2026-01-31", "2025-10-31", "2025-07-31", "2025-04-30", "2025-01-31"]
     )
     rows = {
-        "Total Revenue":   [np.float64(q_rev), 0, 0, 0, np.float64(q_rev_prior)],
-        "Gross Profit":    [np.float64(q_gp), 0, 0, 0, 0],
-        "Operating Income":[np.float64(q_op), 0, 0, 0, 0],
+        "Total Revenue": [np.float64(q_rev), 0, 0, 0, np.float64(q_rev_prior)],
+        "Gross Profit": [np.float64(q_gp), 0, 0, 0, 0],
+        "Operating Income": [np.float64(q_op), 0, 0, 0, 0],
     }
     return pd.DataFrame(rows, index=cols).T
 
@@ -94,9 +98,11 @@ def _make_ticker_mock(info: dict | None = None, *, no_name: bool = False) -> Mag
     mock.cashflow = _make_cashflow()
     mock.balance_sheet = _make_balance_sheet()
     mock.history.return_value = pd.DataFrame(
-        {"Close": [100.0, 110.0, 120.0, 130.0, 140.0],
-         "High":  [105.0, 115.0, 125.0, 135.0, 145.0],
-         "Low":   [ 95.0, 105.0, 115.0, 125.0, 135.0]},
+        {
+            "Close": [100.0, 110.0, 120.0, 130.0, 140.0],
+            "High": [105.0, 115.0, 125.0, 135.0, 145.0],
+            "Low": [95.0, 105.0, 115.0, 125.0, 135.0],
+        },
         index=pd.date_range("2025-01-01", periods=5, freq="D"),
     )
     mock.news = [
@@ -116,6 +122,7 @@ def _make_ticker_mock(info: dict | None = None, *, no_name: bool = False) -> Mag
 
 # ── get_info ───────────────────────────────────────────────────────────────
 
+
 def test_get_info_returns_profile_fields():
     client = FinanceDataClient()
     with patch("yfinance.Ticker", return_value=_make_ticker_mock()):
@@ -131,6 +138,7 @@ def test_get_info_returns_profile_fields():
 
 # ── get_financials ─────────────────────────────────────────────────────────
 
+
 def test_get_financials_core_metrics_are_consistent():
     client = FinanceDataClient()
     with patch("yfinance.Ticker", return_value=_make_ticker_mock()):
@@ -145,7 +153,9 @@ def test_get_financials_core_metrics_are_consistent():
     assert fin["three_year_avg"]["revenue_cagr_pct"] == pytest.approx(88.2, rel=1e-1)
     assert fin["latest_quarter"]["revenue"] == pytest.approx(68_127e6, rel=1e-3)
     # (68127 - 35082) / 35082 ≈ 94.2 %
-    assert fin["latest_quarter"]["revenue_growth_yoy_pct"] == pytest.approx(94.2, rel=1e-1)
+    assert fin["latest_quarter"]["revenue_growth_yoy_pct"] == pytest.approx(
+        94.2, rel=1e-1
+    )
 
 
 def test_get_financials_marks_missing_when_revenue_nan():
@@ -175,6 +185,7 @@ def test_get_financials_exception_returns_fallback():
 
 # ── get_price_history ──────────────────────────────────────────────────────
 
+
 def test_get_price_history_return_calculation():
     client = FinanceDataClient()
     with patch("yfinance.Ticker", return_value=_make_ticker_mock()):
@@ -182,7 +193,3 @@ def test_get_price_history_return_calculation():
 
     # mock: close goes 100 → 140, so (140-100)/100 = 40%
     assert hist["period_return_pct"] == pytest.approx(40.0)
-
-
-
-

@@ -53,23 +53,28 @@ _OPENAI_MODELS = [
 
 # Cost per 1M tokens (input, output) in USD — OpenAI public pricing
 _OPENAI_PRICING: dict[str, tuple[float, float]] = {
-    "gpt-4.1":            (2.00,  8.00),
-    "gpt-4.1-mini":       (0.40,  1.60),
-    "gpt-4.1-nano":       (0.10,  0.40),
-    "gpt-4o":             (2.50, 10.00),
-    "gpt-4o-mini":        (0.15,  0.60),
-    "o3":                 (10.0,  40.0),
-    "o4-mini":            (1.10,   4.40),
+    "gpt-4.1": (2.00, 8.00),
+    "gpt-4.1-mini": (0.40, 1.60),
+    "gpt-4.1-nano": (0.10, 0.40),
+    "gpt-4o": (2.50, 10.00),
+    "gpt-4o-mini": (0.15, 0.60),
+    "o3": (10.0, 40.0),
+    "o4-mini": (1.10, 4.40),
 }
 
-def _compute_cost(model: str, prompt_tokens: int, completion_tokens: int) -> float | None:
+
+def _compute_cost(
+    model: str, prompt_tokens: int, completion_tokens: int
+) -> float | None:
     for key, (input_cost, output_cost) in _OPENAI_PRICING.items():
         if model.startswith(key):
             return round(
-                (prompt_tokens * input_cost + completion_tokens * output_cost) / 1_000_000,
+                (prompt_tokens * input_cost + completion_tokens * output_cost)
+                / 1_000_000,
                 8,
             )
     return None
+
 
 _RETRYABLE_CODES = {429, 500, 502, 503, 504}
 
@@ -78,9 +83,26 @@ def _simplify_prompt(prompt: str) -> str:
     """Strip schema/rules boilerplate, keep only the data sections."""
     lines = prompt.splitlines()
     data_start = next(
-        (i for i, l in enumerate(lines) if any(
-            marker in l for marker in ("EVIDENCE", "DATA", "MACRO DATA", "NEWS", "PRICE", "RESEARCH CONTEXT", "SUBJECT", "SCENARIOS", "AVAILABLE", "YOUR ASSIGNED", "ADVOCATE FOR")
-        )),
+        (
+            i
+            for i, l in enumerate(lines)
+            if any(
+                marker in l
+                for marker in (
+                    "EVIDENCE",
+                    "DATA",
+                    "MACRO DATA",
+                    "NEWS",
+                    "PRICE",
+                    "RESEARCH CONTEXT",
+                    "SUBJECT",
+                    "SCENARIOS",
+                    "AVAILABLE",
+                    "YOUR ASSIGNED",
+                    "ADVOCATE FOR",
+                )
+            )
+        ),
         0,
     )
     data_section = "\n".join(lines[data_start:]).strip()
@@ -107,7 +129,9 @@ class LLMClient:
         retry_backoff: float = 2.0,
         collector: LLMCallCollector | None = None,
     ) -> None:
-        self.provider = LLM_PROVIDER if LLM_PROVIDER in {"openrouter", "openai"} else "openrouter"
+        self.provider = (
+            LLM_PROVIDER if LLM_PROVIDER in {"openrouter", "openai"} else "openrouter"
+        )
         self.api_key = api_key or LLM_API_KEY
         self._models = [model] if model else self._default_models()
         resolved_base_url = (base_url or LLM_BASE_URL).rstrip("/")
@@ -119,11 +143,15 @@ class LLMClient:
 
     # ── public API ─────────────────────────────────────────────────────────
 
-    async def complete(self, prompt: str, *, system: str | None = None, node: str = "unknown") -> str:
+    async def complete(
+        self, prompt: str, *, system: str | None = None, node: str = "unknown"
+    ) -> str:
         """Send prompt, return validated JSON string. Raises RuntimeError on exhaustion."""
         return await self._run(prompt, system=system, json_mode=True, node=node)
 
-    async def complete_text(self, prompt: str, *, system: str | None = None, node: str = "unknown") -> str:
+    async def complete_text(
+        self, prompt: str, *, system: str | None = None, node: str = "unknown"
+    ) -> str:
         """Send prompt, return raw text (no JSON enforcement). For Markdown reports."""
         return await self._run(prompt, system=system, json_mode=False, node=node)
 
@@ -141,8 +169,12 @@ class LLMClient:
         except RuntimeError as exc:
             if "invalid JSON" not in str(exc):
                 raise
-            logger.warning("%s: JSON parse failed — retrying with simplified prompt", node)
-            return await self.complete(_simplify_prompt(prompt), system=system, node=node)
+            logger.warning(
+                "%s: JSON parse failed — retrying with simplified prompt", node
+            )
+            return await self.complete(
+                _simplify_prompt(prompt), system=system, node=node
+            )
 
     # ── internals ──────────────────────────────────────────────────────────
 
@@ -172,11 +204,12 @@ class LLMClient:
             return self._collector.next_id()
         return "llm_notrace"
 
-    async def _run(self, prompt: str, *, system: str | None, json_mode: bool, node: str) -> str:
+    async def _run(
+        self, prompt: str, *, system: str | None, json_mode: bool, node: str
+    ) -> str:
         if not self.api_key:
             raise RuntimeError(
-                "LLM API key is not set. "
-                "Set LLM_API_KEY in your environment."
+                "LLM API key is not set. Set LLM_API_KEY in your environment."
             )
 
         last_error: Exception | None = None
@@ -189,111 +222,165 @@ class LLMClient:
                 call_id = self._next_id()
                 started_at = datetime.now(UTC).isoformat()
 
-                self._emit(LLMCall(
-                    id=call_id, node=node,
-                    agent_tag=AGENT_TAG_BY_NODE.get(node, "?"),
-                    model=model_id, attempt=attempt,
-                    status="calling", started_at=started_at,
-                ))
+                self._emit(
+                    LLMCall(
+                        id=call_id,
+                        node=node,
+                        agent_tag=AGENT_TAG_BY_NODE.get(node, "?"),
+                        model=model_id,
+                        attempt=attempt,
+                        status="calling",
+                        started_at=started_at,
+                    )
+                )
 
                 try:
-                    content, usage = await self._call(model_id, prompt, system=system, json_mode=json_mode)
+                    content, usage = await self._call(
+                        model_id, prompt, system=system, json_mode=json_mode
+                    )
                     finished_at = datetime.now(UTC).isoformat()
                     prompt_tokens = usage.get("prompt_tokens") if usage else None
-                    completion_tokens = usage.get("completion_tokens") if usage else None
+                    completion_tokens = (
+                        usage.get("completion_tokens") if usage else None
+                    )
                     cost_usd = (
-                        _compute_cost(model_id, prompt_tokens or 0, completion_tokens or 0)
+                        _compute_cost(
+                            model_id, prompt_tokens or 0, completion_tokens or 0
+                        )
                         if (prompt_tokens is not None or completion_tokens is not None)
                         else None
                     )
-                    self._emit(LLMCall(
-                        id=call_id, node=node,
-                        agent_tag=AGENT_TAG_BY_NODE.get(node, "?"),
-                        model=model_id, attempt=attempt,
-                        status="success",
-                        latency_ms=_latency_ms(started_at, finished_at),
-                        started_at=started_at, finished_at=finished_at,
-                        prompt_tokens=prompt_tokens,
-                        completion_tokens=completion_tokens,
-                        cost_usd=cost_usd,
-                    ))
+                    self._emit(
+                        LLMCall(
+                            id=call_id,
+                            node=node,
+                            agent_tag=AGENT_TAG_BY_NODE.get(node, "?"),
+                            model=model_id,
+                            attempt=attempt,
+                            status="success",
+                            latency_ms=_latency_ms(started_at, finished_at),
+                            started_at=started_at,
+                            finished_at=finished_at,
+                            prompt_tokens=prompt_tokens,
+                            completion_tokens=completion_tokens,
+                            cost_usd=cost_usd,
+                        )
+                    )
                     return content
 
                 except _RetryableError as exc:
                     last_error = exc
                     finished_at = datetime.now(UTC).isoformat()
-                    self._emit(LLMCall(
-                        id=call_id, node=node,
-                        agent_tag=AGENT_TAG_BY_NODE.get(node, "?"),
-                        model=model_id, attempt=attempt,
-                        status="retry",
-                        latency_ms=_latency_ms(started_at, finished_at),
-                        started_at=started_at, finished_at=finished_at,
-                        error=str(exc)[:200],
-                    ))
+                    self._emit(
+                        LLMCall(
+                            id=call_id,
+                            node=node,
+                            agent_tag=AGENT_TAG_BY_NODE.get(node, "?"),
+                            model=model_id,
+                            attempt=attempt,
+                            status="retry",
+                            latency_ms=_latency_ms(started_at, finished_at),
+                            started_at=started_at,
+                            finished_at=finished_at,
+                            error=str(exc)[:200],
+                        )
+                    )
                     if attempt <= self.max_retries:
-                        wait = self.retry_backoff ** attempt
+                        wait = self.retry_backoff**attempt
                         logger.warning(
                             "model %s attempt %d/%d failed (%s) — retrying in %.1fs",
-                            model_id, attempt, self.max_retries + 1, exc, wait,
+                            model_id,
+                            attempt,
+                            self.max_retries + 1,
+                            exc,
+                            wait,
                         )
                         # Interruptible backoff that can wake up early on shutdown.
                         if await shutdown.wait_or_timeout(wait):
                             raise RuntimeError("[llm] server shutting down")
                     else:
-                        logger.warning("model %s exhausted retries, trying next", model_id)
+                        logger.warning(
+                            "model %s exhausted retries, trying next", model_id
+                        )
 
                 except _FatalError as exc:
                     last_error = exc
                     finished_at = datetime.now(UTC).isoformat()
-                    self._emit(LLMCall(
-                        id=call_id, node=node,
-                        agent_tag=AGENT_TAG_BY_NODE.get(node, "?"),
-                        model=model_id, attempt=attempt,
-                        status="failed",
-                        latency_ms=_latency_ms(started_at, finished_at),
-                        started_at=started_at, finished_at=finished_at,
-                        error=str(exc)[:200],
-                    ))
+                    self._emit(
+                        LLMCall(
+                            id=call_id,
+                            node=node,
+                            agent_tag=AGENT_TAG_BY_NODE.get(node, "?"),
+                            model=model_id,
+                            attempt=attempt,
+                            status="failed",
+                            latency_ms=_latency_ms(started_at, finished_at),
+                            started_at=started_at,
+                            finished_at=finished_at,
+                            error=str(exc)[:200],
+                        )
+                    )
                     logger.warning("model %s fatal error: %s — skipping", model_id, exc)
                     break
                 except Exception as exc:
                     # Unexpected provider/client exceptions should not bypass failover.
                     last_error = _RetryableError(f"unexpected client error: {exc}")
                     finished_at = datetime.now(UTC).isoformat()
-                    self._emit(LLMCall(
-                        id=call_id, node=node,
-                        agent_tag=AGENT_TAG_BY_NODE.get(node, "?"),
-                        model=model_id, attempt=attempt,
-                        status="retry",
-                        latency_ms=_latency_ms(started_at, finished_at),
-                        started_at=started_at, finished_at=finished_at,
-                        error=str(exc)[:200],
-                    ))
+                    self._emit(
+                        LLMCall(
+                            id=call_id,
+                            node=node,
+                            agent_tag=AGENT_TAG_BY_NODE.get(node, "?"),
+                            model=model_id,
+                            attempt=attempt,
+                            status="retry",
+                            latency_ms=_latency_ms(started_at, finished_at),
+                            started_at=started_at,
+                            finished_at=finished_at,
+                            error=str(exc)[:200],
+                        )
+                    )
                     if attempt <= self.max_retries:
-                        wait = self.retry_backoff ** attempt
+                        wait = self.retry_backoff**attempt
                         logger.warning(
                             "model %s attempt %d/%d unexpected error (%s) — retrying in %.1fs",
-                            model_id, attempt, self.max_retries + 1, exc, wait,
+                            model_id,
+                            attempt,
+                            self.max_retries + 1,
+                            exc,
+                            wait,
                         )
                         if await shutdown.wait_or_timeout(wait):
                             raise RuntimeError("[llm] server shutting down")
                     else:
-                        logger.warning("model %s exhausted retries after unexpected error, trying next", model_id)
+                        logger.warning(
+                            "model %s exhausted retries after unexpected error, trying next",
+                            model_id,
+                        )
 
-        raise RuntimeError(f"[llm] All models exhausted. Last error: {last_error}") from last_error
+        raise RuntimeError(
+            f"[llm] All models exhausted. Last error: {last_error}"
+        ) from last_error
 
-    async def _call(self, model_id: str, prompt: str, *, system: str | None, json_mode: bool) -> tuple[str, dict | None]:
+    async def _call(
+        self, model_id: str, prompt: str, *, system: str | None, json_mode: bool
+    ) -> tuple[str, dict | None]:
         default_system = (
             "Return only valid JSON. Do not include markdown, comments, or extra text."
-            if json_mode else None
+            if json_mode
+            else None
         )
         messages = []
         if system or default_system:
             messages.append({"role": "system", "content": system or default_system})
         messages.append({"role": "user", "content": prompt})
 
-        payload: dict = {"model": model_id, "messages": messages, "temperature": 0, "max_tokens": 2048}
+        payload: dict = {
+            "model": model_id,
+            "messages": messages,
+            "temperature": 0,
+            "max_tokens": 2048,
+        }
         if json_mode:
             payload["response_format"] = {"type": "json_object"}
 
@@ -347,13 +434,16 @@ class LLMClient:
             try:
                 json.loads(content)
             except json.JSONDecodeError as exc:
-                raise _RetryableError(f"invalid JSON from model: {content[:120]}") from exc
+                raise _RetryableError(
+                    f"invalid JSON from model: {content[:120]}"
+                ) from exc
 
         usage: dict | None = data.get("usage") if isinstance(data, dict) else None
         return content, usage
 
 
 # ── helpers ────────────────────────────────────────────────────────────────
+
 
 def _latency_ms(started_at: str, finished_at: str) -> int:
     try:
@@ -364,4 +454,3 @@ def _latency_ms(started_at: str, finished_at: str) -> int:
         return max(0, int(delta * 1000))
     except (TypeError, ValueError):
         return 0
-

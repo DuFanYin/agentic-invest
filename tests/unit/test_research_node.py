@@ -66,16 +66,37 @@ def _mock_finance(
         "52w_low": 124.17,
     }
     client.get_news.return_value = news or [
-        {"title": "Apple reports record earnings", "url": "https://example.com/1", "published_at": "2026-01-01T00:00:00Z"},
-        {"title": "Apple Vision Pro sales update", "url": "https://example.com/2", "published_at": "2026-01-02T00:00:00Z"},
+        {
+            "title": "Apple reports record earnings",
+            "url": "https://example.com/1",
+            "published_at": "2026-01-01T00:00:00Z",
+        },
+        {
+            "title": "Apple Vision Pro sales update",
+            "url": "https://example.com/2",
+            "published_at": "2026-01-02T00:00:00Z",
+        },
     ]
     return client
 
 
 _WEB_DEFAULTS = [
-    {"title": "Web result 1", "url": "https://web.example.com/1", "content": "Analysis...", "published_date": None, "score": 0.8},
-    {"title": "Web result 2", "url": "https://web.example.com/2", "content": "More analysis...", "published_date": None, "score": 0.7},
+    {
+        "title": "Web result 1",
+        "url": "https://web.example.com/1",
+        "content": "Analysis...",
+        "published_date": None,
+        "score": 0.8,
+    },
+    {
+        "title": "Web result 2",
+        "url": "https://web.example.com/2",
+        "content": "More analysis...",
+        "published_date": None,
+        "score": 0.7,
+    },
 ]
+
 
 def _mock_web(results: list | None = None):
     client = MagicMock()
@@ -93,10 +114,12 @@ def _mock_cache():
 def _mock_macro(fred: dict | None = None, signals: dict | None = None):
     """Macro client that returns empty data by default (no FRED key in tests)."""
     client = MagicMock()
-    client.get_all = AsyncMock(return_value={
-        "fred": fred if fred is not None else {},
-        "market_signals": signals if signals is not None else {},
-    })
+    client.get_all = AsyncMock(
+        return_value={
+            "fred": fred if fred is not None else {},
+            "market_signals": signals if signals is not None else {},
+        }
+    )
     return client
 
 
@@ -117,10 +140,15 @@ def _patch(finance=None, web=None, macro=None):
     """Context manager — patches module-level service singletons in research.py
     and the cache singletons in each capability module."""
     from contextlib import ExitStack
+
     stack = ExitStack()
     # research.py singletons (used to build capability call args)
-    stack.enter_context(patch("src.server.agents.research._finance", finance or _mock_finance()))
-    stack.enter_context(patch("src.server.agents.research._macro", macro or _mock_macro()))
+    stack.enter_context(
+        patch("src.server.agents.research._finance", finance or _mock_finance())
+    )
+    stack.enter_context(
+        patch("src.server.agents.research._macro", macro or _mock_macro())
+    )
     stack.enter_context(patch("src.server.agents.research._web", web or _mock_web()))
     stack.enter_context(patch("src.server.agents.research._cache", _mock_cache()))
     # Prevent unit tests from running real LLM backoff/retry paths via module-level _llm.
@@ -131,6 +159,7 @@ def _patch(finance=None, web=None, macro=None):
 
 
 # ── Basic shape ────────────────────────────────────────────────────────────
+
 
 def test_research_smoke_contract_and_metrics():
     with _patch():
@@ -168,6 +197,7 @@ def test_no_ticker_no_web_results_raises():
 
 
 # ── Resilience: individual service failures ────────────────────────────────
+
 
 @pytest.mark.parametrize("failed_target", ["get_info", "get_financials", "web_search"])
 def test_single_service_failure_does_not_crash(failed_target: str):
@@ -231,14 +261,27 @@ def test_research_falls_back_to_default_queries_when_llm_fails():
 
 # ── Conflict detection ─────────────────────────────────────────────────────
 
+
 def test_conflict_detected_on_reliability_divergence():
     ev = [
-        Evidence(id="ev_001", source_type="financial_api", title="A", summary="s",
-                 reliability="high", retrieved_at="2026-01-01T00:00:00Z",
-                 related_topics=["valuation"]),
-        Evidence(id="ev_002", source_type="web", title="B", summary="s",
-                 reliability="low", retrieved_at="2026-01-01T00:00:00Z",
-                 related_topics=["valuation"]),
+        Evidence(
+            id="ev_001",
+            source_type="financial_api",
+            title="A",
+            summary="s",
+            reliability="high",
+            retrieved_at="2026-01-01T00:00:00Z",
+            related_topics=["valuation"],
+        ),
+        Evidence(
+            id="ev_002",
+            source_type="web",
+            title="B",
+            summary="s",
+            reliability="low",
+            retrieved_at="2026-01-01T00:00:00Z",
+            related_topics=["valuation"],
+        ),
     ]
     conflicts = detect_conflicts(ev)
     assert len(conflicts) == 1

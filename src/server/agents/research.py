@@ -29,16 +29,16 @@ from src.server.services.web_research import WebResearchClient
 from src.server.utils.contract import NODE_CONTRACTS, assert_reads, assert_writes
 from src.server.utils.status import update_status
 
-_READS  = NODE_CONTRACTS["research"].reads
+_READS = NODE_CONTRACTS["research"].reads
 _WRITES = NODE_CONTRACTS["research"].writes
 
 logger = logging.getLogger(__name__)
 
 _finance = FinanceDataClient()
-_macro   = MacroDataClient()
-_web     = WebResearchClient()
-_cache   = Cache(db_path=CACHE_DB_PATH)
-_llm     = LLMClient()
+_macro = MacroDataClient()
+_web = WebResearchClient()
+_cache = Cache(db_path=CACHE_DB_PATH)
+_llm = LLMClient()
 
 _SYSTEM_QUERY_PLANNER = (
     "You are a tactical research analyst. "
@@ -90,9 +90,13 @@ RETRY QUESTION: {retry_q}
 ALREADY SEARCHED (do not repeat): {existing}
 """
     try:
-        raw = await llm.call_with_retry(prompt, system=_SYSTEM_QUERY_PLANNER, node="research")
+        raw = await llm.call_with_retry(
+            prompt, system=_SYSTEM_QUERY_PLANNER, node="research"
+        )
         parsed = json.loads(raw)
-        queries = [q for q in (parsed.get("queries") or []) if isinstance(q, str) and q.strip()]
+        queries = [
+            q for q in (parsed.get("queries") or []) if isinstance(q, str) and q.strip()
+        ]
         if queries:
             return queries[:5]
     except Exception:
@@ -108,19 +112,21 @@ ALREADY SEARCHED (do not repeat): {existing}
     return fallback[:5]
 
 
-async def research_node(state: ResearchState, *, llm: LLMClient | None = None) -> ResearchState:
+async def research_node(
+    state: ResearchState, *, llm: LLMClient | None = None
+) -> ResearchState:
     assert_reads(state, _READS, "research")
 
-    query           = state["query"]
-    intent          = state.get("intent")
-    plan_ctx        = state.get("plan_context")
-    research_focus  = plan_ctx.research_focus if plan_ctx else []
+    query = state["query"]
+    intent = state.get("intent")
+    plan_ctx = state.get("plan_context")
+    research_focus = plan_ctx.research_focus if plan_ctx else []
     must_have_metrics = plan_ctx.must_have_metrics if plan_ctx else []
     retry_questions = state.get("retry_questions") or []
-    retry_scope     = state.get("retry_scope")          # None = full; list = scoped
-    iteration_id    = state.get("research_iteration", 0)
-    statuses        = list(state.get("agent_statuses") or [])
-    prior_evidence  = state.get("evidence") or []
+    retry_scope = state.get("retry_scope")  # None = full; list = scoped
+    iteration_id = state.get("research_iteration", 0)
+    statuses = list(state.get("agent_statuses") or [])
+    prior_evidence = state.get("evidence") or []
 
     # When retry_scope is set, only run the listed capabilities.
     # None means full research (all caps enabled).
@@ -128,13 +134,13 @@ async def research_node(state: ResearchState, *, llm: LLMClient | None = None) -
         return retry_scope is None or cap in retry_scope
 
     retrieved_at = datetime.now(UTC).isoformat()
-    ticker       = intent.ticker if intent else None
-    subject      = (intent.subjects[0] if intent and intent.subjects else None) or query
-    ev_id        = iteration_id * 100 + 1
+    ticker = intent.ticker if intent else None
+    subject = (intent.subjects[0] if intent and intent.subjects else None) or query
+    ev_id = iteration_id * 100 + 1
 
     new_evidence: list = []
-    all_metrics:  dict = {}
-    all_missing:  list[str] = []
+    all_metrics: dict = {}
+    all_missing: list[str] = []
 
     # ── Finance (ticker-gated, scope-gated) ──────────────────────────────
     if ticker and _cap_enabled("cap.fetch_finance"):
@@ -191,37 +197,58 @@ async def research_node(state: ResearchState, *, llm: LLMClient | None = None) -
         logger.error(msg)
         if statuses:
             statuses = update_status(
-                statuses, "research",
-                lifecycle="failed", phase="collecting_evidence",
-                action="evidence collection failed", last_error=msg,
+                statuses,
+                "research",
+                lifecycle="failed",
+                phase="collecting_evidence",
+                action="evidence collection failed",
+                last_error=msg,
             )
         raise RuntimeError(msg)
 
     # ── Normalize ─────────────────────────────────────────────────────────
-    all_evidence   = (state.get("evidence") or []) + new_evidence
+    all_evidence = (state.get("evidence") or []) + new_evidence
     normalized_data = normalize_evidence(
-        query, intent, all_evidence, all_metrics, all_missing, retry_questions, iteration_id,
+        query,
+        intent,
+        all_evidence,
+        all_metrics,
+        all_missing,
+        retry_questions,
+        iteration_id,
     )
 
     # ── Status updates ────────────────────────────────────────────────────
     if statuses:
         statuses = update_status(
-            statuses, "research",
-            lifecycle="standby", phase="collecting_evidence", action="evidence collected",
+            statuses,
+            "research",
+            lifecycle="standby",
+            phase="collecting_evidence",
+            action="evidence collected",
             details=[f"evidence={len(new_evidence)}", f"iteration={iteration_id}"],
             progress_hint=f"{len(new_evidence)} evidence",
         )
         statuses = update_status(
-            statuses, "fundamental_analysis",
-            lifecycle="active", phase="analyzing_fundamentals", action="analysing fundamentals",
+            statuses,
+            "fundamental_analysis",
+            lifecycle="active",
+            phase="analyzing_fundamentals",
+            action="analysing fundamentals",
         )
         statuses = update_status(
-            statuses, "macro_analysis",
-            lifecycle="active", phase="analyzing_macro", action="analysing macro environment",
+            statuses,
+            "macro_analysis",
+            lifecycle="active",
+            phase="analyzing_macro",
+            action="analysing macro environment",
         )
         statuses = update_status(
-            statuses, "market_sentiment",
-            lifecycle="active", phase="analyzing_sentiment", action="analysing sentiment",
+            statuses,
+            "market_sentiment",
+            lifecycle="active",
+            phase="analyzing_sentiment",
+            action="analysing sentiment",
         )
 
     delta = {

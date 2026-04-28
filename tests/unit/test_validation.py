@@ -18,8 +18,12 @@ from src.server.utils.validation import (
 
 def _scenario(**kwargs) -> Scenario:
     defaults = dict(
-        name="Test", description=".", probability=1.0,
-        drivers=["d"], triggers=["t"], evidence_ids=["ev_001"],
+        name="Test",
+        description=".",
+        probability=1.0,
+        drivers=["d"],
+        triggers=["t"],
+        evidence_ids=["ev_001"],
         tags=["neutral"],
     )
     return Scenario(**{**defaults, **kwargs})
@@ -56,9 +60,12 @@ def test_evidence_completeness_fails_when_required_field_missing() -> None:
 
 # ── claim coverage ──────────────────────────────────────────────────────────
 
+
 def test_claim_coverage_flags_unknown_ids() -> None:
     analysis = FundamentalAnalysis(
-        claims=[Claim(statement="claim A", confidence="medium", evidence_ids=["ev_999"])],
+        claims=[
+            Claim(statement="claim A", confidence="medium", evidence_ids=["ev_999"])
+        ],
         business_quality=BusinessQuality(view="stable"),
         valuation=Valuation(relative_multiple_view="fair"),
         fundamental_risks=[],

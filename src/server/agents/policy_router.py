@@ -15,13 +15,17 @@ from __future__ import annotations
 import logging
 
 from src.server.agents.llm_judge import MAX_RESEARCH_ITERATIONS
-from src.server.models.analysis import FundamentalAnalysis, MacroAnalysis, MarketSentiment
+from src.server.models.analysis import (
+    FundamentalAnalysis,
+    MacroAnalysis,
+    MarketSentiment,
+)
 from src.server.models.state import ResearchState
 from src.server.services.policy import PolicyInput, evaluate_policy
 from src.server.utils.contract import NODE_CONTRACTS, assert_reads, assert_writes
 from src.server.utils.status import update_status
 
-_READS  = NODE_CONTRACTS["policy_router"].reads
+_READS = NODE_CONTRACTS["policy_router"].reads
 _WRITES = NODE_CONTRACTS["policy_router"].writes
 
 _NODE = "policy_router"
@@ -44,7 +48,9 @@ async def policy_router_node(state: ResearchState) -> ResearchState:
 
     if policy_decision is None:
         # llm_judge didn't run or failed to write — safe fallthrough
-        logger.warning("%s: no policy_decision in state — defaulting to continue", _NODE)
+        logger.warning(
+            "%s: no policy_decision in state — defaulting to continue", _NODE
+        )
         delta = {
             "retry_questions": [],
             "retry_reason": "none",
@@ -64,7 +70,9 @@ async def policy_router_node(state: ResearchState) -> ResearchState:
         research_iteration=state.get("research_iteration", 1),
         evidence_counts=_evidence_counts(evidence),
         conflict_count=len(normalized_data.conflicts) if normalized_data else 0,
-        missing_field_count=len(normalized_data.missing_fields) if normalized_data else 0,
+        missing_field_count=len(normalized_data.missing_fields)
+        if normalized_data
+        else 0,
         fa_degraded=isinstance(fa, FundamentalAnalysis) and fa.degraded,
         macro_degraded=isinstance(macro, MacroAnalysis) and macro.degraded,
         ms_degraded=isinstance(ms, MarketSentiment) and ms.degraded,
@@ -75,7 +83,10 @@ async def policy_router_node(state: ResearchState) -> ResearchState:
 
     final_decision = evaluate_policy(inp)
 
-    will_retry = final_decision.action in ("retry_full_research", "retry_capability_only")
+    will_retry = final_decision.action in (
+        "retry_full_research",
+        "retry_capability_only",
+    )
     retry_scope = (
         final_decision.targets
         if final_decision.action == "retry_capability_only" and final_decision.targets
@@ -89,7 +100,8 @@ async def policy_router_node(state: ResearchState) -> ResearchState:
 
     if statuses:
         statuses = update_status(
-            statuses, _NODE,
+            statuses,
+            _NODE,
             lifecycle="waiting" if will_retry else "standby",
             phase="gap_retry_required" if will_retry else "gap_resolved",
             action=f"routing: {final_decision.action}",
@@ -100,14 +112,19 @@ async def policy_router_node(state: ResearchState) -> ResearchState:
         )
         if will_retry:
             statuses = update_status(
-                statuses, "research",
-                lifecycle="active", phase="retrying_evidence",
+                statuses,
+                "research",
+                lifecycle="active",
+                phase="retrying_evidence",
                 action="supplementary evidence collection",
             )
         else:
             statuses = update_status(
-                statuses, "scenario_scoring",
-                lifecycle="active", phase="scoring_scenarios", action="scoring scenarios",
+                statuses,
+                "scenario_scoring",
+                lifecycle="active",
+                phase="scoring_scenarios",
+                action="scoring scenarios",
             )
 
     delta = {

@@ -87,10 +87,12 @@ class ResearchState(TypedDict, total=False):
 
     # ── Orchestrator ───────────────────────────────────────────────────────
     intent: ResearchIntent | None
-    plan_context: PlanContext | None  # consolidated planning output (replaces 4 scattered fields)
+    plan_context: (
+        PlanContext | None
+    )  # consolidated planning output (replaces 4 scattered fields)
 
     # ── Research agent ─────────────────────────────────────────────────────
-    evidence: Annotated[list[Evidence], operator.add]   # append across passes
+    evidence: Annotated[list[Evidence], operator.add]  # append across passes
     normalized_data: NormalizedData
 
     # ── Analysis agents ────────────────────────────────────────────────────
@@ -100,20 +102,20 @@ class ResearchState(TypedDict, total=False):
 
     # ── Gap / retry tracking ───────────────────────────────────────────────
     retry_questions: list[str]  # replaced each cycle — do NOT use operator.add
-    retry_reason: str           # "structural" | "evidence_conflict" | "none"
-    research_iteration: int     # incremented by research_node; read by llm_judge
+    retry_reason: str  # "structural" | "evidence_conflict" | "none"
+    research_iteration: int  # incremented by research_node; read by llm_judge
 
     # ── Policy routing ─────────────────────────────────────────────────────
     policy_decision: PolicyDecision  # written by llm_judge, finalised by policy_router
-    retry_scope: list[str] | None    # None = full research; ["cap.fetch_web"] = scoped
+    retry_scope: list[str] | None  # None = full research; ["cap.fetch_web"] = scoped
 
     # ── Scenario scoring & debate ──────────────────────────────────────────
     scenarios: list[Scenario]
     scenario_debate: ScenarioDebate
 
     # ── Report & validation ────────────────────────────────────────────────
-    narrative_sections: dict[str, str]   # section_id → LLM-written markdown
-    report_markdown: str                 # full export document
+    narrative_sections: dict[str, str]  # section_id → LLM-written markdown
+    report_markdown: str  # full export document
     report_json: dict[str, Any]
     validation_result: ValidationResult
     quality_metrics: QualityMetrics

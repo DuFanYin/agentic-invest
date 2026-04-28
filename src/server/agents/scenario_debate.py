@@ -21,7 +21,7 @@ from src.server.utils.contract import NODE_CONTRACTS, assert_reads, assert_write
 from src.server.utils.status import update_status
 from src.server.utils.validation import SCENARIO_PROB_TOLERANCE
 
-_READS  = NODE_CONTRACTS["scenario_debate"].reads
+_READS = NODE_CONTRACTS["scenario_debate"].reads
 _WRITES = NODE_CONTRACTS["scenario_debate"].writes
 
 logger = logging.getLogger(__name__)
@@ -99,9 +99,10 @@ Hard constraints:
 
 # ── Context builders ───────────────────────────────────────────────────────
 
+
 def _shared_context(scenarios: list[Scenario], fa, macro, sentiment, evidence) -> str:
     scenario_lines = "\n".join(
-        f"  {i+1}. {s.name} [initial prob: {s.probability:.3f}] — {s.description[:120]}"
+        f"  {i + 1}. {s.name} [initial prob: {s.probability:.3f}] — {s.description[:120]}"
         for i, s in enumerate(scenarios)
     )
     evidence_ids = ", ".join(ev.id for ev in evidence) if evidence else "none"
@@ -177,10 +178,13 @@ def _arbitrator_prompt(
 
 # ── Validation & fallback ──────────────────────────────────────────────────
 
+
 def _degraded_debate(scenarios: list[Scenario]) -> ScenarioDebate:
     return ScenarioDebate(
         debate_summary="Debate unavailable.",
-        calibrated_scenarios=[{"name": s.name, "probability": s.probability} for s in scenarios],
+        calibrated_scenarios=[
+            {"name": s.name, "probability": s.probability} for s in scenarios
+        ],
         confidence="low",
         debate_flags=["debate_degraded"],
         degraded=True,
@@ -201,13 +205,15 @@ def _validate_and_fix(
             after = before + (0.15 if delta > 0 else -0.15)
             after = max(0.0, min(1.0, after))
             delta = round(after - before, 6)
-        adjustments.append(ProbabilityAdjustment(
-            scenario_name=adj["scenario_name"],
-            before=round(before, 6),
-            after=round(after, 6),
-            delta=round(delta, 6),
-            reason=adj.get("reason", ""),
-        ))
+        adjustments.append(
+            ProbabilityAdjustment(
+                scenario_name=adj["scenario_name"],
+                before=round(before, 6),
+                after=round(after, 6),
+                delta=round(delta, 6),
+                reason=adj.get("reason", ""),
+            )
+        )
 
     calibrated = raw.get("calibrated_scenarios", [])
     baseline_by_name = {s.name: s for s in scenarios}
@@ -246,6 +252,7 @@ def _validate_and_fix(
 
 # ── Core debate logic ──────────────────────────────────────────────────────
 
+
 async def _run_advocate(
     scenario: Scenario,
     context: str,
@@ -263,7 +270,10 @@ async def _run_advocate(
 
 async def _run_debate(
     scenarios: list[Scenario],
-    fa, macro, sentiment, evidence,
+    fa,
+    macro,
+    sentiment,
+    evidence,
     llm: LLMClient,
     statuses: list,
 ) -> tuple[ScenarioDebate, list]:
@@ -271,8 +281,10 @@ async def _run_debate(
 
     # Round 1: all scenario advocates run concurrently
     statuses = update_status(
-        statuses, "scenario_debate",
-        lifecycle="active", phase="debating_scenarios",
+        statuses,
+        "scenario_debate",
+        lifecycle="active",
+        phase="debating_scenarios",
         action=f"advocates debating ({len(scenarios)} scenarios)",
     )
     advocate_tasks = [_run_advocate(s, context, llm) for s in scenarios]
@@ -286,18 +298,24 @@ async def _run_debate(
 
     succeeded = len(advocacies)
     total = len(scenarios)
-    logger.info("%s: round 1 complete — %d/%d advocates succeeded", _NODE, succeeded, total)
+    logger.info(
+        "%s: round 1 complete — %d/%d advocates succeeded", _NODE, succeeded, total
+    )
 
     # Round 2: single arbitrator sees all advocacy statements
     statuses = update_status(
-        statuses, "scenario_debate",
-        lifecycle="active", phase="debating_scenarios",
+        statuses,
+        "scenario_debate",
+        lifecycle="active",
+        phase="debating_scenarios",
         action="arbitrator ruling",
         progress_hint=f"{succeeded}/{total} advocates",
     )
     arb_prompt = _arbitrator_prompt(scenarios, advocacies, context)
     try:
-        raw = await llm.call_with_retry(arb_prompt, system=_SYSTEM_ARBITRATOR, node=_NODE)
+        raw = await llm.call_with_retry(
+            arb_prompt, system=_SYSTEM_ARBITRATOR, node=_NODE
+        )
         parsed = json.loads(raw)
         debate = _validate_and_fix(parsed, scenarios, advocacies)
         if succeeded < total:
@@ -309,6 +327,7 @@ async def _run_debate(
 
 
 # ── Node entry point ───────────────────────────────────────────────────────
+
 
 async def scenario_debate_node(
     state: ResearchState, *, llm: LLMClient = _default_llm
@@ -325,11 +344,14 @@ async def scenario_debate_node(
     if not scenarios:
         debate = _degraded_debate([])
     else:
-        debate, statuses = await _run_debate(scenarios, fa, macro, sentiment, evidence, llm, statuses)
+        debate, statuses = await _run_debate(
+            scenarios, fa, macro, sentiment, evidence, llm, statuses
+        )
 
     flags_str = ",".join(debate.debate_flags) if debate.debate_flags else "none"
     statuses = update_status(
-        statuses, "scenario_debate",
+        statuses,
+        "scenario_debate",
         lifecycle="degraded" if debate.degraded else "standby",
         phase="debating_scenarios",
         action="debate degraded" if debate.degraded else "debate complete",
@@ -341,8 +363,11 @@ async def scenario_debate_node(
         ],
     )
     statuses = update_status(
-        statuses, "report_finalize",
-        lifecycle="active", phase="generating_report", action="generating report",
+        statuses,
+        "report_finalize",
+        lifecycle="active",
+        phase="generating_report",
+        action="generating report",
     )
 
     delta = {"scenario_debate": debate, "agent_statuses": statuses}

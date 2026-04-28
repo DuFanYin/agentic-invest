@@ -33,6 +33,7 @@ _EXPECTED_PARALLEL_GROUPS: dict[str, set[str]] = {
 
 # ── Registry completeness ─────────────────────────────────────────────────
 
+
 def test_registry_covers_all_graph_nodes():
     assert set(AGENT_REGISTRY.keys()) == _GRAPH_NODES, (
         f"Registry missing: {_GRAPH_NODES - set(AGENT_REGISTRY.keys())}, "
@@ -51,6 +52,7 @@ def test_node_contracts_derived_from_registry():
 
 # ── Failure mode validity ─────────────────────────────────────────────────
 
+
 def test_failure_modes_are_valid():
     for agent_id, entry in AGENT_REGISTRY.items():
         assert entry.failure_mode in ("fail", "degrade"), (
@@ -62,8 +64,11 @@ def test_capability_deps_only_on_nodes_that_use_capabilities():
     """Only nodes that actually call capabilities should declare capability_deps.
     Pure LLM-synthesis nodes (no data fetching) should have empty capability_deps."""
     pure_llm_nodes = {
-        "parse_intent", "llm_judge", "scenario_scoring",
-        "scenario_debate", "report_finalize",
+        "parse_intent",
+        "llm_judge",
+        "scenario_scoring",
+        "scenario_debate",
+        "report_finalize",
     }
     for agent_id in pure_llm_nodes:
         entry = AGENT_REGISTRY[agent_id]
@@ -74,6 +79,7 @@ def test_capability_deps_only_on_nodes_that_use_capabilities():
 
 
 # ── Parallel group consistency ────────────────────────────────────────────
+
 
 def test_parallel_groups_match_expected_members():
     by_group: dict[str, set[str]] = {}
@@ -98,9 +104,15 @@ def test_parallel_group_nodes_are_all_degrade_mode():
 
 # ── Data-flow topology sanity ─────────────────────────────────────────────
 
+
 def test_no_node_reads_and_writes_same_field():
     # policy_router reads the judge's hint then overwrites it with the engine decision
-    skip = {"agent_statuses", "retry_questions", "research_iteration", "policy_decision"}
+    skip = {
+        "agent_statuses",
+        "retry_questions",
+        "research_iteration",
+        "policy_decision",
+    }
     for agent_id, entry in AGENT_REGISTRY.items():
         overlap = (entry.reads & entry.writes) - skip
         assert not overlap, f"{agent_id} reads and writes same fields: {overlap}"
@@ -125,11 +137,19 @@ def test_debate_output_feeds_report():
 
 def test_plan_context_flows_correctly():
     assert "plan_context" in AGENT_REGISTRY["parse_intent"].writes
-    for node in ("research", "fundamental_analysis", "scenario_scoring", "report_finalize"):
-        assert "plan_context" in AGENT_REGISTRY[node].reads, f"{node} doesn't read plan_context"
+    for node in (
+        "research",
+        "fundamental_analysis",
+        "scenario_scoring",
+        "report_finalize",
+    ):
+        assert "plan_context" in AGENT_REGISTRY[node].reads, (
+            f"{node} doesn't read plan_context"
+        )
 
 
 # ── depends_on graph is acyclic (basic check) ────────────────────────────
+
 
 def test_depends_on_no_self_reference():
     for agent_id, entry in AGENT_REGISTRY.items():

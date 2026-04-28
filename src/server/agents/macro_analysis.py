@@ -11,7 +11,7 @@ from src.server.services.llm_provider import LLMClient
 from src.server.utils.contract import NODE_CONTRACTS, assert_reads, assert_writes
 from src.server.utils.status import update_status
 
-_READS  = NODE_CONTRACTS["macro_analysis"].reads
+_READS = NODE_CONTRACTS["macro_analysis"].reads
 _WRITES = NODE_CONTRACTS["macro_analysis"].writes
 
 logger = logging.getLogger(__name__)
@@ -48,9 +48,10 @@ Rules:
 
 
 def _build_prompt(macro_evidence, all_evidence, intent) -> str:
-    macro_lines = "\n".join(
-        f"[{ev.id}] {ev.summary}" for ev in macro_evidence
-    ) or "No macro data available."
+    macro_lines = (
+        "\n".join(f"[{ev.id}] {ev.summary}" for ev in macro_evidence)
+        or "No macro data available."
+    )
 
     supplemental_lines = "\n".join(
         f"[{ev.id}] ({ev.source_type}) {ev.summary}"
@@ -75,7 +76,7 @@ MACRO DATA (primary source):
 {macro_lines}
 
 SUPPLEMENTAL EVIDENCE (for context only):
-{supplemental_lines or 'None'}
+{supplemental_lines or "None"}
 """
 
 
@@ -89,8 +90,11 @@ async def macro_analysis_node(
     statuses = list(state.get("agent_statuses") or [])
     if statuses:
         statuses = update_status(
-            statuses, "macro_analysis",
-            lifecycle="active", phase="analyzing_macro", action="building macro view",
+            statuses,
+            "macro_analysis",
+            lifecycle="active",
+            phase="analyzing_macro",
+            action="building macro view",
         )
 
     macro_evidence = [ev for ev in evidence if ev.source_type == "macro_api"]
@@ -114,14 +118,20 @@ async def macro_analysis_node(
         )
         if statuses:
             statuses = update_status(
-                statuses, "macro_analysis",
-                lifecycle="degraded", phase="analyzing_macro", action="macro analysis degraded",
+                statuses,
+                "macro_analysis",
+                lifecycle="degraded",
+                phase="analyzing_macro",
+                action="macro analysis degraded",
             )
 
     if statuses:
         statuses = update_status(
-            statuses, "macro_analysis",
-            lifecycle="standby", phase="analyzing_macro", action="macro ready",
+            statuses,
+            "macro_analysis",
+            lifecycle="standby",
+            phase="analyzing_macro",
+            action="macro ready",
             details=[
                 f"rate_env={result.rate_environment}",
                 f"growth_env={result.growth_environment}",
@@ -129,8 +139,11 @@ async def macro_analysis_node(
             ],
         )
         statuses = update_status(
-            statuses, "llm_judge",
-            lifecycle="active", phase="evaluating_gaps", action="checking for gaps",
+            statuses,
+            "llm_judge",
+            lifecycle="active",
+            phase="evaluating_gaps",
+            action="checking for gaps",
         )
 
     delta = {

@@ -6,14 +6,19 @@ import json
 import logging
 from dataclasses import dataclass, field
 
-from src.server.models.analysis import CustomSection, PlanContext, ReportPlan, ReportSection
+from src.server.models.analysis import (
+    CustomSection,
+    PlanContext,
+    ReportPlan,
+    ReportSection,
+)
 from src.server.models.intent import ResearchIntent
 from src.server.models.state import ResearchState
 from src.server.services.llm_provider import LLMClient
 from src.server.utils.contract import NODE_CONTRACTS, assert_reads, assert_writes
 from src.server.utils.status import initial_agent_statuses, update_status
 
-_READS  = NODE_CONTRACTS["parse_intent"].reads
+_READS = NODE_CONTRACTS["parse_intent"].reads
 _WRITES = NODE_CONTRACTS["parse_intent"].writes
 
 logger = logging.getLogger(__name__)
@@ -69,18 +74,50 @@ class PlanningResult:
 
 # ── Default report plans per query type ────────────────────────────────────
 
+
 def _default_report_plan(report_type: str = "general") -> ReportPlan:
     base_sections = [
-        ReportSection(id="executive_summary",    title="Executive Summary",       source="all",                  required=True),
-        ReportSection(id="fundamental_analysis", title="Fundamental Analysis",    source="fundamental_analysis", required=True),
-        ReportSection(id="macro_environment",    title="Macro Environment",       source="macro_analysis",       required=True),
-        ReportSection(id="market_sentiment",     title="Market Sentiment",        source="market_sentiment",     required=True),
-        ReportSection(id="scenarios",            title="Future Scenarios",        source="scenarios",            required=True),
-        ReportSection(id="scenario_debate",      title="Scenario Calibration",    source="scenario_debate",      required=True),
-        ReportSection(id="conclusion",           title="Conclusion & What To Watch", source="all",              required=True),
+        ReportSection(
+            id="executive_summary",
+            title="Executive Summary",
+            source="all",
+            required=True,
+        ),
+        ReportSection(
+            id="fundamental_analysis",
+            title="Fundamental Analysis",
+            source="fundamental_analysis",
+            required=True,
+        ),
+        ReportSection(
+            id="macro_environment",
+            title="Macro Environment",
+            source="macro_analysis",
+            required=True,
+        ),
+        ReportSection(
+            id="market_sentiment",
+            title="Market Sentiment",
+            source="market_sentiment",
+            required=True,
+        ),
+        ReportSection(
+            id="scenarios", title="Future Scenarios", source="scenarios", required=True
+        ),
+        ReportSection(
+            id="scenario_debate",
+            title="Scenario Calibration",
+            source="scenario_debate",
+            required=True,
+        ),
+        ReportSection(
+            id="conclusion",
+            title="Conclusion & What To Watch",
+            source="all",
+            required=True,
+        ),
     ]
     return ReportPlan(report_type=report_type, sections=base_sections)
-
 
 
 def _parse_custom_sections(raw: dict) -> list[CustomSection]:
@@ -102,6 +139,7 @@ def _parse_custom_sections(raw: dict) -> list[CustomSection]:
 
 # ── Core plan() function ────────────────────────────────────────────────────
 
+
 async def plan(query: str, llm_client: LLMClient) -> PlanningResult:
     prompt = f"{_SCHEMA}\n\nUser query: {query}"
     try:
@@ -115,17 +153,29 @@ async def plan(query: str, llm_client: LLMClient) -> PlanningResult:
             ticker=parsed.get("ticker"),
             risk_level=parsed.get("risk_level"),
             time_horizon=parsed.get("time_horizon"),
-            required_outputs=parsed.get("required_outputs") or ["valuation", "risks", "scenarios"],
+            required_outputs=parsed.get("required_outputs")
+            or ["valuation", "risks", "scenarios"],
         )
 
-        research_focus = [s for s in (parsed.get("research_focus") or []) if isinstance(s, str)]
-        must_have_metrics = [s for s in (parsed.get("must_have_metrics") or []) if isinstance(s, str)]
+        research_focus = [
+            s for s in (parsed.get("research_focus") or []) if isinstance(s, str)
+        ]
+        must_have_metrics = [
+            s for s in (parsed.get("must_have_metrics") or []) if isinstance(s, str)
+        ]
         plan_notes = [s for s in (parsed.get("plan_notes") or []) if isinstance(s, str)]
 
         if not research_focus:
-            research_focus = [f"Analyse {', '.join(intent.subjects)} for {intent.intent.replace('_', ' ')}"]
+            research_focus = [
+                f"Analyse {', '.join(intent.subjects)} for {intent.intent.replace('_', ' ')}"
+            ]
         if not must_have_metrics:
-            must_have_metrics = ["revenue", "gross_margin_pct", "pe_ratio", "free_cash_flow"]
+            must_have_metrics = [
+                "revenue",
+                "gross_margin_pct",
+                "pe_ratio",
+                "free_cash_flow",
+            ]
         if not plan_notes:
             plan_notes = [f"Horizon: {intent.time_horizon or 'unspecified'}"]
 
@@ -155,7 +205,12 @@ async def plan(query: str, llm_client: LLMClient) -> PlanningResult:
         return PlanningResult(
             intent=intent,
             research_focus=[f"General investment analysis: {query}"],
-            must_have_metrics=["revenue", "gross_margin_pct", "pe_ratio", "free_cash_flow"],
+            must_have_metrics=[
+                "revenue",
+                "gross_margin_pct",
+                "pe_ratio",
+                "free_cash_flow",
+            ],
             plan_notes=["No specific plan generated — LLM parse failed"],
             report_plan=_default_report_plan("general"),
             custom_sections=[],
@@ -174,8 +229,11 @@ def make_planning_node(llm_client: LLMClient):
         result = await plan(state["query"], llm_client)
 
         statuses = update_status(
-            statuses, _NODE,
-            lifecycle="active", phase="dispatching", action="plan ready",
+            statuses,
+            _NODE,
+            lifecycle="active",
+            phase="dispatching",
+            action="plan ready",
             details=[
                 f"intent={result.intent.intent}",
                 f"scope={result.intent.scope}",
@@ -184,8 +242,11 @@ def make_planning_node(llm_client: LLMClient):
             ],
         )
         statuses = update_status(
-            statuses, "research",
-            lifecycle="active", phase="collecting_evidence", action="collecting evidence",
+            statuses,
+            "research",
+            lifecycle="active",
+            phase="collecting_evidence",
+            action="collecting evidence",
         )
         delta = {
             "intent": result.intent,
@@ -202,4 +263,5 @@ def make_planning_node(llm_client: LLMClient):
         }
         assert_writes(delta, _WRITES, _NODE)
         return delta
+
     return planning_agent_node

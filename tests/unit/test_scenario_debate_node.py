@@ -19,9 +19,27 @@ def _run(coro):
 
 def _scenarios() -> list[Scenario]:
     return [
-        Scenario(id="sc_001", name="AI Supercycle", description="AI demand remains strong.", probability=0.45, tags=["bullish-2"]),
-        Scenario(id="sc_002", name="Soft Landing", description="Moderate growth continues.", probability=0.35, tags=["neutral"]),
-        Scenario(id="sc_003", name="Capex Retreat", description="Hyperscalers cut AI spending.", probability=0.20, tags=["bearish-2"]),
+        Scenario(
+            id="sc_001",
+            name="AI Supercycle",
+            description="AI demand remains strong.",
+            probability=0.45,
+            tags=["bullish-2"],
+        ),
+        Scenario(
+            id="sc_002",
+            name="Soft Landing",
+            description="Moderate growth continues.",
+            probability=0.35,
+            tags=["neutral"],
+        ),
+        Scenario(
+            id="sc_003",
+            name="Capex Retreat",
+            description="Hyperscalers cut AI spending.",
+            probability=0.20,
+            tags=["bearish-2"],
+        ),
     ]
 
 
@@ -59,7 +77,7 @@ def _arbitrator_response(overrides: dict | None = None) -> dict:
         ],
         "calibrated_scenarios": [
             {"name": "AI Supercycle", "probability": 0.50, "tags": ["bullish-2"]},
-            {"name": "Soft Landing",  "probability": 0.35, "tags": ["neutral"]},
+            {"name": "Soft Landing", "probability": 0.35, "tags": ["neutral"]},
             {"name": "Capex Retreat", "probability": 0.15, "tags": ["bearish-2"]},
         ],
         "confidence": "high",
@@ -115,6 +133,7 @@ def _state(scenarios=None):
 
 # ── output shape ───────────────────────────────────────────────────────────
 
+
 def test_result_shape_and_core_fields():
     result = _run(scenario_debate_node(_state(), llm=_mock_llm()))
     debate = result["scenario_debate"]
@@ -126,16 +145,22 @@ def test_result_shape_and_core_fields():
 
 # ── probability constraints ────────────────────────────────────────────────
 
+
 def test_calibrated_probabilities_sum_to_one():
     result = _run(scenario_debate_node(_state(), llm=_mock_llm()))
-    total = sum(s.get("probability", 0) for s in result["scenario_debate"].calibrated_scenarios)
+    total = sum(
+        s.get("probability", 0) for s in result["scenario_debate"].calibrated_scenarios
+    )
     assert abs(total - 1.0) < 0.01
 
 
 # ── degraded paths ─────────────────────────────────────────────────────────
 
+
 def test_degraded_when_all_advocates_fail():
-    result = _run(scenario_debate_node(_state(), llm=_mock_llm(all_advocates_fail=True)))
+    result = _run(
+        scenario_debate_node(_state(), llm=_mock_llm(all_advocates_fail=True))
+    )
     debate = result["scenario_debate"]
     assert isinstance(debate, ScenarioDebate)
     assert debate.degraded is True
@@ -147,5 +172,3 @@ def test_degraded_when_arbitrator_fails():
     debate = result["scenario_debate"]
     assert debate.degraded is True
     assert "debate_degraded" in debate.debate_flags
-
-

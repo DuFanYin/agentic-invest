@@ -18,11 +18,12 @@ from src.server.services.finance_data import FinanceDataClient
 
 logger = logging.getLogger(__name__)
 
-_FINANCE_TTL = 3600   # 1 hour
+_FINANCE_TTL = 3600  # 1 hour
 
 
 def _cache_key(prefix: str, *parts: str) -> str:
     import hashlib
+
     payload = ":".join(parts)
     return f"{prefix}:{hashlib.sha256(payload.encode()).hexdigest()[:16]}"
 
@@ -30,7 +31,7 @@ def _cache_key(prefix: str, *parts: str) -> str:
 @dataclass
 class FinanceFetchResult:
     evidence: list[Evidence]
-    metrics: dict                  # ttm, three_year_avg, latest_quarter, price_history
+    metrics: dict  # ttm, three_year_avg, latest_quarter, price_history
     missing_fields: list[str]
     next_ev_id: int
 
@@ -57,22 +58,24 @@ async def fetch_finance_evidence(
             if info:
                 cache.set(ck, info, ttl_seconds=_FINANCE_TTL)
         if info:
-            evidence.append(Evidence(
-                id=f"ev_{ev_id:03d}",
-                source_type="financial_api",
-                title=f"{info.get('name', ticker)} — company profile",
-                url=f"https://finance.yahoo.com/quote/{ticker}",
-                retrieved_at=retrieved_at,
-                summary=(
-                    f"{info.get('name', ticker)} ({info.get('sector', 'unknown sector')}) — "
-                    f"market cap {info.get('market_cap', 'N/A')}, "
-                    f"P/E {info.get('trailing_pe', 'N/A')}, "
-                    f"EV/EBITDA {info.get('ev_to_ebitda', 'N/A')}. "
-                    f"{info.get('description', '')[:300]}"
-                ),
-                reliability="high",
-                related_topics=["company_profile", "valuation", "sector"],
-            ))
+            evidence.append(
+                Evidence(
+                    id=f"ev_{ev_id:03d}",
+                    source_type="financial_api",
+                    title=f"{info.get('name', ticker)} — company profile",
+                    url=f"https://finance.yahoo.com/quote/{ticker}",
+                    retrieved_at=retrieved_at,
+                    summary=(
+                        f"{info.get('name', ticker)} ({info.get('sector', 'unknown sector')}) — "
+                        f"market cap {info.get('market_cap', 'N/A')}, "
+                        f"P/E {info.get('trailing_pe', 'N/A')}, "
+                        f"EV/EBITDA {info.get('ev_to_ebitda', 'N/A')}. "
+                        f"{info.get('description', '')[:300]}"
+                    ),
+                    reliability="high",
+                    related_topics=["company_profile", "valuation", "sector"],
+                )
+            )
             ev_id += 1
     except Exception:
         logger.warning("get_info failed for %s", ticker, exc_info=True)
@@ -110,16 +113,18 @@ async def fetch_finance_evidence(
             if missing_fields:
                 summary_parts.append(f"missing: {', '.join(missing_fields)}")
 
-            evidence.append(Evidence(
-                id=f"ev_{ev_id:03d}",
-                source_type="financial_api",
-                title=f"{ticker} — financial statements",
-                url=f"https://finance.yahoo.com/quote/{ticker}/financials",
-                retrieved_at=retrieved_at,
-                summary=". ".join(summary_parts),
-                reliability="high",
-                related_topics=["revenue", "margin", "profitability"],
-            ))
+            evidence.append(
+                Evidence(
+                    id=f"ev_{ev_id:03d}",
+                    source_type="financial_api",
+                    title=f"{ticker} — financial statements",
+                    url=f"https://finance.yahoo.com/quote/{ticker}/financials",
+                    retrieved_at=retrieved_at,
+                    summary=". ".join(summary_parts),
+                    reliability="high",
+                    related_topics=["revenue", "margin", "profitability"],
+                )
+            )
             ev_id += 1
     except Exception:
         logger.warning("get_financials failed for %s", ticker, exc_info=True)
@@ -148,16 +153,18 @@ async def fetch_finance_evidence(
             if hi52 is not None and lo52 is not None:
                 parts.append(f"52w range ${lo52:.2f}–${hi52:.2f}")
 
-            evidence.append(Evidence(
-                id=f"ev_{ev_id:03d}",
-                source_type="financial_api",
-                title=f"{ticker} — price history",
-                url=f"https://finance.yahoo.com/quote/{ticker}/history",
-                retrieved_at=retrieved_at,
-                summary=". ".join(parts),
-                reliability="high",
-                related_topics=["price", "returns", "volatility"],
-            ))
+            evidence.append(
+                Evidence(
+                    id=f"ev_{ev_id:03d}",
+                    source_type="financial_api",
+                    title=f"{ticker} — price history",
+                    url=f"https://finance.yahoo.com/quote/{ticker}/history",
+                    retrieved_at=retrieved_at,
+                    summary=". ".join(parts),
+                    reliability="high",
+                    related_topics=["price", "returns", "volatility"],
+                )
+            )
             ev_id += 1
             metrics["price_history"] = price
     except Exception:
@@ -171,17 +178,19 @@ async def fetch_finance_evidence(
             news_items = await asyncio.to_thread(client.get_news, ticker)
             cache.set(ck, news_items, ttl_seconds=_FINANCE_TTL)
         for item in news_items[:5]:
-            evidence.append(Evidence(
-                id=f"ev_{ev_id:03d}",
-                source_type="news",
-                title=item.get("title", "News item"),
-                url=item.get("url"),
-                published_at=item.get("published_at"),
-                retrieved_at=retrieved_at,
-                summary=item.get("title", ""),
-                reliability="medium",
-                related_topics=["news", ticker.lower()],
-            ))
+            evidence.append(
+                Evidence(
+                    id=f"ev_{ev_id:03d}",
+                    source_type="news",
+                    title=item.get("title", "News item"),
+                    url=item.get("url"),
+                    published_at=item.get("published_at"),
+                    retrieved_at=retrieved_at,
+                    summary=item.get("title", ""),
+                    reliability="medium",
+                    related_topics=["news", ticker.lower()],
+                )
+            )
             ev_id += 1
     except Exception:
         logger.warning("get_news failed for %s", ticker, exc_info=True)

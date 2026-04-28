@@ -25,8 +25,8 @@ class AgentRegistryEntry:
     writes: frozenset[str]
 
     # Scheduling intent
-    parallel_group: str | None   # nodes in the same group run concurrently in the graph
-    depends_on: list[str]        # upstream agents whose writes this node needs
+    parallel_group: str | None  # nodes in the same group run concurrently in the graph
+    depends_on: list[str]  # upstream agents whose writes this node needs
 
     # Failure semantics
     failure_mode: Literal["fail", "degrade"]
@@ -44,10 +44,14 @@ AGENT_REGISTRY: dict[str, AgentRegistryEntry] = {
     "parse_intent": AgentRegistryEntry(
         agent_id="parse_intent",
         reads=frozenset({"query"}),
-        writes=frozenset({
-            "intent", "plan_context",
-            "research_iteration", "retry_questions",
-        }),
+        writes=frozenset(
+            {
+                "intent",
+                "plan_context",
+                "research_iteration",
+                "retry_questions",
+            }
+        ),
         parallel_group=None,
         depends_on=[],
         failure_mode="fail",
@@ -55,21 +59,37 @@ AGENT_REGISTRY: dict[str, AgentRegistryEntry] = {
     ),
     "research": AgentRegistryEntry(
         agent_id="research",
-        reads=frozenset({
-            "query", "intent", "plan_context",
-            "retry_questions", "retry_scope", "research_iteration",
-        }),
+        reads=frozenset(
+            {
+                "query",
+                "intent",
+                "plan_context",
+                "retry_questions",
+                "retry_scope",
+                "research_iteration",
+            }
+        ),
         writes=frozenset({"evidence", "normalized_data", "research_iteration"}),
         parallel_group=None,
         depends_on=["parse_intent"],
         failure_mode="fail",
-        capability_deps=["cap.fetch_finance", "cap.fetch_macro", "cap.fetch_web", "cap.normalize"],
+        capability_deps=[
+            "cap.fetch_finance",
+            "cap.fetch_macro",
+            "cap.fetch_web",
+            "cap.normalize",
+        ],
     ),
     "fundamental_analysis": AgentRegistryEntry(
         agent_id="fundamental_analysis",
-        reads=frozenset({
-            "evidence", "normalized_data", "intent", "plan_context",
-        }),
+        reads=frozenset(
+            {
+                "evidence",
+                "normalized_data",
+                "intent",
+                "plan_context",
+            }
+        ),
         writes=frozenset({"fundamental_analysis"}),
         parallel_group="analysis",
         depends_on=["research"],
@@ -96,11 +116,19 @@ AGENT_REGISTRY: dict[str, AgentRegistryEntry] = {
     ),
     "llm_judge": AgentRegistryEntry(
         agent_id="llm_judge",
-        reads=frozenset({
-            "intent", "normalized_data", "evidence", "plan_context",
-            "fundamental_analysis", "macro_analysis", "market_sentiment",
-            "research_iteration", "retry_questions",
-        }),
+        reads=frozenset(
+            {
+                "intent",
+                "normalized_data",
+                "evidence",
+                "plan_context",
+                "fundamental_analysis",
+                "macro_analysis",
+                "market_sentiment",
+                "research_iteration",
+                "retry_questions",
+            }
+        ),
         writes=frozenset({"policy_decision"}),
         parallel_group=None,
         depends_on=["fundamental_analysis", "macro_analysis", "market_sentiment"],
@@ -109,23 +137,37 @@ AGENT_REGISTRY: dict[str, AgentRegistryEntry] = {
     ),
     "policy_router": AgentRegistryEntry(
         agent_id="policy_router",
-        reads=frozenset({
-            "policy_decision", "evidence", "normalized_data",
-            "fundamental_analysis", "macro_analysis", "market_sentiment",
-            "research_iteration",
-        }),
-        writes=frozenset({"policy_decision", "retry_questions", "retry_reason", "retry_scope"}),
+        reads=frozenset(
+            {
+                "policy_decision",
+                "evidence",
+                "normalized_data",
+                "fundamental_analysis",
+                "macro_analysis",
+                "market_sentiment",
+                "research_iteration",
+            }
+        ),
+        writes=frozenset(
+            {"policy_decision", "retry_questions", "retry_reason", "retry_scope"}
+        ),
         parallel_group=None,
         depends_on=["llm_judge"],
-        failure_mode="fail",   # routing broken = unrecoverable
+        failure_mode="fail",  # routing broken = unrecoverable
         capability_deps=[],
     ),
     "scenario_scoring": AgentRegistryEntry(
         agent_id="scenario_scoring",
-        reads=frozenset({
-            "evidence", "fundamental_analysis", "macro_analysis",
-            "market_sentiment", "intent", "plan_context",
-        }),
+        reads=frozenset(
+            {
+                "evidence",
+                "fundamental_analysis",
+                "macro_analysis",
+                "market_sentiment",
+                "intent",
+                "plan_context",
+            }
+        ),
         writes=frozenset({"scenarios"}),
         parallel_group=None,
         depends_on=["llm_judge"],
@@ -134,10 +176,15 @@ AGENT_REGISTRY: dict[str, AgentRegistryEntry] = {
     ),
     "scenario_debate": AgentRegistryEntry(
         agent_id="scenario_debate",
-        reads=frozenset({
-            "scenarios", "evidence",
-            "fundamental_analysis", "macro_analysis", "market_sentiment",
-        }),
+        reads=frozenset(
+            {
+                "scenarios",
+                "evidence",
+                "fundamental_analysis",
+                "macro_analysis",
+                "market_sentiment",
+            }
+        ),
         writes=frozenset({"scenario_debate"}),
         parallel_group=None,
         depends_on=["scenario_scoring"],
@@ -146,17 +193,31 @@ AGENT_REGISTRY: dict[str, AgentRegistryEntry] = {
     ),
     "report_finalize": AgentRegistryEntry(
         agent_id="report_finalize",
-        reads=frozenset({
-            "intent", "evidence",
-            "fundamental_analysis", "macro_analysis", "market_sentiment",
-            "scenarios", "scenario_debate", "plan_context",
-            "research_iteration", "retry_reason",
-        }),
-        writes=frozenset({
-            "narrative_sections", "report_markdown", "report_json",
-            "validation_result", "quality_metrics",
-            "retry_questions", "stop_reason",
-        }),
+        reads=frozenset(
+            {
+                "intent",
+                "evidence",
+                "fundamental_analysis",
+                "macro_analysis",
+                "market_sentiment",
+                "scenarios",
+                "scenario_debate",
+                "plan_context",
+                "research_iteration",
+                "retry_reason",
+            }
+        ),
+        writes=frozenset(
+            {
+                "narrative_sections",
+                "report_markdown",
+                "report_json",
+                "validation_result",
+                "quality_metrics",
+                "retry_questions",
+                "stop_reason",
+            }
+        ),
         parallel_group=None,
         depends_on=["scenario_debate"],
         failure_mode="fail",

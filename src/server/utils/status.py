@@ -16,7 +16,9 @@ class AgentMeta:
 AGENT_REGISTRY: tuple[AgentMeta, ...] = (
     AgentMeta(name="parse_intent", tag="O", failed_phase="planning"),
     AgentMeta(name="research", tag="R", failed_phase="collecting_evidence"),
-    AgentMeta(name="fundamental_analysis", tag="F", failed_phase="analyzing_fundamentals"),
+    AgentMeta(
+        name="fundamental_analysis", tag="F", failed_phase="analyzing_fundamentals"
+    ),
     AgentMeta(name="macro_analysis", tag="X", failed_phase="analyzing_macro"),
     AgentMeta(name="market_sentiment", tag="M", failed_phase="analyzing_sentiment"),
     AgentMeta(name="llm_judge", tag="G", failed_phase="evaluating_gaps"),
@@ -27,7 +29,9 @@ AGENT_REGISTRY: tuple[AgentMeta, ...] = (
 
 AGENT_NAMES: list[str] = [item.name for item in AGENT_REGISTRY]
 AGENT_TAG_BY_NODE: dict[str, str] = {item.name: item.tag for item in AGENT_REGISTRY}
-FAILED_PHASE_BY_AGENT: dict[str, AgentPhase] = {item.name: item.failed_phase for item in AGENT_REGISTRY}
+FAILED_PHASE_BY_AGENT: dict[str, AgentPhase] = {
+    item.name: item.failed_phase for item in AGENT_REGISTRY
+}
 
 
 def initial_agent_statuses(*, running: str = "") -> list[AgentStatus]:

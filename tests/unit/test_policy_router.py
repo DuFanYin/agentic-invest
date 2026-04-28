@@ -35,6 +35,7 @@ def _state(**overrides):
 
 # ── policy_router_node ────────────────────────────────────────────────────
 
+
 def test_router_node_continue_writes_empty_retry():
     result = asyncio.run(policy_router_node(_state()))
     assert result["retry_questions"] == []
@@ -44,29 +45,37 @@ def test_router_node_continue_writes_empty_retry():
 
 
 def test_router_node_full_retry_writes_questions():
-    result = asyncio.run(policy_router_node(_state(
-        policy_decision=_pd(
-            action="retry_full_research",
-            retry_question="find EPS data",
-            reason_code="analysis_robustness",
-        ),
-        research_iteration=1,
-    )))
+    result = asyncio.run(
+        policy_router_node(
+            _state(
+                policy_decision=_pd(
+                    action="retry_full_research",
+                    retry_question="find EPS data",
+                    reason_code="analysis_robustness",
+                ),
+                research_iteration=1,
+            )
+        )
+    )
     assert result["policy_decision"].action == "retry_full_research"
     assert result["retry_questions"] == ["find EPS data"]
     assert result["retry_scope"] is None
 
 
 def test_router_node_scoped_retry_sets_scope():
-    result = asyncio.run(policy_router_node(_state(
-        policy_decision=_pd(
-            action="retry_capability_only",
-            targets=["cap.fetch_web"],
-            retry_question="resolve conflict",
-            reason_code="evidence_conflict",
-        ),
-        research_iteration=1,
-    )))
+    result = asyncio.run(
+        policy_router_node(
+            _state(
+                policy_decision=_pd(
+                    action="retry_capability_only",
+                    targets=["cap.fetch_web"],
+                    retry_question="resolve conflict",
+                    reason_code="evidence_conflict",
+                ),
+                research_iteration=1,
+            )
+        )
+    )
     assert result["policy_decision"].action == "retry_capability_only"
     assert result["retry_scope"] == ["cap.fetch_web"]
     assert result["retry_questions"] == ["resolve conflict"]
@@ -84,20 +93,25 @@ def test_router_node_missing_policy_decision_falls_through():
 
 def test_router_node_iteration_limit_overrides_to_continue():
     """When iteration limit fires, action becomes 'continue' even if judge hinted retry."""
-    result = asyncio.run(policy_router_node(_state(
-        policy_decision=_pd(
-            action="retry_full_research",
-            retry_question="structural gap",
-            reason_code="structural",
-        ),
-        research_iteration=2,  # at max (MAX_RESEARCH_ITERATIONS=2)
-    )))
+    result = asyncio.run(
+        policy_router_node(
+            _state(
+                policy_decision=_pd(
+                    action="retry_full_research",
+                    retry_question="structural gap",
+                    reason_code="structural",
+                ),
+                research_iteration=2,  # at max (MAX_RESEARCH_ITERATIONS=2)
+            )
+        )
+    )
     # policy engine's rule_iteration_limit fires and forces continue
     assert result["policy_decision"].action == "continue"
     assert result["retry_questions"] == []
 
 
 # ── policy_router_fn ──────────────────────────────────────────────────────
+
 
 def test_router_fn_routes_retry_to_research():
     state = _state(policy_decision=_pd(action="retry_full_research"))

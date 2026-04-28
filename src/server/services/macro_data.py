@@ -20,7 +20,7 @@ from src.server.services.retry import (
 logger = logging.getLogger(__name__)
 
 _cache = Cache(db_path=CACHE_DB_PATH)
-_FRED_TTL = 6 * 3600   # 6 hours — economic indicators don't change intra-day
+_FRED_TTL = 6 * 3600  # 6 hours — economic indicators don't change intra-day
 _MARKET_TTL = 15 * 60  # 15 minutes — VIX/yields move throughout the day
 
 FRED_SERIES: dict[str, str] = {
@@ -42,6 +42,7 @@ MACRO_TICKERS: dict[str, str] = {
 
 def _fetch_fred_series(series_id: str, label: str, api_key: str) -> dict[str, Any]:
     import httpx
+
     try:
         url = (
             f"https://api.stlouisfed.org/fred/series/observations"
@@ -49,6 +50,7 @@ def _fetch_fred_series(series_id: str, label: str, api_key: str) -> dict[str, An
             f"&observation_start={(datetime.now(UTC) - timedelta(days=400)).strftime('%Y-%m-%d')}"
             f"&sort_order=desc&limit=13"
         )
+
         def _request() -> httpx.Response:
             try:
                 resp = httpx.get(url, timeout=DEFAULT_FETCH_TIMEOUT_SECONDS)
@@ -64,7 +66,12 @@ def _fetch_fred_series(series_id: str, label: str, api_key: str) -> dict[str, An
         # Filter out missing values
         valid = [o for o in observations if o.get("value") not in (".", "", None)]
         if not valid:
-            return {"series_id": series_id, "label": label, "value": None, "direction": "unknown"}
+            return {
+                "series_id": series_id,
+                "label": label,
+                "value": None,
+                "direction": "unknown",
+            }
         latest = valid[0]
         prev = valid[1] if len(valid) > 1 else None
         value = float(latest["value"])
@@ -84,12 +91,18 @@ def _fetch_fred_series(series_id: str, label: str, api_key: str) -> dict[str, An
         }
     except Exception as exc:
         logger.warning("FRED fetch failed for %s: %s", series_id, exc)
-        return {"series_id": series_id, "label": label, "value": None, "direction": "unknown"}
+        return {
+            "series_id": series_id,
+            "label": label,
+            "value": None,
+            "direction": "unknown",
+        }
 
 
 def _fetch_yf_macro(ticker: str, label: str) -> dict[str, Any]:
     try:
         import yfinance as yf  # type: ignore[import]
+
         tk = yf.Ticker(ticker)
         hist = retry_sync(
             lambda: tk.history(period="5d", interval="1d"),
@@ -97,10 +110,20 @@ def _fetch_yf_macro(ticker: str, label: str) -> dict[str, Any]:
             op_name=f"yfinance.macro.{ticker}",
         )
         if hist.empty:
-            return {"ticker": ticker, "label": label, "value": None, "direction": "unknown"}
+            return {
+                "ticker": ticker,
+                "label": label,
+                "value": None,
+                "direction": "unknown",
+            }
         closes = hist["Close"].dropna()
         if closes.empty:
-            return {"ticker": ticker, "label": label, "value": None, "direction": "unknown"}
+            return {
+                "ticker": ticker,
+                "label": label,
+                "value": None,
+                "direction": "unknown",
+            }
         latest = float(closes.iloc[-1])
         prev = float(closes.iloc[-2]) if len(closes) >= 2 else latest
         direction = "stable"
@@ -131,7 +154,9 @@ class MacroDataClient:
         if cached:
             return cached
         tasks = {
-            series_id: asyncio.to_thread(_fetch_fred_series, series_id, label, FRED_API_KEY)
+            series_id: asyncio.to_thread(
+                _fetch_fred_series, series_id, label, FRED_API_KEY
+            )
             for series_id, label in FRED_SERIES.items()
         }
         results = await asyncio.gather(*tasks.values(), return_exceptions=True)
@@ -139,7 +164,11 @@ class MacroDataClient:
         for series_id, result in zip(tasks.keys(), results):
             if isinstance(result, Exception):
                 logger.warning("FRED gather error for %s: %s", series_id, result)
-                data[series_id] = {"series_id": series_id, "value": None, "direction": "unknown"}
+                data[series_id] = {
+                    "series_id": series_id,
+                    "value": None,
+                    "direction": "unknown",
+                }
             else:
                 data[series_id] = result
         _cache.set("fred:indicators", data, ttl_seconds=_FRED_TTL)

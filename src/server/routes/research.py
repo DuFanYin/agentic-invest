@@ -39,19 +39,24 @@ def run_research_stream(request: ResearchRequest) -> StreamingResponse:
             return "unknown"
 
         # Emit initial statuses immediately — UI never blank after clicking Run
-        boot_statuses = [s.model_dump() for s in initial_agent_statuses(running="parse_intent")]
+        boot_statuses = [
+            s.model_dump() for s in initial_agent_statuses(running="parse_intent")
+        ]
         last_statuses: list[dict] = boot_statuses
         yield emit("agent_status", boot_statuses)
 
         try:
             async for event in orchestrator.run_stream(request):
                 if shutdown.is_set():
-                    yield emit("error", {
-                        "timestamp": datetime.now(UTC).isoformat(),
-                        "message": "research stream interrupted: server shutting down",
-                        "node": "shutdown",
-                        "phase": "shutdown",
-                    })
+                    yield emit(
+                        "error",
+                        {
+                            "timestamp": datetime.now(UTC).isoformat(),
+                            "message": "research stream interrupted: server shutting down",
+                            "node": "shutdown",
+                            "phase": "shutdown",
+                        },
+                    )
                     yield emit("done", {})
                     return
 
@@ -79,7 +84,9 @@ def run_research_stream(request: ResearchRequest) -> StreamingResponse:
                     node = "report_finalize"
                 else:
                     node = None
-            statuses = last_statuses or [s.model_dump() for s in initial_agent_statuses()]
+            statuses = last_statuses or [
+                s.model_dump() for s in initial_agent_statuses()
+            ]
             now = datetime.now(UTC).isoformat()
             next_statuses = []
             for item in statuses:
@@ -99,12 +106,15 @@ def run_research_stream(request: ResearchRequest) -> StreamingResponse:
             statuses = next_statuses
             phase = current_phase(statuses, node)
             yield emit("agent_status", statuses)
-            yield emit("error", {
-                "timestamp": datetime.now(UTC).isoformat(),
-                "message": message,
-                "node": node or "unknown",
-                "phase": phase,
-            })
+            yield emit(
+                "error",
+                {
+                    "timestamp": datetime.now(UTC).isoformat(),
+                    "message": message,
+                    "node": node or "unknown",
+                    "phase": phase,
+                },
+            )
 
         yield emit("done", {})
 

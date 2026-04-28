@@ -11,7 +11,7 @@ from src.server.services.llm_provider import LLMClient
 from src.server.utils.contract import NODE_CONTRACTS, assert_reads, assert_writes
 from src.server.utils.status import update_status
 
-_READS  = NODE_CONTRACTS["market_sentiment"].reads
+_READS = NODE_CONTRACTS["market_sentiment"].reads
 _WRITES = NODE_CONTRACTS["market_sentiment"].writes
 
 logger = logging.getLogger(__name__)
@@ -52,9 +52,10 @@ Rules:
 
 
 def _build_prompt(news_evidence, price_history, all_evidence_ids) -> str:
-    news_lines = "\n".join(
-        f"[{ev.id}] {ev.summary}" for ev in news_evidence
-    ) or "No news evidence available."
+    news_lines = (
+        "\n".join(f"[{ev.id}] {ev.summary}" for ev in news_evidence)
+        or "No news evidence available."
+    )
 
     price_str = json.dumps(price_history, indent=2) if price_history else "{}"
 
@@ -71,6 +72,7 @@ PRICE / MARKET DATA:
 {price_str}
 """
 
+
 async def market_sentiment_node(
     state: ResearchState, *, llm: LLMClient = _default_llm
 ) -> ResearchState:
@@ -81,8 +83,11 @@ async def market_sentiment_node(
     statuses = list(state.get("agent_statuses") or [])
     if statuses:
         statuses = update_status(
-            statuses, "market_sentiment",
-            lifecycle="active", phase="analyzing_sentiment", action="building sentiment view",
+            statuses,
+            "market_sentiment",
+            lifecycle="active",
+            phase="analyzing_sentiment",
+            action="building sentiment view",
         )
 
     news_evidence = [ev for ev in evidence if ev.source_type in ("news", "web")]
@@ -118,16 +123,22 @@ async def market_sentiment_node(
 
     if statuses:
         statuses = update_status(
-            statuses, "market_sentiment",
-            lifecycle="standby", phase="analyzing_sentiment", action="sentiment ready",
+            statuses,
+            "market_sentiment",
+            lifecycle="standby",
+            phase="analyzing_sentiment",
+            action="sentiment ready",
             details=[
                 f"claims={len(result.claims)}",
                 f"direction={result.news_sentiment.direction}",
             ],
         )
         statuses = update_status(
-            statuses, "llm_judge",
-            lifecycle="active", phase="evaluating_gaps", action="checking for gaps",
+            statuses,
+            "llm_judge",
+            lifecycle="active",
+            phase="evaluating_gaps",
+            action="checking for gaps",
         )
 
     delta = {

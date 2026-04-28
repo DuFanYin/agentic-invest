@@ -29,9 +29,17 @@ def _evidence(n: int = 3) -> list[Evidence]:
 
 
 def _llm_scenarios(probs=(0.3, 0.5, 0.2)) -> list[dict]:
-    names = ["Rate plateau stalls growth", "AI capex supercycle", "Regulatory crackdown"]
+    names = [
+        "Rate plateau stalls growth",
+        "AI capex supercycle",
+        "Regulatory crackdown",
+    ]
     descs = ["Headwinds persist.", "Tailwinds accelerate.", "Policy risk materialises."]
-    tags = [["bearish-1", "rate-sensitive"], ["bullish-2", "ai-demand"], ["bearish-2", "policy-risk"]]
+    tags = [
+        ["bearish-1", "rate-sensitive"],
+        ["bullish-2", "ai-demand"],
+        ["bearish-2", "policy-risk"],
+    ]
     return [
         {
             "name": names[i],
@@ -47,24 +55,40 @@ def _llm_scenarios(probs=(0.3, 0.5, 0.2)) -> list[dict]:
 
 
 def _default_fa() -> FundamentalAnalysis:
-    return FundamentalAnalysis.model_validate({
-        "claims": [{"statement": "Stable margins.", "confidence": "high", "evidence_ids": ["ev_001"]}],
-        "business_quality": {"view": "stable", "drivers": []},
-        "financials": {"profitability_trend": "stable", "cash_flow_quality": "high"},
-        "valuation": {"relative_multiple_view": "near median", "simplified_dcf_view": "fair"},
-        "fundamental_risks": [],
-        "missing_fields": [],
-    })
+    return FundamentalAnalysis.model_validate(
+        {
+            "claims": [
+                {
+                    "statement": "Stable margins.",
+                    "confidence": "high",
+                    "evidence_ids": ["ev_001"],
+                }
+            ],
+            "business_quality": {"view": "stable", "drivers": []},
+            "financials": {
+                "profitability_trend": "stable",
+                "cash_flow_quality": "high",
+            },
+            "valuation": {
+                "relative_multiple_view": "near median",
+                "simplified_dcf_view": "fair",
+            },
+            "fundamental_risks": [],
+            "missing_fields": [],
+        }
+    )
 
 
 def _default_ms() -> MarketSentiment:
-    return MarketSentiment.model_validate({
-        "claims": [],
-        "news_sentiment": {"direction": "positive", "confidence": "medium"},
-        "market_narrative": {"summary": "Optimistic.", "crowding_risk": "low"},
-        "sentiment_risks": [],
-        "missing_fields": [],
-    })
+    return MarketSentiment.model_validate(
+        {
+            "claims": [],
+            "news_sentiment": {"direction": "positive", "confidence": "medium"},
+            "market_narrative": {"summary": "Optimistic.", "crowding_risk": "low"},
+            "sentiment_risks": [],
+            "missing_fields": [],
+        }
+    )
 
 
 def _state(evidence=None, fa=None, ms=None):
@@ -85,9 +109,13 @@ def _mock_llm(scenarios=None, raises: Exception | None = None, raw_array: bool =
     if raises:
         llm.call_with_retry = AsyncMock(side_effect=raises)
     elif raw_array:
-        llm.call_with_retry = AsyncMock(return_value=json.dumps(scenarios or _llm_scenarios()))
+        llm.call_with_retry = AsyncMock(
+            return_value=json.dumps(scenarios or _llm_scenarios())
+        )
     else:
-        llm.call_with_retry = AsyncMock(return_value=json.dumps({"scenarios": scenarios or _llm_scenarios()}))
+        llm.call_with_retry = AsyncMock(
+            return_value=json.dumps({"scenarios": scenarios or _llm_scenarios()})
+        )
     return llm
 
 
@@ -96,6 +124,7 @@ def _run(coro):
 
 
 # ── output shape ───────────────────────────────────────────────────────────
+
 
 def test_scenarios_shape_probability_and_sorting():
     result = _run(scenario_scoring_node(_state(), llm=_mock_llm()))
@@ -107,20 +136,28 @@ def test_scenarios_shape_probability_and_sorting():
 
 # ── cardinality validation (3-5 required) ─────────────────────────────────
 
+
 def test_raises_when_llm_returns_two_scenarios():
     with pytest.raises(RuntimeError, match="scenario_scoring"):
-        _run(scenario_scoring_node(_state(), llm=_mock_llm(_llm_scenarios(probs=(0.6, 0.4))[:2])))
+        _run(
+            scenario_scoring_node(
+                _state(), llm=_mock_llm(_llm_scenarios(probs=(0.6, 0.4))[:2])
+            )
+        )
 
 
 # ── raises on LLM failure (no stub fallback) ──────────────────────────────
 
+
 def test_raises_when_llm_raises():
     with pytest.raises(RuntimeError, match="scenario_scoring"):
-        _run(scenario_scoring_node(_state(), llm=_mock_llm(raises=RuntimeError("exhausted"))))
+        _run(
+            scenario_scoring_node(
+                _state(), llm=_mock_llm(raises=RuntimeError("exhausted"))
+            )
+        )
 
 
 def test_raises_when_no_evidence():
     with pytest.raises(RuntimeError, match="scenario_scoring"):
         _run(scenario_scoring_node(_state(evidence=[]), llm=_mock_llm()))
-
-

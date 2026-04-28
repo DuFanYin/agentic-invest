@@ -11,7 +11,7 @@ from src.server.services.llm_provider import LLMClient
 from src.server.utils.contract import NODE_CONTRACTS, assert_reads, assert_writes
 from src.server.utils.status import update_status
 
-_READS  = NODE_CONTRACTS["fundamental_analysis"].reads
+_READS = NODE_CONTRACTS["fundamental_analysis"].reads
 _WRITES = NODE_CONTRACTS["fundamental_analysis"].writes
 
 logger = logging.getLogger(__name__)
@@ -49,18 +49,28 @@ Rules:
 """
 
 
-def _build_prompt(evidence, metrics, missing_fields, intent, research_focus, must_have_metrics, plan_notes) -> str:
+def _build_prompt(
+    evidence,
+    metrics,
+    missing_fields,
+    intent,
+    research_focus,
+    must_have_metrics,
+    plan_notes,
+) -> str:
     financial_evidence = [ev for ev in evidence if ev.source_type == "financial_api"]
     supplemental = [ev for ev in evidence if ev.source_type != "financial_api"]
 
-    ev_lines = "\n".join(
-        f"[{ev.id}] (reliability={ev.reliability}) {ev.summary}"
-        for ev in financial_evidence
-    ) or "No financial API evidence available."
+    ev_lines = (
+        "\n".join(
+            f"[{ev.id}] (reliability={ev.reliability}) {ev.summary}"
+            for ev in financial_evidence
+        )
+        or "No financial API evidence available."
+    )
 
     supplemental_lines = "\n".join(
-        f"[{ev.id}] ({ev.source_type}) {ev.summary}"
-        for ev in supplemental
+        f"[{ev.id}] ({ev.source_type}) {ev.summary}" for ev in supplemental
     )[:2000]  # cap to avoid token bloat
 
     metrics_json = json.dumps(metrics, indent=2) if metrics else "{}"
@@ -73,8 +83,14 @@ def _build_prompt(evidence, metrics, missing_fields, intent, research_focus, mus
             f"Horizon: {intent.time_horizon or 'unspecified'}"
         )
 
-    focus_str = "\n".join(f"- {f}" for f in research_focus) if research_focus else "General fundamental analysis"
-    metrics_str = ", ".join(must_have_metrics) if must_have_metrics else "standard financials"
+    focus_str = (
+        "\n".join(f"- {f}" for f in research_focus)
+        if research_focus
+        else "General fundamental analysis"
+    )
+    metrics_str = (
+        ", ".join(must_have_metrics) if must_have_metrics else "standard financials"
+    )
     notes_str = "\n".join(f"- {n}" for n in plan_notes) if plan_notes else "none"
 
     return f"""{_SCHEMA}
@@ -97,10 +113,11 @@ FINANCIAL METRICS:
 {metrics_json}
 
 SUPPLEMENTAL EVIDENCE (macro/news — for context only, do not lead with these):
-{supplemental_lines or 'none'}
+{supplemental_lines or "none"}
 
-MISSING DATA: {', '.join(missing_fields) if missing_fields else 'none reported'}
+MISSING DATA: {", ".join(missing_fields) if missing_fields else "none reported"}
 """
+
 
 async def fundamental_analysis_node(
     state: ResearchState, *, llm: LLMClient = _default_llm
@@ -117,8 +134,11 @@ async def fundamental_analysis_node(
     statuses = list(state.get("agent_statuses") or [])
     if statuses:
         statuses = update_status(
-            statuses, "fundamental_analysis",
-            lifecycle="active", phase="analyzing_fundamentals", action="building analysis",
+            statuses,
+            "fundamental_analysis",
+            lifecycle="active",
+            phase="analyzing_fundamentals",
+            action="building analysis",
         )
 
     metrics = normalized_data.metrics.model_dump() if normalized_data else {}
@@ -127,7 +147,15 @@ async def fundamental_analysis_node(
     result: FundamentalAnalysis | None = None
 
     if evidence:
-        prompt = _build_prompt(evidence, metrics, missing_fields, intent, research_focus, must_have_metrics, plan_notes)
+        prompt = _build_prompt(
+            evidence,
+            metrics,
+            missing_fields,
+            intent,
+            research_focus,
+            must_have_metrics,
+            plan_notes,
+        )
         try:
             raw = await llm.call_with_retry(prompt, system=_SYSTEM, node=_NODE)
             parsed = json.loads(raw)
@@ -156,13 +184,19 @@ async def fundamental_analysis_node(
 
     if statuses:
         statuses = update_status(
-            statuses, "fundamental_analysis",
-            lifecycle="standby", phase="analyzing_fundamentals", action="fundamentals ready",
+            statuses,
+            "fundamental_analysis",
+            lifecycle="standby",
+            phase="analyzing_fundamentals",
+            action="fundamentals ready",
             details=[f"claims={len(result.claims)}"],
         )
         statuses = update_status(
-            statuses, "llm_judge",
-            lifecycle="active", phase="evaluating_gaps", action="checking for gaps",
+            statuses,
+            "llm_judge",
+            lifecycle="active",
+            phase="evaluating_gaps",
+            action="checking for gaps",
         )
 
     delta = {

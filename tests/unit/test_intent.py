@@ -12,7 +12,9 @@ def test_parse_intent_from_query_fallback() -> None:
     broken_client = MagicMock(spec=LLMClient)
     broken_client.complete = AsyncMock(side_effect=RuntimeError("no key"))
 
-    intent = asyncio.run(_parse_intent("Analyse NVDA for long-term investment", broken_client))
+    intent = asyncio.run(
+        _parse_intent("Analyse NVDA for long-term investment", broken_client)
+    )
 
     assert intent.intent == "investment_research"
     assert intent.subjects  # non-empty fallback

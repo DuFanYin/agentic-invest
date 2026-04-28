@@ -44,7 +44,10 @@ from src.server.services.section_queue import SectionQueue
 
 # ── graph builder ──────────────────────────────────────────────────────────
 
-def build_graph(llm_client: LLMClient | None = None, sq: SectionQueue | None = None) -> StateGraph:
+
+def build_graph(
+    llm_client: LLMClient | None = None, sq: SectionQueue | None = None
+) -> StateGraph:
     llm_client = llm_client or LLMClient()
     sq = sq  # captured by _report_node closure
 
@@ -114,6 +117,7 @@ def build_graph(llm_client: LLMClient | None = None, sq: SectionQueue | None = N
 
 # ── public façade ──────────────────────────────────────────────────────────
 
+
 class OrchestratorAgent:
     def __init__(self, llm_client: LLMClient | None = None) -> None:
         # llm_client is only set in tests (a MagicMock stub).
@@ -122,7 +126,9 @@ class OrchestratorAgent:
 
     def _client_for_request(self, collector: LLMCallCollector) -> LLMClient:
         if self._test_client is not None:
-            return self._test_client  # test stub owns its own mock behaviour; collector unused
+            return (
+                self._test_client
+            )  # test stub owns its own mock behaviour; collector unused
         return LLMClient(collector=collector)
 
     async def run(self, request: ResearchRequest) -> ResearchResponse:
@@ -134,9 +140,17 @@ class OrchestratorAgent:
             async with asyncio.timeout(REQUEST_TIMEOUT_SECONDS):
                 final_state = await graph.ainvoke({"query": request.query})
         except TimeoutError as exc:
-            raise RuntimeError(f"[orchestrator] request timeout after {int(REQUEST_TIMEOUT_SECONDS)}s") from exc
+            raise RuntimeError(
+                f"[orchestrator] request timeout after {int(REQUEST_TIMEOUT_SECONDS)}s"
+            ) from exc
         cost, prompt_tok, completion_tok = collector.totals()
-        return _state_to_response(final_state, llm_calls=collector.all(), total_cost_usd=cost, total_prompt_tokens=prompt_tok, total_completion_tokens=completion_tok)
+        return _state_to_response(
+            final_state,
+            llm_calls=collector.all(),
+            total_cost_usd=cost,
+            total_prompt_tokens=prompt_tok,
+            total_completion_tokens=completion_tok,
+        )
 
     async def run_stream(self, request: ResearchRequest) -> AsyncGenerator[dict, None]:
         collector = LLMCallCollector()
@@ -156,11 +170,15 @@ class OrchestratorAgent:
         try:
             async with asyncio.timeout(REQUEST_TIMEOUT_SECONDS):
                 while True:
-                    wait_tasks = [t for t in (step_task, call_task, section_task) if t is not None]
+                    wait_tasks = [
+                        t for t in (step_task, call_task, section_task) if t is not None
+                    ]
                     if not wait_tasks:
                         break
 
-                    done, _ = await asyncio.wait(wait_tasks, return_when=asyncio.FIRST_COMPLETED)
+                    done, _ = await asyncio.wait(
+                        wait_tasks, return_when=asyncio.FIRST_COMPLETED
+                    )
 
                     if call_task is not None and call_task in done:
                         item = call_task.result()
@@ -188,13 +206,19 @@ class OrchestratorAgent:
                                     if agent_statuses:
                                         yield {
                                             "type": "agent_status",
-                                            "payload": [s.model_dump() for s in agent_statuses],
+                                            "payload": [
+                                                s.model_dump() for s in agent_statuses
+                                            ],
                                         }
                             elif mode == "values":
                                 final_state = payload
                             step_task = asyncio.create_task(anext(stream_iter))
 
-                    if graph_done and collector.pending_count() == 0 and section_task is None:
+                    if (
+                        graph_done
+                        and collector.pending_count() == 0
+                        and section_task is None
+                    ):
                         if call_task is not None:
                             call_task.cancel()
                             try:
@@ -204,7 +228,9 @@ class OrchestratorAgent:
                             call_task = None
                         break
         except TimeoutError as exc:
-            raise RuntimeError(f"[orchestrator] request timeout after {int(REQUEST_TIMEOUT_SECONDS)}s") from exc
+            raise RuntimeError(
+                f"[orchestrator] request timeout after {int(REQUEST_TIMEOUT_SECONDS)}s"
+            ) from exc
         finally:
             for task in (step_task, call_task, section_task):
                 if task is not None and not task.done():
@@ -218,19 +244,34 @@ class OrchestratorAgent:
 
         all_llm_calls = collector.all()
         cost, prompt_tok, completion_tok = collector.totals()
-        response = _state_to_response(final_state, llm_calls=all_llm_calls, total_cost_usd=cost, total_prompt_tokens=prompt_tok, total_completion_tokens=completion_tok)
+        response = _state_to_response(
+            final_state,
+            llm_calls=all_llm_calls,
+            total_cost_usd=cost,
+            total_prompt_tokens=prompt_tok,
+            total_completion_tokens=completion_tok,
+        )
         yield {"type": "final", "payload": response}
 
 
 # ── helpers ────────────────────────────────────────────────────────────────
 
-def _state_to_response(state: ResearchState, *, llm_calls: list[LLMCall] | None = None, total_cost_usd: float = 0.0, total_prompt_tokens: int = 0, total_completion_tokens: int = 0) -> ResearchResponse:
+
+def _state_to_response(
+    state: ResearchState,
+    *,
+    llm_calls: list[LLMCall] | None = None,
+    total_cost_usd: float = 0.0,
+    total_prompt_tokens: int = 0,
+    total_completion_tokens: int = 0,
+) -> ResearchResponse:
     from src.server.models.analysis import (
         FundamentalAnalysis,
         MacroAnalysis,
         MarketSentiment,
         ScenarioDebate,
     )
+
     fa = state.get("fundamental_analysis")
     macro = state.get("macro_analysis")
     ms = state.get("market_sentiment")

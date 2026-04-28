@@ -90,9 +90,11 @@ def assert_writes(delta: dict, declared: frozenset[str], node: str) -> None:
 
 # ── Derived from AGENT_REGISTRY — do not edit manually ────────────────────
 
+
 def _build_contracts() -> dict[str, NodeContract]:
     # Import here to avoid circular import (registry imports nothing from utils/)
     from src.server.agents.registry import AGENT_REGISTRY
+
     return {
         agent_id: NodeContract(reads=entry.reads, writes=entry.writes)
         for agent_id, entry in AGENT_REGISTRY.items()

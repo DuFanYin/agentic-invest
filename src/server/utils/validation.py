@@ -26,7 +26,9 @@ def validate_scenario_scores(scenarios: list[Scenario]) -> list[str]:
         if not s.triggers:
             missing.append("triggers")
         if missing:
-            errors.append(f"Scenario '{s.name}' missing required fields: {', '.join(missing)}")
+            errors.append(
+                f"Scenario '{s.name}' missing required fields: {', '.join(missing)}"
+            )
         if not any(_MAGNITUDE_TAG.match(t) for t in s.tags):
             errors.append(
                 f"Scenario '{s.name}' tags must include a magnitude tag "
@@ -38,11 +40,17 @@ def validate_scenario_scores(scenarios: list[Scenario]) -> list[str]:
 
 def validate_evidence_completeness(evidence: list[dict]) -> list[str]:
     errors: list[str] = []
-    required_fields = ("retrieved_at", "summary", "reliability")  # url is optional on Evidence model
+    required_fields = (
+        "retrieved_at",
+        "summary",
+        "reliability",
+    )  # url is optional on Evidence model
     for item in evidence:
         missing = [field for field in required_fields if not item.get(field)]
         if missing:
-            errors.append(f"Evidence {item.get('id', 'unknown')} missing fields: {', '.join(missing)}")
+            errors.append(
+                f"Evidence {item.get('id', 'unknown')} missing fields: {', '.join(missing)}"
+            )
     return errors
 
 
@@ -56,8 +64,12 @@ def validate_claim_coverage(
         if not claim.evidence_ids:
             errors.append(f"Claim missing evidence: {claim.statement}")
             continue
-        missing_refs = [ref for ref in claim.evidence_ids if ref not in available_evidence_ids]
+        missing_refs = [
+            ref for ref in claim.evidence_ids if ref not in available_evidence_ids
+        ]
         if missing_refs:
-            errors.append(f"Claim references unknown evidence ids: {', '.join(missing_refs)}")
+            errors.append(
+                f"Claim references unknown evidence ids: {', '.join(missing_refs)}"
+            )
 
     return errors

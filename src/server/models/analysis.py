@@ -14,6 +14,7 @@ from pydantic import BaseModel, Field
 
 # ── Shared sub-models ──────────────────────────────────────────────────────
 
+
 class Claim(BaseModel):
     statement: str
     confidence: Literal["high", "medium", "low"]
@@ -29,6 +30,7 @@ class Risk(BaseModel):
 
 # ── FundamentalAnalysis ────────────────────────────────────────────────────
 
+
 class BusinessQuality(BaseModel):
     view: Literal["strong", "stable", "weak", "deteriorating"]
 
@@ -40,8 +42,12 @@ class Valuation(BaseModel):
 class FundamentalAnalysis(BaseModel):
     agent: str = "fundamental_analysis"
     claims: list[Claim] = Field(default_factory=list)
-    business_quality: BusinessQuality = Field(default_factory=lambda: BusinessQuality(view="stable"))
-    valuation: Valuation = Field(default_factory=lambda: Valuation(relative_multiple_view="unavailable"))
+    business_quality: BusinessQuality = Field(
+        default_factory=lambda: BusinessQuality(view="stable")
+    )
+    valuation: Valuation = Field(
+        default_factory=lambda: Valuation(relative_multiple_view="unavailable")
+    )
     fundamental_risks: list[Risk] = Field(default_factory=list)
     missing_fields: list[str] = Field(default_factory=list)
     metrics: dict[str, Any] = Field(default_factory=dict)
@@ -51,6 +57,7 @@ class FundamentalAnalysis(BaseModel):
 
 
 # ── MarketSentiment ────────────────────────────────────────────────────────
+
 
 class NewsSentiment(BaseModel):
     direction: Literal["positive", "neutral", "negative"]
@@ -68,9 +75,15 @@ class MarketNarrative(BaseModel):
 class MarketSentiment(BaseModel):
     agent: str = "market_sentiment"
     claims: list[Claim] = Field(default_factory=list)
-    news_sentiment: NewsSentiment = Field(default_factory=lambda: NewsSentiment(direction="neutral"))
+    news_sentiment: NewsSentiment = Field(
+        default_factory=lambda: NewsSentiment(direction="neutral")
+    )
     price_action: PriceAction | None = None
-    market_narrative: MarketNarrative = Field(default_factory=lambda: MarketNarrative(summary="Sentiment analysis unavailable."))
+    market_narrative: MarketNarrative = Field(
+        default_factory=lambda: MarketNarrative(
+            summary="Sentiment analysis unavailable."
+        )
+    )
     sentiment_risks: list[Risk] = Field(default_factory=list)
     missing_fields: list[str] = Field(default_factory=list)
     degraded: bool = False
@@ -79,6 +92,7 @@ class MarketSentiment(BaseModel):
 
 
 # ── NormalizedData ─────────────────────────────────────────────────────────
+
 
 class MetricsBlock(BaseModel):
     ttm: dict[str, Any] = Field(default_factory=dict)
@@ -95,6 +109,7 @@ class Conflict(BaseModel):
 
 
 # ── MacroAnalysis ──────────────────────────────────────────────────────────
+
 
 class MacroRisk(BaseModel):
     name: str
@@ -115,6 +130,7 @@ class MacroAnalysis(BaseModel):
 
 # ── JudgeDecision ─────────────────────────────────────────────────────────
 
+
 class JudgeDecision(BaseModel):
     should_retry: bool = False
     retry_question: str = ""
@@ -123,8 +139,10 @@ class JudgeDecision(BaseModel):
 
 # ── ScenarioDebate ─────────────────────────────────────────────────────────
 
+
 class ScenarioAdvocacy(BaseModel):
     """Output from one scenario advocate in round 1."""
+
     scenario_name: str
     advocacy_thesis: str
     supporting_arguments: list[str] = Field(default_factory=list)
@@ -144,13 +162,16 @@ class ScenarioDebate(BaseModel):
     debate_summary: str = "Debate unavailable."
     advocacy_summaries: list[dict[str, Any]] = Field(default_factory=list)
     probability_adjustments: list[ProbabilityAdjustment] = Field(default_factory=list)
-    calibrated_scenarios: list[Any] = Field(default_factory=list)  # list[Scenario] — avoids circular import
+    calibrated_scenarios: list[Any] = Field(
+        default_factory=list
+    )  # list[Scenario] — avoids circular import
     confidence: Literal["high", "medium", "low"] = "medium"
     debate_flags: list[str] = Field(default_factory=list)
     degraded: bool = False
 
 
 # ── ReportPlan ────────────────────────────────────────────────────────────
+
 
 class ReportSection(BaseModel):
     id: str
@@ -160,19 +181,23 @@ class ReportSection(BaseModel):
 
 
 class ReportPlan(BaseModel):
-    report_type: str  # e.g. "valuation", "comparison", "risk_review", "scenario", "general"
+    report_type: (
+        str  # e.g. "valuation", "comparison", "risk_review", "scenario", "general"
+    )
     sections: list[ReportSection]
 
 
 class CustomSection(BaseModel):
     """A query-specific narrative section proposed by the planning agent."""
-    id: str        # snake_case, unique, e.g. "valuation_deep_dive"
-    title: str     # display title, e.g. "Valuation Deep-Dive"
-    focus: str     # the specific question/angle LLM must answer in this section
+
+    id: str  # snake_case, unique, e.g. "valuation_deep_dive"
+    title: str  # display title, e.g. "Valuation Deep-Dive"
+    focus: str  # the specific question/angle LLM must answer in this section
 
 
 class PlanContext(BaseModel):
     """Consolidated planning-agent output consumed by downstream nodes."""
+
     research_focus: list[str] = Field(default_factory=list)
     must_have_metrics: list[str] = Field(default_factory=list)
     plan_notes: list[str] = Field(default_factory=list)
@@ -181,6 +206,7 @@ class PlanContext(BaseModel):
 
 
 # ── QualityMetrics ─────────────────────────────────────────────────────────
+
 
 class QualityMetrics(BaseModel):
     citation_coverage: float = Field(default=0.0, ge=0, le=1)
@@ -191,6 +217,7 @@ class QualityMetrics(BaseModel):
 
 
 # ── NormalizedData ─────────────────────────────────────────────────────────
+
 
 class NormalizedData(BaseModel):
     query: str

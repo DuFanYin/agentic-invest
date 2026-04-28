@@ -75,7 +75,9 @@ Rules:
 """
 
 
-async def llm_judge_node(state: ResearchState, *, llm: LLMClient | None = None) -> ResearchState:
+async def llm_judge_node(
+    state: ResearchState, *, llm: LLMClient | None = None
+) -> ResearchState:
     assert_reads(state, _READS, _NODE)
 
     intent = state.get("intent")
@@ -101,22 +103,39 @@ async def llm_judge_node(state: ResearchState, *, llm: LLMClient | None = None) 
 
         if intent and scope == "company" and not intent.ticker:
             judge_reason = "structural"
-            judge_retry_question = "Need clearer company/ticker mapping from query context"
+            judge_retry_question = (
+                "Need clearer company/ticker mapping from query context"
+            )
 
         elif evidence:
             llm = llm or LLMClient()
             try:
-                web_count = sum(1 for e in evidence if getattr(e, "source_type", "") == "web")
-                news_count = sum(1 for e in evidence if getattr(e, "source_type", "") == "news")
-                fin_count = sum(1 for e in evidence if getattr(e, "source_type", "") == "financial_api")
-                macro_count = sum(1 for e in evidence if getattr(e, "source_type", "") == "macro_api")
+                web_count = sum(
+                    1 for e in evidence if getattr(e, "source_type", "") == "web"
+                )
+                news_count = sum(
+                    1 for e in evidence if getattr(e, "source_type", "") == "news"
+                )
+                fin_count = sum(
+                    1
+                    for e in evidence
+                    if getattr(e, "source_type", "") == "financial_api"
+                )
+                macro_count = sum(
+                    1 for e in evidence if getattr(e, "source_type", "") == "macro_api"
+                )
 
-                focus_lines = "\n".join(
-                    f"- {f}" for f in (plan_ctx.research_focus if plan_ctx else [])[:3]
-                ) or "none"
-                must_metrics = ", ".join(
-                    (plan_ctx.must_have_metrics if plan_ctx else [])[:6]
-                ) or "none"
+                focus_lines = (
+                    "\n".join(
+                        f"- {f}"
+                        for f in (plan_ctx.research_focus if plan_ctx else [])[:3]
+                    )
+                    or "none"
+                )
+                must_metrics = (
+                    ", ".join((plan_ctx.must_have_metrics if plan_ctx else [])[:6])
+                    or "none"
+                )
 
                 def _claims_count(x: object) -> int:
                     return len(getattr(x, "claims", []) or [])
@@ -137,8 +156,8 @@ async def llm_judge_node(state: ResearchState, *, llm: LLMClient | None = None) 
                 judge_prompt = f"""{_ANALYSIS_JUDGE_SCHEMA}
 
 SUBJECT: {subject}
-HORIZON: {intent.time_horizon if intent else 'unspecified'}
-SCOPE: {intent.scope if intent else 'unknown'}
+HORIZON: {intent.time_horizon if intent else "unspecified"}
+SCOPE: {intent.scope if intent else "unknown"}
 
 EVIDENCE COUNTS:
 - financial_api: {fin_count}
@@ -168,7 +187,9 @@ MUST-HAVE METRICS:
                     judge_retry_question = decision.retry_question
                     judge_reason = "analysis_robustness"
             except Exception as exc:
-                logging.getLogger(__name__).warning("%s: analysis judge LLM failed — %s", _NODE, exc)
+                logging.getLogger(__name__).warning(
+                    "%s: analysis judge LLM failed — %s", _NODE, exc
+                )
                 judge_reason = "judge_degraded"
 
         if not judge_retry_question and normalized_data and normalized_data.conflicts:
@@ -177,15 +198,18 @@ MUST-HAVE METRICS:
                 topics = ", ".join(
                     getattr(c, "topic", str(c)) for c in normalized_data.conflicts
                 )
-                conflict_lines = "\n".join(
-                    f"- topic={getattr(c, 'topic', '')}; type={getattr(c, 'type', '')}; note={getattr(c, 'note', '')}"
-                    for c in normalized_data.conflicts[:5]
-                ) or "none"
+                conflict_lines = (
+                    "\n".join(
+                        f"- topic={getattr(c, 'topic', '')}; type={getattr(c, 'type', '')}; note={getattr(c, 'note', '')}"
+                        for c in normalized_data.conflicts[:5]
+                    )
+                    or "none"
+                )
                 conflict_prompt = f"""{_CONFLICT_JUDGE_SCHEMA}
 
 SUBJECT: {subject}
-HORIZON: {intent.time_horizon if intent else 'unspecified'}
-SCOPE: {intent.scope if intent else 'unknown'}
+HORIZON: {intent.time_horizon if intent else "unspecified"}
+SCOPE: {intent.scope if intent else "unknown"}
 
 DETECTED CONFLICT TOPICS:
 {topics}
@@ -203,13 +227,16 @@ CONFLICT DETAILS:
                     judge_retry_question = decision.retry_question
                     judge_reason = "evidence_conflict"
             except Exception as exc:
-                logging.getLogger(__name__).warning("%s: conflict judge LLM failed — %s", _NODE, exc)
+                logging.getLogger(__name__).warning(
+                    "%s: conflict judge LLM failed — %s", _NODE, exc
+                )
                 judge_reason = "judge_degraded"
 
     # Package LLM reasoning into PolicyDecision for policy_router to evaluate.
     # The action here is a hint — policy_router's rule engine makes the final call.
     _hint_action = (
-        "retry_full_research" if judge_retry_question and judge_reason not in ("none", "judge_degraded")
+        "retry_full_research"
+        if judge_retry_question and judge_reason not in ("none", "judge_degraded")
         else "continue"
     )
     policy_decision = PolicyDecision(
@@ -225,10 +252,15 @@ CONFLICT DETAILS:
 
     if statuses:
         statuses = update_status(
-            statuses, "llm_judge",
-            lifecycle="waiting" if will_hint_retry else ("degraded" if is_degraded else "standby"),
+            statuses,
+            "llm_judge",
+            lifecycle="waiting"
+            if will_hint_retry
+            else ("degraded" if is_degraded else "standby"),
             phase="gap_retry_required" if will_hint_retry else "gap_resolved",
-            action="retry hinted" if will_hint_retry else ("judge degraded" if is_degraded else "gaps resolved"),
+            action="retry hinted"
+            if will_hint_retry
+            else ("judge degraded" if is_degraded else "gaps resolved"),
             details=[f"reason={judge_reason}"],
         )
 

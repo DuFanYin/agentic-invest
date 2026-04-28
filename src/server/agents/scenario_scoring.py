@@ -5,14 +5,18 @@ from __future__ import annotations
 import json
 import logging
 
-from src.server.models.analysis import FundamentalAnalysis, MacroAnalysis, MarketSentiment
+from src.server.models.analysis import (
+    FundamentalAnalysis,
+    MacroAnalysis,
+    MarketSentiment,
+)
 from src.server.models.scenario import Scenario
 from src.server.models.state import ResearchState
 from src.server.services.llm_provider import LLMClient
 from src.server.utils.contract import NODE_CONTRACTS, assert_reads, assert_writes
 from src.server.utils.status import update_status
 
-_READS  = NODE_CONTRACTS["scenario_scoring"].reads
+_READS = NODE_CONTRACTS["scenario_scoring"].reads
 _WRITES = NODE_CONTRACTS["scenario_scoring"].writes
 
 logger = logging.getLogger(__name__)
@@ -58,14 +62,25 @@ Rules:
 """
 
 
-def _build_prompt(fundamental_analysis, macro_analysis, market_sentiment, evidence, intent, research_focus=None, plan_notes=None) -> str:
+def _build_prompt(
+    fundamental_analysis,
+    macro_analysis,
+    market_sentiment,
+    evidence,
+    intent,
+    research_focus=None,
+    plan_notes=None,
+) -> str:
     evidence_ids = ", ".join(ev.id for ev in evidence) if evidence else "none"
 
     if isinstance(fundamental_analysis, FundamentalAnalysis):
-        fa_claims = "\n".join(
-            f"- {c.statement} (confidence: {c.confidence})"
-            for c in fundamental_analysis.claims
-        ) or "No fundamental claims available."
+        fa_claims = (
+            "\n".join(
+                f"- {c.statement} (confidence: {c.confidence})"
+                for c in fundamental_analysis.claims
+            )
+            or "No fundamental claims available."
+        )
         fa_view = fundamental_analysis.business_quality.view
         fa_val = fundamental_analysis.valuation.relative_multiple_view
     else:
@@ -77,7 +92,9 @@ def _build_prompt(fundamental_analysis, macro_analysis, market_sentiment, eviden
         macro_view = macro_analysis.macro_view
         macro_rate = macro_analysis.rate_environment
         macro_growth = macro_analysis.growth_environment
-        macro_drivers = "\n".join(f"- {d}" for d in macro_analysis.macro_drivers) or "none"
+        macro_drivers = (
+            "\n".join(f"- {d}" for d in macro_analysis.macro_drivers) or "none"
+        )
     else:
         macro_view = "unknown"
         macro_rate = "unknown"
@@ -94,7 +111,10 @@ def _build_prompt(fundamental_analysis, macro_analysis, market_sentiment, eviden
     horizon = intent.time_horizon if intent else "unspecified"
     ticker = intent.ticker if intent else "unknown"
 
-    focus_str = "\n".join(f"- {f}" for f in (research_focus or [])) or "General investment analysis"
+    focus_str = (
+        "\n".join(f"- {f}" for f in (research_focus or []))
+        or "General investment analysis"
+    )
     notes_str = "\n".join(f"- {n}" for n in (plan_notes or [])) or "none"
 
     return f"""{_SCHEMA}
@@ -143,7 +163,9 @@ def _parse_llm_scenarios(raw: str, evidence_ids: list[str]) -> list[Scenario]:
     if isinstance(data, dict):
         data = data.get("scenarios", data)
     if not isinstance(data, list):
-        raise ValueError(f"expected JSON array or {{\"scenarios\": [...]}}, got {type(data).__name__}")
+        raise ValueError(
+            f'expected JSON array or {{"scenarios": [...]}}, got {type(data).__name__}'
+        )
 
     weights = [max(0.0, float(item.get("raw_probability", 0.0))) for item in data]
     total = sum(weights) or 1.0
@@ -153,16 +175,18 @@ def _parse_llm_scenarios(raw: str, evidence_ids: list[str]) -> list[Scenario]:
         tags = item.get("tags") or ["neutral"]
         if not isinstance(tags, list) or not tags:
             tags = ["neutral"]
-        scenarios.append(Scenario(
-            id=f"sc_{i + 1:03d}",
-            name=item["name"],
-            description=item["description"],
-            probability=round(w / total, 6),
-            drivers=item.get("drivers", []),
-            triggers=item.get("triggers", []),
-            evidence_ids=item.get("evidence_ids", evidence_ids[:1]),
-            tags=tags,
-        ))
+        scenarios.append(
+            Scenario(
+                id=f"sc_{i + 1:03d}",
+                name=item["name"],
+                description=item["description"],
+                probability=round(w / total, 6),
+                drivers=item.get("drivers", []),
+                triggers=item.get("triggers", []),
+                evidence_ids=item.get("evidence_ids", evidence_ids[:1]),
+                tags=tags,
+            )
+        )
     if len(scenarios) < _MIN_SCENARIOS or len(scenarios) > _MAX_SCENARIOS:
         raise ValueError(
             f"expected {_MIN_SCENARIOS}-{_MAX_SCENARIOS} scenarios, got {len(scenarios)}"
@@ -185,8 +209,11 @@ async def scenario_scoring_node(
     plan_notes: list[str] = plan_ctx.plan_notes if plan_ctx else []
     statuses = list(state.get("agent_statuses") or [])
     statuses = update_status(
-        statuses, "scenario_scoring",
-        lifecycle="active", phase="scoring_scenarios", action="building scenarios",
+        statuses,
+        "scenario_scoring",
+        lifecycle="active",
+        phase="scoring_scenarios",
+        action="building scenarios",
     )
 
     evidence_ids = [ev.id for ev in evidence]
@@ -194,7 +221,15 @@ async def scenario_scoring_node(
     llm_used = False
 
     if evidence:
-        prompt = _build_prompt(fundamental_analysis, macro_analysis, market_sentiment, evidence, intent, research_focus, plan_notes)
+        prompt = _build_prompt(
+            fundamental_analysis,
+            macro_analysis,
+            market_sentiment,
+            evidence,
+            intent,
+            research_focus,
+            plan_notes,
+        )
         try:
             raw = await llm.call_with_retry(prompt, system=_SYSTEM, node=_NODE)
             parsed = _parse_llm_scenarios(raw, evidence_ids)
@@ -223,8 +258,11 @@ async def scenario_scoring_node(
     prob_sum = round(sum(s.probability for s in scenarios), 6)
 
     statuses = update_status(
-        statuses, "scenario_scoring",
-        lifecycle="standby", phase="scoring_scenarios", action="scenarios ready",
+        statuses,
+        "scenario_scoring",
+        lifecycle="standby",
+        phase="scoring_scenarios",
+        action="scenarios ready",
         details=[
             f"scenarios={len(scenarios)}",
             f"prob_sum={prob_sum}",
@@ -232,8 +270,11 @@ async def scenario_scoring_node(
         ],
     )
     statuses = update_status(
-        statuses, "scenario_debate",
-        lifecycle="active", phase="debating_scenarios", action="starting debate",
+        statuses,
+        "scenario_debate",
+        lifecycle="active",
+        phase="debating_scenarios",
+        action="starting debate",
     )
 
     delta = {"scenarios": scenarios, "agent_statuses": statuses}

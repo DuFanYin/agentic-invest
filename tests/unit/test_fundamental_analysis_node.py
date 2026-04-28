@@ -29,7 +29,11 @@ def _evidence(n: int = 3) -> list[Evidence]:
 
 def _metrics() -> dict:
     return {
-        "ttm": {"revenue": 400e9, "gross_margin_pct": 44.5, "operating_margin_pct": 30.1},
+        "ttm": {
+            "revenue": 400e9,
+            "gross_margin_pct": 44.5,
+            "operating_margin_pct": 30.1,
+        },
         "three_year_avg": {"revenue_growth_pct": 10.2},
         "latest_quarter": {"revenue": 94e9, "eps": 1.52},
     }
@@ -38,14 +42,30 @@ def _metrics() -> dict:
 def _llm_response() -> dict:
     return {
         "claims": [
-            {"statement": "Strong margin profile.", "confidence": "high", "evidence_ids": ["ev_001"]},
-            {"statement": "Valuation near fair value.", "confidence": "medium", "evidence_ids": ["ev_002"]},
+            {
+                "statement": "Strong margin profile.",
+                "confidence": "high",
+                "evidence_ids": ["ev_001"],
+            },
+            {
+                "statement": "Valuation near fair value.",
+                "confidence": "medium",
+                "evidence_ids": ["ev_002"],
+            },
         ],
         "business_quality": {"view": "stable", "drivers": ["brand", "ecosystem"]},
         "financials": {"profitability_trend": "improving", "cash_flow_quality": "high"},
-        "valuation": {"relative_multiple_view": "near median", "simplified_dcf_view": "fair"},
+        "valuation": {
+            "relative_multiple_view": "near median",
+            "simplified_dcf_view": "fair",
+        },
         "fundamental_risks": [
-            {"name": "Margin pressure", "impact": "medium", "signal": "GM declining", "evidence_ids": ["ev_003"]},
+            {
+                "name": "Margin pressure",
+                "impact": "medium",
+                "signal": "GM declining",
+                "evidence_ids": ["ev_003"],
+            },
         ],
         "missing_fields": [],
     }
@@ -55,7 +75,8 @@ def _state(evidence=None, metrics=None, missing_fields=None, intent=None):
     raw_metrics = metrics if metrics is not None else _metrics()
     return {
         "query": "Analyse AAPL",
-        "intent": intent or ResearchIntent(ticker="AAPL", subjects=["Apple"], scope="company"),
+        "intent": intent
+        or ResearchIntent(ticker="AAPL", subjects=["Apple"], scope="company"),
         "evidence": evidence if evidence is not None else _evidence(),
         "normalized_data": NormalizedData(
             query="Analyse AAPL",
@@ -75,7 +96,9 @@ def _mock_llm(response: dict | None = None, raises: Exception | None = None):
     if raises:
         llm.call_with_retry = AsyncMock(side_effect=raises)
     else:
-        llm.call_with_retry = AsyncMock(return_value=json.dumps(response or _llm_response()))
+        llm.call_with_retry = AsyncMock(
+            return_value=json.dumps(response or _llm_response())
+        )
     return llm
 
 
@@ -88,6 +111,7 @@ def _fa(result) -> FundamentalAnalysis:
 
 
 # ── output shape ───────────────────────────────────────────────────────────
+
 
 def test_result_shape_and_core_fields():
     result = _run(fundamental_analysis_node(_state(), llm=_mock_llm()))
@@ -109,8 +133,13 @@ def test_result_shape_and_core_fields():
 
 # ── best-effort degraded on LLM failure ───────────────────────────────────
 
+
 def test_degraded_when_llm_raises():
-    result = _run(fundamental_analysis_node(_state(), llm=_mock_llm(raises=RuntimeError("all models exhausted"))))
+    result = _run(
+        fundamental_analysis_node(
+            _state(), llm=_mock_llm(raises=RuntimeError("all models exhausted"))
+        )
+    )
     fa = result["fundamental_analysis"]
     assert isinstance(fa, FundamentalAnalysis)
     assert fa.degraded is True
@@ -122,5 +151,3 @@ def test_degraded_when_no_evidence():
     fa = result["fundamental_analysis"]
     assert isinstance(fa, FundamentalAnalysis)
     assert fa.degraded is True
-
-

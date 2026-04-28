@@ -24,68 +24,161 @@ def _mock_llm(
     report_md: str | None = None,
 ) -> MagicMock:
     """Single mock LLM that returns appropriate responses for each node."""
-    _intent = intent_json or json.dumps({
-        "intent": "investment_research",
-        "subjects": ["NVDA"],
-        "scope": "company",
-        "ticker": "NVDA",
-        "time_horizon": "3 years",
-        "risk_level": "medium",
-        "required_outputs": ["valuation", "risks", "scenarios"],
-    })
-    _fa = fa_json or json.dumps({
-        "claims": [{"statement": "Strong margins.", "confidence": "high", "evidence_ids": ["ev_001"]}],
-        "business_quality": {"view": "stable", "drivers": ["brand"]},
-        "financials": {"profitability_trend": "improving", "cash_flow_quality": "high"},
-        "valuation": {"relative_multiple_view": "near median", "simplified_dcf_view": "fair"},
-        "fundamental_risks": [{"name": "Competition", "impact": "medium", "signal": "market share", "evidence_ids": ["ev_001"]}],
-        "missing_fields": [],
-    })
-    _ms = ms_json or json.dumps({
-        "claims": [{"statement": "Positive sentiment.", "confidence": "medium", "evidence_ids": ["ev_001"]}],
-        "news_sentiment": {"direction": "positive", "confidence": "medium"},
-        "price_action": {"trend": "upward", "return_30d_pct": 3.1, "volatility": "medium"},
-        "market_narrative": {"summary": "Investors optimistic.", "crowding_risk": "low"},
-        "sentiment_risks": [{"name": "Reversal", "impact": "low", "signal": "guidance", "evidence_ids": ["ev_001"]}],
-        "missing_fields": [],
-    })
-    _macro = macro_json or json.dumps({
-        "macro_view": "Disinflation continues while growth remains resilient.",
-        "macro_drivers": ["Fed policy near neutral", "credit spreads contained"],
-        "macro_risks": [{"name": "Sticky inflation", "impact": "medium", "signal": "CPI re-acceleration"}],
-        "macro_signals": ["FEDFUNDS trend", "10Y yield direction"],
-        "rate_environment": "stable",
-        "growth_environment": "expanding",
-        "missing_fields": [],
-    })
-    _scenarios = scenarios_json or json.dumps([
-        {"name": "AI capex supercycle", "description": "Demand accelerates.", "raw_probability": 0.5,
-         "drivers": ["AI"], "triggers": ["capex"], "signals": ["orders"], "evidence_ids": ["ev_001"], "tags": ["bullish-2", "ai-demand"]},
-        {"name": "Rate plateau stalls growth", "description": "Headwinds persist.", "raw_probability": 0.3,
-         "drivers": ["rates"], "triggers": ["Fed"], "signals": ["yields"], "evidence_ids": ["ev_001"], "tags": ["bearish-1", "rate-sensitive"]},
-        {"name": "Regulatory crackdown", "description": "Policy risk.", "raw_probability": 0.2,
-         "drivers": ["policy"], "triggers": ["legislation"], "signals": ["hearings"], "evidence_ids": ["ev_001"], "tags": ["bearish-2", "policy-risk"]},
-    ])
-    _debate = debate_json or json.dumps({
-        "debate_summary": "Bull and bear views offset; only mild probability shifts applied.",
-        "probability_adjustments": [
+    _intent = intent_json or json.dumps(
+        {
+            "intent": "investment_research",
+            "subjects": ["NVDA"],
+            "scope": "company",
+            "ticker": "NVDA",
+            "time_horizon": "3 years",
+            "risk_level": "medium",
+            "required_outputs": ["valuation", "risks", "scenarios"],
+        }
+    )
+    _fa = fa_json or json.dumps(
+        {
+            "claims": [
+                {
+                    "statement": "Strong margins.",
+                    "confidence": "high",
+                    "evidence_ids": ["ev_001"],
+                }
+            ],
+            "business_quality": {"view": "stable", "drivers": ["brand"]},
+            "financials": {
+                "profitability_trend": "improving",
+                "cash_flow_quality": "high",
+            },
+            "valuation": {
+                "relative_multiple_view": "near median",
+                "simplified_dcf_view": "fair",
+            },
+            "fundamental_risks": [
+                {
+                    "name": "Competition",
+                    "impact": "medium",
+                    "signal": "market share",
+                    "evidence_ids": ["ev_001"],
+                }
+            ],
+            "missing_fields": [],
+        }
+    )
+    _ms = ms_json or json.dumps(
+        {
+            "claims": [
+                {
+                    "statement": "Positive sentiment.",
+                    "confidence": "medium",
+                    "evidence_ids": ["ev_001"],
+                }
+            ],
+            "news_sentiment": {"direction": "positive", "confidence": "medium"},
+            "price_action": {
+                "trend": "upward",
+                "return_30d_pct": 3.1,
+                "volatility": "medium",
+            },
+            "market_narrative": {
+                "summary": "Investors optimistic.",
+                "crowding_risk": "low",
+            },
+            "sentiment_risks": [
+                {
+                    "name": "Reversal",
+                    "impact": "low",
+                    "signal": "guidance",
+                    "evidence_ids": ["ev_001"],
+                }
+            ],
+            "missing_fields": [],
+        }
+    )
+    _macro = macro_json or json.dumps(
+        {
+            "macro_view": "Disinflation continues while growth remains resilient.",
+            "macro_drivers": ["Fed policy near neutral", "credit spreads contained"],
+            "macro_risks": [
+                {
+                    "name": "Sticky inflation",
+                    "impact": "medium",
+                    "signal": "CPI re-acceleration",
+                }
+            ],
+            "macro_signals": ["FEDFUNDS trend", "10Y yield direction"],
+            "rate_environment": "stable",
+            "growth_environment": "expanding",
+            "missing_fields": [],
+        }
+    )
+    _scenarios = scenarios_json or json.dumps(
+        [
             {
-                "scenario_name": "AI capex supercycle",
-                "before": 0.5,
-                "after": 0.48,
-                "delta": -0.02,
-                "reason": "Valuation sensitivity to rates remains elevated.",
-                "evidence_refs": ["ev_001"],
-            }
-        ],
-        "calibrated_scenarios": [
-            {"name": "AI capex supercycle", "probability": 0.48, "tags": ["bullish-2", "ai-demand"]},
-            {"name": "Rate plateau stalls growth", "probability": 0.32, "tags": ["bearish-1", "rate-sensitive"]},
-            {"name": "Regulatory crackdown", "probability": 0.20, "tags": ["bearish-2", "policy-risk"]},
-        ],
-        "confidence": "medium",
-        "debate_flags": [],
-    })
+                "name": "AI capex supercycle",
+                "description": "Demand accelerates.",
+                "raw_probability": 0.5,
+                "drivers": ["AI"],
+                "triggers": ["capex"],
+                "signals": ["orders"],
+                "evidence_ids": ["ev_001"],
+                "tags": ["bullish-2", "ai-demand"],
+            },
+            {
+                "name": "Rate plateau stalls growth",
+                "description": "Headwinds persist.",
+                "raw_probability": 0.3,
+                "drivers": ["rates"],
+                "triggers": ["Fed"],
+                "signals": ["yields"],
+                "evidence_ids": ["ev_001"],
+                "tags": ["bearish-1", "rate-sensitive"],
+            },
+            {
+                "name": "Regulatory crackdown",
+                "description": "Policy risk.",
+                "raw_probability": 0.2,
+                "drivers": ["policy"],
+                "triggers": ["legislation"],
+                "signals": ["hearings"],
+                "evidence_ids": ["ev_001"],
+                "tags": ["bearish-2", "policy-risk"],
+            },
+        ]
+    )
+    _debate = debate_json or json.dumps(
+        {
+            "debate_summary": "Bull and bear views offset; only mild probability shifts applied.",
+            "probability_adjustments": [
+                {
+                    "scenario_name": "AI capex supercycle",
+                    "before": 0.5,
+                    "after": 0.48,
+                    "delta": -0.02,
+                    "reason": "Valuation sensitivity to rates remains elevated.",
+                    "evidence_refs": ["ev_001"],
+                }
+            ],
+            "calibrated_scenarios": [
+                {
+                    "name": "AI capex supercycle",
+                    "probability": 0.48,
+                    "tags": ["bullish-2", "ai-demand"],
+                },
+                {
+                    "name": "Rate plateau stalls growth",
+                    "probability": 0.32,
+                    "tags": ["bearish-1", "rate-sensitive"],
+                },
+                {
+                    "name": "Regulatory crackdown",
+                    "probability": 0.20,
+                    "tags": ["bearish-2", "policy-risk"],
+                },
+            ],
+            "confidence": "medium",
+            "debate_flags": [],
+        }
+    )
     _report = report_md or (
         "# Executive Summary\n## Company Overview\n## Key Evidence\n"
         "## Fundamental Analysis\n## Macro Environment\n## Market Sentiment\n## Valuation View\n"
@@ -99,15 +192,19 @@ def _mock_llm(
     async def _call_with_retry(prompt: str, **kw) -> str:
         call_count["n"] += 1
         # Route by distinctive schema markers in each node's prompt
-        if "DEBATE STRUCTURE" in prompt or "probability_adjustments" in prompt:  # scenario_debate schema
+        if (
+            "DEBATE STRUCTURE" in prompt or "probability_adjustments" in prompt
+        ):  # scenario_debate schema
             return _debate
-        if "raw_probability" in prompt:      # scenario_scoring schema
+        if "raw_probability" in prompt:  # scenario_scoring schema
             return _scenarios
-        if "rate_environment" in prompt and "growth_environment" in prompt:  # macro_analysis schema
+        if (
+            "rate_environment" in prompt and "growth_environment" in prompt
+        ):  # macro_analysis schema
             return _macro
-        if "business_quality" in prompt:     # fundamental_analysis schema
+        if "business_quality" in prompt:  # fundamental_analysis schema
             return _fa
-        if "news_sentiment" in prompt:       # market_sentiment schema
+        if "news_sentiment" in prompt:  # market_sentiment schema
             return _ms
         return _fa  # fallback
 
@@ -129,6 +226,7 @@ def _patched_orchestrator() -> OrchestratorAgent:
 
 
 # ── health ─────────────────────────────────────────────────────────────────
+
 
 def test_health_endpoint() -> None:
     client = TestClient(app)
@@ -154,8 +252,12 @@ def test_lifespan_clears_then_sets_shutdown_flag() -> None:
 
 # ── research endpoint ──────────────────────────────────────────────────────
 
+
 def test_research_endpoint_returns_valid_response() -> None:
-    with patch("src.server.routes.research.OrchestratorAgent", return_value=_patched_orchestrator()):
+    with patch(
+        "src.server.routes.research.OrchestratorAgent",
+        return_value=_patched_orchestrator(),
+    ):
         client = TestClient(app)
         response = client.post("/research", json={"query": "Analyse NVDA long-term"})
 
@@ -171,9 +273,14 @@ def test_research_endpoint_returns_valid_response() -> None:
 
 
 def test_research_stream_emits_final_and_done() -> None:
-    with patch("src.server.routes.research.OrchestratorAgent", return_value=_patched_orchestrator()):
+    with patch(
+        "src.server.routes.research.OrchestratorAgent",
+        return_value=_patched_orchestrator(),
+    ):
         client = TestClient(app)
-        response = client.post("/research/stream", json={"query": "Analyse NVDA long-term"})
+        response = client.post(
+            "/research/stream", json={"query": "Analyse NVDA long-term"}
+        )
 
     assert response.status_code == 200
     text = response.text
@@ -191,10 +298,14 @@ def test_research_stream_shutdown_emits_error_then_done() -> None:
 
     orchestrator.run_stream = _run_stream
 
-    with patch("src.server.routes.research.OrchestratorAgent", return_value=orchestrator):
+    with patch(
+        "src.server.routes.research.OrchestratorAgent", return_value=orchestrator
+    ):
         with patch("src.server.routes.research.shutdown.is_set", return_value=True):
             client = TestClient(app)
-            response = client.post("/research/stream", json={"query": "Analyse NVDA long-term"})
+            response = client.post(
+                "/research/stream", json={"query": "Analyse NVDA long-term"}
+            )
 
     assert response.status_code == 200
     text = response.text

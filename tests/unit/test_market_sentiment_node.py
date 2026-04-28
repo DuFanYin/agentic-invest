@@ -41,13 +41,29 @@ def _price_history() -> dict:
 def _llm_response() -> dict:
     return {
         "claims": [
-            {"statement": "Sentiment is broadly positive.", "confidence": "medium", "evidence_ids": ["ev_002"]},
+            {
+                "statement": "Sentiment is broadly positive.",
+                "confidence": "medium",
+                "evidence_ids": ["ev_002"],
+            },
         ],
         "news_sentiment": {"direction": "positive", "confidence": "medium"},
-        "price_action": {"trend": "upward", "return_30d_pct": 3.1, "volatility": "medium"},
-        "market_narrative": {"summary": "Investors are optimistic.", "crowding_risk": "low"},
+        "price_action": {
+            "trend": "upward",
+            "return_30d_pct": 3.1,
+            "volatility": "medium",
+        },
+        "market_narrative": {
+            "summary": "Investors are optimistic.",
+            "crowding_risk": "low",
+        },
         "sentiment_risks": [
-            {"name": "Sentiment reversal", "impact": "medium", "signal": "weak guidance", "evidence_ids": ["ev_003"]},
+            {
+                "name": "Sentiment reversal",
+                "impact": "medium",
+                "signal": "weak guidance",
+                "evidence_ids": ["ev_003"],
+            },
         ],
         "missing_fields": [],
     }
@@ -73,7 +89,9 @@ def _mock_llm(response: dict | None = None, raises: Exception | None = None):
     if raises:
         llm.call_with_retry = AsyncMock(side_effect=raises)
     else:
-        llm.call_with_retry = AsyncMock(return_value=json.dumps(response or _llm_response()))
+        llm.call_with_retry = AsyncMock(
+            return_value=json.dumps(response or _llm_response())
+        )
     return llm
 
 
@@ -87,6 +105,7 @@ def _ms(result) -> MarketSentiment:
 
 # ── output shape ───────────────────────────────────────────────────────────
 
+
 def test_result_shape_and_core_fields():
     result = _run(market_sentiment_node(_state(), llm=_mock_llm()))
     ms = _ms(result)
@@ -95,8 +114,11 @@ def test_result_shape_and_core_fields():
 
 # ── best-effort degraded on LLM failure ───────────────────────────────────
 
+
 def test_degraded_when_llm_raises():
-    result = _run(market_sentiment_node(_state(), llm=_mock_llm(raises=RuntimeError("exhausted"))))
+    result = _run(
+        market_sentiment_node(_state(), llm=_mock_llm(raises=RuntimeError("exhausted")))
+    )
     ms = result["market_sentiment"]
     assert isinstance(ms, MarketSentiment)
     assert ms.degraded is True
@@ -111,4 +133,3 @@ def test_degraded_when_no_evidence():
 
 
 # ── news evidence filtering ────────────────────────────────────────────────
-
