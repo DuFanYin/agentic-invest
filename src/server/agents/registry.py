@@ -57,7 +57,7 @@ AGENT_REGISTRY: dict[str, AgentRegistryEntry] = {
         agent_id="research",
         reads=frozenset({
             "query", "intent", "plan_context",
-            "retry_questions", "research_iteration",
+            "retry_questions", "retry_scope", "research_iteration",
         }),
         writes=frozenset({"evidence", "normalized_data", "research_iteration"}),
         parallel_group=None,
@@ -101,10 +101,23 @@ AGENT_REGISTRY: dict[str, AgentRegistryEntry] = {
             "fundamental_analysis", "macro_analysis", "market_sentiment",
             "research_iteration", "retry_questions",
         }),
-        writes=frozenset({"retry_questions", "retry_reason"}),
+        writes=frozenset({"policy_decision"}),
         parallel_group=None,
         depends_on=["fundamental_analysis", "macro_analysis", "market_sentiment"],
         failure_mode="degrade",
+        capability_deps=[],
+    ),
+    "policy_router": AgentRegistryEntry(
+        agent_id="policy_router",
+        reads=frozenset({
+            "policy_decision", "evidence", "normalized_data",
+            "fundamental_analysis", "macro_analysis", "market_sentiment",
+            "research_iteration",
+        }),
+        writes=frozenset({"policy_decision", "retry_questions", "retry_reason", "retry_scope"}),
+        parallel_group=None,
+        depends_on=["llm_judge"],
+        failure_mode="fail",   # routing broken = unrecoverable
         capability_deps=[],
     ),
     "scenario_scoring": AgentRegistryEntry(

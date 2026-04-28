@@ -30,7 +30,8 @@ def test_all_nodes_have_contracts():
     expected = {
         "parse_intent", "research",
         "fundamental_analysis", "macro_analysis", "market_sentiment",
-        "llm_judge", "scenario_scoring", "scenario_debate", "report_finalize",
+        "llm_judge", "policy_router",
+        "scenario_scoring", "scenario_debate", "report_finalize",
     }
     assert set(NODE_CONTRACTS.keys()) == expected
 
@@ -123,7 +124,8 @@ def test_no_node_writes_to_its_own_inputs():
     #   agent_statuses — global write, every node updates it
     #   retry_questions — llm_judge and report_finalize legitimately rewrite it
     #   research_iteration — research increments its own counter each pass
-    skip_fields = {"agent_statuses", "retry_questions", "research_iteration"}
+    # policy_router reads the judge's hint then overwrites it with the engine decision
+    skip_fields = {"agent_statuses", "retry_questions", "research_iteration", "policy_decision"}
     for node, contract in NODE_CONTRACTS.items():
         overlap = (contract.reads & contract.writes) - skip_fields
         assert not overlap, f"{node} reads and writes same fields: {overlap}"

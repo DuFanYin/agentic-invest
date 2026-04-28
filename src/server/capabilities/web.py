@@ -27,8 +27,36 @@ class WebFetchResult:
     next_ev_id: int
 
 
-async def fetch_web_evidence(
+async def _fetch_single(
     query: str,
+    *,
+    retrieved_at: str,
+    seen_urls: set[str],
+    cache: Cache,
+    client: WebResearchClient,
+) -> list[dict]:
+    """Fetch one query's results; returns raw items (URL dedup applied in-place)."""
+    try:
+        ck = _cache_key("web", query)
+        web_results = cache.get(ck)
+        if web_results is None:
+            web_results = await asyncio.to_thread(client.search, query, 5)
+            cache.set(ck, web_results, ttl_seconds=_WEB_TTL)
+        fresh = []
+        for item in web_results:
+            url = item.get("url", "")
+            if not url or url in seen_urls:
+                continue
+            seen_urls.add(url)
+            fresh.append(item)
+        return fresh
+    except Exception:
+        logger.warning("web search failed for query: %s", query, exc_info=True)
+        return []
+
+
+async def fetch_web_evidence(
+    queries: str | list[str],
     *,
     ev_id_start: int,
     retrieved_at: str,
@@ -36,25 +64,30 @@ async def fetch_web_evidence(
     cache: Cache,
     client: WebResearchClient,
 ) -> WebFetchResult:
+    """Fetch web evidence for one or more queries concurrently.
+
+    Accepts a single query string or a list. Multiple queries run in parallel;
+    results are URL-deduplicated across all queries.
+    """
+    if isinstance(queries, str):
+        queries = [queries]
+
+    results = await asyncio.gather(
+        *[
+            _fetch_single(q, retrieved_at=retrieved_at, seen_urls=seen_urls, cache=cache, client=client)
+            for q in queries
+        ]
+    )
+
     evidence: list[Evidence] = []
     ev_id = ev_id_start
-
-    try:
-        ck = _cache_key("web", query)
-        web_results = cache.get(ck)
-        if web_results is None:
-            web_results = await asyncio.to_thread(client.search, query, 5)
-            cache.set(ck, web_results, ttl_seconds=_WEB_TTL)
-        for item in web_results:
-            url = item.get("url", "")
-            if not url or url in seen_urls:
-                continue
-            seen_urls.add(url)
+    for items in results:
+        for item in items:
             evidence.append(Evidence(
                 id=f"ev_{ev_id:03d}",
                 source_type="web",
                 title=item.get("title", "Web result"),
-                url=url or None,
+                url=item.get("url") or None,
                 published_at=item.get("published_date"),
                 retrieved_at=retrieved_at,
                 summary=item.get("content", item.get("title", "")),
@@ -62,7 +95,5 @@ async def fetch_web_evidence(
                 related_topics=["web"],
             ))
             ev_id += 1
-    except Exception:
-        logger.warning("web search failed for query: %s", query, exc_info=True)
 
     return WebFetchResult(evidence=evidence, next_ev_id=ev_id)

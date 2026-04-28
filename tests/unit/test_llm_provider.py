@@ -32,7 +32,9 @@ def _error_response(status: int, body: dict | None = None) -> MagicMock:
 
 
 def _client(model: str = "test/model") -> LLMClient:
-    return LLMClient(api_key="test-key", model=model)
+    client = LLMClient(api_key="test-key", model=model)
+    client.retry_backoff = 0.0
+    return client
 
 
 def _run(coro):
@@ -81,6 +83,7 @@ def test_complete_falls_back_to_next_model_after_exhausted_retries():
     client = LLMClient(api_key="test-key")
     client._models = ["model-a", "model-b"]
     client.max_retries = 1
+    client.retry_backoff = 0.0
 
     with patch("httpx.AsyncClient") as mock_http:
         mock_http.return_value.__aenter__.return_value.post.side_effect = side_effect
@@ -93,6 +96,7 @@ def test_complete_raises_when_all_models_exhausted():
     client = LLMClient(api_key="test-key")
     client._models = ["model-a"]
     client.max_retries = 1
+    client.retry_backoff = 0.0
 
     with patch("httpx.AsyncClient") as mock_http:
         mock_http.return_value.__aenter__.return_value.post.return_value = _error_response(429)

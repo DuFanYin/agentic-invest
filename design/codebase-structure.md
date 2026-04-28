@@ -4,7 +4,7 @@
 
 This repository is organized around one backend research pipeline, one lightweight frontend, shared typed models, and supporting tests/docs. The backend follows a layered structure:
 
-- `routes -> agents -> services`
+- `routes -> agents -> capabilities -> services`
 - `models` and `utils` sit underneath as shared contracts and helpers
 
 ## 2) Folder Structure
@@ -18,35 +18,37 @@ agentic-invest/
 │   │   ├── main.py
 │   │   ├── shutdown.py
 │   │   ├── routes/              # HTTP and SSE endpoints
-│   │   │   ├── __init__.py         
+│   │   │   ├── __init__.py
 │   │   │   ├── health.py           # Health check endpoint
 │   │   │   └── research.py         # Research and streaming endpoints
 │   │   ├── models/              # Shared typed contracts
-│   │   │   ├── __init__.py        
-│   │   │   ├── request.py          # Request payload models
-│   │   │   ├── response.py         # Response, status, and telemetry models
-│   │   │   ├── analysis.py         # Analysis and planning payload models
-│   │   │   ├── finance.py          # Finance data payload models
-│   │   │   ├── state.py            # LangGraph shared state definition
-│   │   │   ├── evidence.py         # Evidence item schema
-│   │   │   ├── intent.py           # Research intent schema
-│   │   │   └── scenario.py         # Scenario schema
+│   │   │   ├── __init__.py
+│   │   │   ├── request.py
+│   │   │   ├── response.py
+│   │   │   ├── analysis.py
+│   │   │   ├── finance.py
+│   │   │   ├── state.py
+│   │   │   ├── evidence.py
+│   │   │   ├── intent.py
+│   │   │   └── scenario.py
 │   │   ├── agents/              # Graph runtime and node implementations
+│   │   ├── capabilities/        # research capability layer (finance/macro/web/normalize)
 │   │   ├── services/            # External clients and runtime infra
-│   │   │   ├── __init__.py        
-│   │   │   ├── llm_provider.py     # LLM client wrapper
-│   │   │   ├── finance_data.py     # yfinance data access
-│   │   │   ├── macro_data.py       # FRED and macro signal access
-│   │   │   ├── web_research.py     # Tavily web search client
-│   │   │   ├── cache.py            # SQLite TTL cache
-│   │   │   ├── collector.py        # Per-request LLM call collector
-│   │   │   ├── retry.py            # Shared retry/backoff helpers for fetchers
-│   │   │   └── section_queue.py    # Section streaming queue
-│   │   └── utils/               # Stateless runtime helpers
-│   │       ├── __init__.py      
-│   │       ├── contract.py         # Node read/write contracts
-│   │       ├── status.py           # Agent status helpers
-│   │       └── validation.py       # Final validation helpers
+│   │   │   ├── __init__.py
+│   │   │   ├── llm_provider.py
+│   │   │   ├── finance_data.py
+│   │   │   ├── macro_data.py
+│   │   │   ├── web_research.py
+│   │   │   ├── cache.py
+│   │   │   ├── collector.py
+│   │   │   ├── retry.py
+│   │   │   ├── section_queue.py
+│   │   │   └── policy.py        # PolicyInput/PolicyDecision + deterministic rule engine
+│   │   └── utils/
+│   │       ├── __init__.py
+│   │       ├── contract.py
+│   │       ├── status.py
+│   │       └── validation.py
 │   └── frontend/
 │       ├── index.html
 │       └── static/
@@ -63,8 +65,8 @@ agentic-invest/
 
 - `design/`: design documentation only; not imported at runtime
 - `src/`: runtime code split into backend (`src/server/`) and frontend (`src/frontend/`)
-- `tests/`: automated coverage split into unit tests and one integration API flow test
-- `outputs/`: example generated report artifact
+- `tests/`: automated coverage split into unit tests and integration tests
+- `outputs/`: generated artifacts (sample report, cache db, etc.)
 
 ## 4) Server Overview
 
@@ -72,6 +74,7 @@ agentic-invest/
 
 - `routes/`: HTTP and SSE entrypoints
 - `agents/`: LangGraph orchestration and node implementations
+- `capabilities/`: typed research capability units used by `research`
 - `services/`: third-party integrations and process-local infrastructure
 - `models/`: typed contracts shared across layers
 - `utils/`: stateless runtime helpers
@@ -84,7 +87,7 @@ The request path is:
 
 ### `src/server/config.py`
 
-Loads `.env` from a fixed repository-root path at import time and exposes typed module-level constants. Startup fails fast if `python-dotenv` is missing or `.env` is not present. All services import configuration here rather than calling `os.getenv` ad hoc.
+Loads `.env` from a fixed repository-root path at import time and exposes typed module-level constants. Startup fails fast if `python-dotenv` is missing or `.env` is not present.
 
 | Constant | Purpose |
 |---|---|
@@ -92,20 +95,16 @@ Loads `.env` from a fixed repository-root path at import time and exposes typed 
 | `LLM_API_KEY` | LLM auth |
 | `TAVILY_API_KEY` | web search auth |
 | `FRED_API_KEY` | FRED macro indicator auth |
-| `REQUEST_TIMEOUT_SECONDS` | request-level orchestration timeout (default 180s) |
+| `CACHE_DB_PATH` | SQLite cache location |
+| `REQUEST_TIMEOUT_SECONDS` | request-level orchestration timeout (180s) |
 
 ### `src/server/main.py`
 
-Creates the FastAPI application, mounts static files, and registers the route blueprints. Exposes `/`, `/health`, `/research`, and `/research/stream`. It also manages app lifespan by initializing and clearing the process-wide shutdown signal used by streaming and retry backoff paths.
+Creates the FastAPI app, mounts static files, registers routes, and manages app lifespan with shutdown signaling.
 
 ### `src/server/shutdown.py`
 
-Process-wide shutdown signaling shared across async and sync contexts.
-
-- `init_async_event()`: enable shutdown signaling for active server lifecycle
-- `set()` / `clear()` / `is_set()`: shared signal helpers for graceful interruption
-- `wait_or_timeout(timeout)`: interruptible sleep primitive used by retry backoff
-- `disable()`: deactivate signaling outside active app lifecycle
+Process-wide shutdown signaling for retry backoff and streaming paths.
 
 ## 6) HTTP Layer
 
@@ -113,10 +112,10 @@ Process-wide shutdown signaling shared across async and sync contexts.
 
 Thin transport layer only; no core research logic.
 
-- `health.py`: `GET /health` readiness check (`200` when `LLM_API_KEY` exists, otherwise `503`)
+- `health.py`: `GET /health`
 - `research.py`: `POST /research` and `POST /research/stream`
 
-`research.py` creates a fresh `OrchestratorAgent` per request. The streaming route emits an initial `agent_status` snapshot immediately, then forwards domain events from `run_stream()` as SSE `event` frames. On failure it maps the error back to the most relevant node when possible and emits both `agent_status` and `error` before `done`.
+Streaming emits initial statuses immediately, then forwards graph events (`agent_status`, `llm_call`, `section_ready`, `final`, `error`, `done`).
 
 ## 7) Shared Models and State
 
@@ -124,139 +123,79 @@ Thin transport layer only; no core research logic.
 
 Pydantic models and typed state contracts shared across the stack.
 
-| File | Contents |
-|---|---|
-| `request.py` | `ResearchRequest` |
-| `response.py` | `ResearchResponse`, `AgentStatus`, `ValidationResult`, `LLMCall` |
-| `analysis.py` | typed analysis and planning payloads (`FundamentalAnalysis`, `MacroAnalysis`, `MarketSentiment`, `ScenarioDebate`, `NormalizedData`, `PlanContext`, `ReportPlan`, `CustomSection`, `QualityMetrics`, `Budget`) |
-| `finance.py` | finance service payload contracts |
-| `state.py` | `ResearchState` (`TypedDict`) with reducers |
-| `evidence.py` | `Evidence` (`url` is `Optional[str]`) |
-| `intent.py` | `ResearchIntent` |
-| `scenario.py` | `Scenario` (`probability: float` in `[0, 1]`) |
+`ResearchState` (`state.py`) is the LangGraph handoff object between nodes. Key reducers:
 
-`ResearchState` is the LangGraph handoff object between nodes. Key reducer rules:
+- `evidence`: `operator.add` (accumulate across iterations)
+- `retry_questions`: plain replace
+- `agent_statuses`: `_last_list` (merge parallel writes by agent)
 
-- `evidence`: `operator.add` so retry passes accumulate evidence
-- `retry_questions`: plain replace so only the current retry request remains active
-- `agent_statuses`: `_last_list` custom reducer so concurrent node writes merge instead of colliding
+State also includes policy routing fields:
+
+- `policy_decision`
+- `retry_scope`
 
 ## 8) Agent Runtime
 
 ### `src/server/agents/`
 
-Refer to [`design/core-agent-system.md`](design/core-agent-system.md) for detailed agent documentation.
+Refer to [`design/core-agent-system.md`](design/core-agent-system.md) for detailed agent behavior.
 
-## 9) Services
+Current retry routing path is:
+
+- `llm_judge -> policy_router -> (research | scenario_scoring)`
+
+## 9) Capabilities
+
+### `src/server/capabilities/`
+
+Used by `research` to keep orchestration thin:
+
+- `finance.py`: fetch + assemble finance evidence/metrics
+- `macro.py`: fetch + assemble macro evidence
+- `web.py`: fetch web evidence (supports multi-query concurrent fetch)
+- `normalize.py`: build `NormalizedData` and conflicts
+
+## 10) Services
 
 ### `src/server/services/`
 
-External dependency wrappers and request-scoped infrastructure. Agents do not call third-party APIs directly.
-
-Capability groups:
+External dependency wrappers and request-scoped infrastructure.
 
 - LLM access: `llm_provider.py`
 - data collection: `finance_data.py`, `macro_data.py`, `web_research.py`
-- process-local infrastructure: `cache.py`, `collector.py`, `section_queue.py`
+- policy evaluation: `policy.py`
+- process-local infra: `cache.py`, `collector.py`, `section_queue.py`, `retry.py`
 
-#### `llm_provider.py`
+`llm_provider.py` exposes:
 
-OpenAI-compatible LLM client used by the agent nodes. With the default OpenRouter provider it rotates through a two-model free-tier chain:
+- `complete(...)` (JSON mode)
+- `complete_text(...)` (text mode)
+- `call_with_retry(...)` (JSON mode + simplified-prompt retry on invalid JSON)
 
-`openai/gpt-oss-120b:free → meta-llama/llama-3.3-70b-instruct:free`
-
-Per model, it retries on 429/5xx with exponential backoff. Internal error classes split retryable failures from immediate failover:
-
-- `_RetryableError`: retry the same model
-- `_FatalError`: skip to the next model
-
-Public interface:
-
-| Method | Mode | Notes |
-|---|---|---|
-| `complete(prompt)` | JSON | validates JSON before returning |
-| `complete_text(prompt)` | text | free-form Markdown; no JSON enforcement |
-| `call_with_retry(prompt)` | JSON | retries once with simplified prompt if model output is invalid JSON |
-
-The client also emits telemetry to `LLMCallCollector` when one is attached.
-
-#### `finance_data.py`
-
-yfinance wrapper providing `get_info()`, `get_financials()`, `get_price_history()`, and `get_news()`. Helper functions convert numpy/DataFrame values into safe Python primitives.
-
-#### `macro_data.py`
-
-Macro data wrapper around FRED and yfinance macro tickers.
-
-- `get_fred_indicators()`: latest FRED series with direction tags, cached 6h
-- `get_market_signals()`: VIX/10Y/USD market signals, cached 15m
-- `get_all()`: concurrent fetch of both data groups
-
-#### `web_research.py`
-
-Tavily search wrapper via `httpx`. If `TAVILY_API_KEY` is absent, it degrades gracefully and returns `[]`. Uses shared retry/backoff helpers from `services/retry.py` for transient transport/HTTP failures.
-
-#### `cache.py`
-
-SQLite-backed TTL cache with `threading.Lock` and WAL mode.
-
-- `get(key) -> object | None`
-- `set(key, value, ttl_seconds)`
-- `delete(key)`
-- `clear_expired()`
-
-TTL is enforced on read, so expired entries behave as cache misses.
-
-#### `collector.py`
-
-Per-request LLM telemetry collector used by `OrchestratorAgent` and `LLMClient`.
-
-- `record(call)`: append and enqueue `LLMCall` events
-- `wait_next()`: async dequeue for streaming `llm_call` events
-- `all()`: snapshot for final `ResearchResponse.llm_calls`
-
-#### `retry.py`
-
-Shared retry helpers for external data fetchers.
-
-- `RetryableFetchError`: marker exception for transient fetch failures
-- `retry_sync(...)`: sync exponential-backoff retry wrapper
-- constants for retryable HTTP status set and default fetch timeout
-
-#### `section_queue.py`
-
-Per-request queue for section streaming during report finalization.
-
-- `push(section_id, content, source, title="")`: enqueue `section_ready`
-- `done()`: enqueue terminal sentinel
-- used by `report_finalize` as producer and `orchestrator.run_stream` as consumer
-
-## 10) Utilities
+## 11) Utilities
 
 ### `src/server/utils/`
 
 Stateless runtime helpers.
 
-- `contract.py`: node read/write contracts (`NODE_CONTRACTS`) and enforcement helpers (`assert_reads`, `assert_writes`)
-- `status.py`: `initial_agent_statuses()` and `update_status()` for `AgentStatus` snapshots without in-place mutation
-- `validation.py`: final validation helpers for scenario scores, evidence completeness, and claim coverage
+- `contract.py`: `NODE_CONTRACTS` derived from `agents/registry.py`; `assert_reads` / `assert_writes`
+- `status.py`: status snapshot helpers
+- `validation.py`: report/scenario/claim validation helpers
 
-`contract.py` runtime enforcement is scoped to unit-style checks by default; full integration graph runs are not blocked by undeclared extra state keys unless `CONTRACT_ENFORCE=1` is explicitly set.
-
-## 11) Frontend
+## 12) Frontend
 
 ### `src/frontend/`
 
-React-in-HTML frontend without a build step; React, ReactDOM, and Babel are loaded from CDNs.
+React-in-HTML frontend without a build step.
 
-Refer to [`design/frontend.md`](design/frontend.md) for detailed frontend documentation.
+Refer to [`design/frontend.md`](design/frontend.md) for UI details.
 
-## 12) Tests and Outputs
+## 13) Tests and Outputs
 
 ### `tests/`
 
-Refer to [`design/test-suite.md`](design/test-suite.md) for detailed test documentation.
+Unit and integration coverage for agents, services, policy routing, and API.
 
 ### `outputs/`
 
-- `sample-report.md`: example generated report output
+Runtime artifacts (e.g., sample report, SQLite cache).

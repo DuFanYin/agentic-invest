@@ -46,6 +46,15 @@ def _client(api_key: str = "tvly-test") -> WebResearchClient:
     return WebResearchClient(api_key=api_key)
 
 
+@pytest.fixture(autouse=True)
+def _fast_retry_sync(monkeypatch):
+    # Keep retry semantics under test while removing real sleep/backoff in unit tests.
+    def _immediate_retry(fn, **_kwargs):
+        return fn()
+
+    monkeypatch.setattr("src.server.services.web_research.retry_sync", _immediate_retry)
+
+
 # ── result shape ───────────────────────────────────────────────────────────
 
 def test_result_has_required_fields():

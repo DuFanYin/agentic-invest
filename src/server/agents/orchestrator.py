@@ -3,19 +3,19 @@ LangGraph-based orchestrator.
 
 Graph topology
 ──────────────
-                         ┌──────────────────────────────────────────────────────┐
-                         │  (retry: retry_questions detected, iteration < 2)    │
-                         ▼                                                      │
-START → parse_intent → research → [parallel] ───────────────────────────────── ┤
-                         ▲         fundamental_analysis                         │
-                         │         macro_analysis                              │
-                         │         market_sentiment                            │
-                         │       → llm_judge ── (structural|conflict gap?) ──┘
-                         │                   └── (no gaps) → scenario_scoring
-                         │                                    → scenario_debate
-                         │                                    → report_finalize
-                         └────────────────────────────────────────┘
-                                                                    └── END
+                         ┌─────────────────────────────────────────────────────────┐
+                         │  (retry: retry_questions detected, iteration < max)      │
+                         ▼                                                          │
+START → parse_intent → research → [parallel] ──────────────────────────────────── ┤
+                         ▲         fundamental_analysis                             │
+                         │         macro_analysis                                  │
+                         │         market_sentiment                                │
+                         │       → llm_judge → policy_router ── (retry?) ─────────┘
+                         │                                   └── (no) → scenario_scoring
+                         │                                               → scenario_debate
+                         │                                               → report_finalize
+                         └───────────────────────────────────────────────┘
+                                                                           └── END
 """
 
 import asyncio
@@ -30,7 +30,8 @@ from src.server.agents.planning_agent import make_planning_node
 from src.server.agents.market_sentiment import market_sentiment_node
 from src.server.agents.report_finalize import report_finalize_node
 from src.server.agents.research import research_node
-from src.server.agents.llm_judge import llm_judge_node, llm_judge_router
+from src.server.agents.llm_judge import llm_judge_node
+from src.server.agents.policy_router import policy_router_node, policy_router_fn
 from src.server.agents.scenario_debate import scenario_debate_node
 from src.server.agents.scenario_scoring import scenario_scoring_node
 from src.server.models.request import ResearchRequest
@@ -70,12 +71,16 @@ def build_graph(llm_client: LLMClient | None = None, sq: SectionQueue | None = N
     async def _report_node(state: ResearchState) -> ResearchState:
         return await report_finalize_node(state, llm=llm_client, section_queue=sq)
 
+    async def _research_node(state: ResearchState) -> ResearchState:
+        return await research_node(state, llm=llm_client)
+
     builder.add_node("parse_intent", make_planning_node(llm_client))
-    builder.add_node("research", research_node)
+    builder.add_node("research", _research_node)
     builder.add_node("fundamental_analysis", _fundamental_node)
     builder.add_node("macro_analysis", _macro_node)
     builder.add_node("market_sentiment", _sentiment_node)
     builder.add_node("llm_judge", _judge_node)
+    builder.add_node("policy_router", policy_router_node)
     builder.add_node("scenario_scoring", _scenario_node)
     builder.add_node("scenario_debate", _debate_node)
     builder.add_node("report_finalize", _report_node)
@@ -88,14 +93,15 @@ def build_graph(llm_client: LLMClient | None = None, sq: SectionQueue | None = N
     builder.add_edge("research", "macro_analysis")
     builder.add_edge("research", "market_sentiment")
 
-    # Fan-in: all three analysis nodes → llm_judge
+    # Fan-in: all three analysis nodes → llm_judge → policy_router
     builder.add_edge("fundamental_analysis", "llm_judge")
     builder.add_edge("macro_analysis", "llm_judge")
     builder.add_edge("market_sentiment", "llm_judge")
+    builder.add_edge("llm_judge", "policy_router")
 
     builder.add_conditional_edges(
-        "llm_judge",
-        llm_judge_router,
+        "policy_router",
+        policy_router_fn,
         {"research": "research", "scenario_scoring": "scenario_scoring"},
     )
 

@@ -25,6 +25,7 @@ from src.server.models.analysis import (
     QualityMetrics,
     ScenarioDebate,
 )
+from src.server.services.policy import PolicyDecision
 from src.server.models.evidence import Evidence
 from src.server.models.intent import ResearchIntent
 from src.server.models.response import AgentStatus, ValidationResult
@@ -101,6 +102,10 @@ class ResearchState(TypedDict, total=False):
     retry_questions: list[str]  # replaced each cycle — do NOT use operator.add
     retry_reason: str           # "structural" | "evidence_conflict" | "none"
     research_iteration: int     # incremented by research_node; read by llm_judge
+
+    # ── Policy routing ─────────────────────────────────────────────────────
+    policy_decision: PolicyDecision  # written by llm_judge, finalised by policy_router
+    retry_scope: list[str] | None    # None = full research; ["cap.fetch_web"] = scoped
 
     # ── Scenario scoring & debate ──────────────────────────────────────────
     scenarios: list[Scenario]

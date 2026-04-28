@@ -4,7 +4,6 @@ import json
 from src.server.agents.llm_judge import (
     MAX_RESEARCH_ITERATIONS,
     llm_judge_node,
-    llm_judge_router,
 )
 from src.server.models.analysis import NormalizedData
 from src.server.models.intent import ResearchIntent
@@ -33,10 +32,6 @@ def _state(**overrides):
     return base
 
 
-def test_router_retries_when_questions_present():
-    assert llm_judge_router(_state(retry_questions=["q1"])) == "research"
-
-
 def test_judge_clears_after_max_iterations():
     result = asyncio.run(
         llm_judge_node(
@@ -46,8 +41,9 @@ def test_judge_clears_after_max_iterations():
             )
         )
     )
-    assert result["retry_questions"] == []
-    assert result["retry_reason"] == "none"
+    pd = result["policy_decision"]
+    assert pd.reason_code == "none"
+    assert pd.retry_question == ""
 
 
 def test_judge_triggers_structural_gap_when_ticker_missing():
@@ -59,9 +55,10 @@ def test_judge_triggers_structural_gap_when_ticker_missing():
             )
         )
     )
-    assert result["retry_questions"] != []
-    assert result["retry_reason"] == "structural"
-    assert "ticker" in result["retry_questions"][0].lower()
+    pd = result["policy_decision"]
+    assert pd.reason_code == "structural"
+    assert "ticker" in pd.retry_question.lower()
+    assert pd.action == "retry_full_research"
 
 
 def test_judge_triggers_conflict_retry_with_hint():
@@ -87,8 +84,9 @@ def test_judge_triggers_conflict_retry_with_hint():
             llm=llm,
         )
     )
-    assert result["retry_reason"] == "evidence_conflict"
-    assert result["retry_questions"] != []
+    pd = result["policy_decision"]
+    assert pd.reason_code == "evidence_conflict"
+    assert pd.retry_question != ""
     assert len(llm.calls) == 2
 
 
@@ -97,17 +95,18 @@ def test_judge_triggers_analysis_robustness_retry_from_first_judge():
         json.dumps({"should_retry": True, "retry_question": "gather margin trend and guidance", "reason": "thin analysis"}),
     ])
     result = asyncio.run(llm_judge_node(_state(research_iteration=0), llm=llm))
-    assert result["retry_reason"] == "analysis_robustness"
-    assert result["retry_questions"] == ["gather margin trend and guidance"]
+    pd = result["policy_decision"]
+    assert pd.reason_code == "analysis_robustness"
+    assert pd.retry_question == "gather margin trend and guidance"
     assert len(llm.calls) == 1
 
 
 def test_judge_degraded_when_llm_fails():
-    """LLM failure sets retry_reason=judge_degraded and does not retry."""
     class _FailLLM:
         async def call_with_retry(self, prompt, *, system, node):
             raise RuntimeError("all models exhausted")
 
     result = asyncio.run(llm_judge_node(_state(research_iteration=0), llm=_FailLLM()))
-    assert result["retry_questions"] == []
-    assert result["retry_reason"] == "judge_degraded"
+    pd = result["policy_decision"]
+    assert pd.reason_code == "judge_degraded"
+    assert pd.retry_question == ""

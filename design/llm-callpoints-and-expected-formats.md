@@ -14,6 +14,7 @@ It is intentionally higher-level than the code. The goal is to clarify:
 | Node | Call site | Role |
 |---|---|---|
 | `parse_intent` | Planning-stage intent and report-plan generation | Turn the raw query into intent plus downstream planning context |
+| `research` | Tactical web-query planning (adaptive search) | Generate 3-5 targeted web queries before web capability fetch |
 | `fundamental_analysis` | Fundamental analysis generation | Produce structured company, quality, valuation, and risk analysis |
 | `macro_analysis` | Macro regime analysis generation | Produce a structured macro view with drivers and risks |
 | `market_sentiment` | Sentiment and price-action analysis generation | Produce a structured market narrative and sentiment view |
@@ -37,6 +38,22 @@ Behavior:
 - parsed into typed planning objects
 - fallback-friendly rather than fail-fast
 - if the call is unusable, the system falls back to a safe default interpretation instead of stopping the run
+
+## `research`
+
+This node contains one tactical planning LLM call before web retrieval. It does not replace data collection; it only decides what web queries to run this pass.
+
+Expected output type:
+
+- structured JSON
+- key `queries` with 3-5 concrete search strings
+- query list consumed by `cap.fetch_web` for concurrent fetch + URL dedupe
+
+Behavior:
+
+- runs on first pass and retry passes
+- if planning call fails or JSON is unusable, node falls back to deterministic queries and continues
+- failure here is non-fatal unless the full research pass still yields zero usable evidence
 
 ## `fundamental_analysis`
 
@@ -89,7 +106,7 @@ This node is the retry decision point. It uses small structured judge calls to d
 Expected output type:
 
 - small structured JSON judge result
-- retry / no-retry decision
+- retry hint / no-retry hint
 - optional targeted retry question
 
 Behavior:
@@ -97,7 +114,8 @@ Behavior:
 - may run up to two judge passes
 - combines structural checks with LLM-based adequacy/conflict judgment
 - best-effort rather than fail-fast
-- if the judge is unavailable, the pipeline continues with `retry_reason=judge_degraded`
+- writes `policy_decision` (hint) to state; deterministic routing is finalized by `policy_router`
+- if the judge is unavailable, the pipeline continues with `policy_decision.reason_code=judge_degraded`
 
 ## `scenario_scoring`
 
@@ -154,7 +172,7 @@ Most callsites run through JSON mode:
 - `complete(...)` and `call_with_retry(...)`
 - provider-side JSON response enforcement where possible
 - client-side JSON parsing and validation
-- `call_with_retry(...)` also retries once with a simplified prompt on invalid JSON
+- `call_with_retry(...)` retries once with a simplified prompt on invalid JSON-shaped failure
 
 Final report writing uses text mode:
 
@@ -172,6 +190,10 @@ Retry and failover behavior are shared across the client:
 Fallback-friendly callsites:
 
 - `parse_intent`
+- `research` query planner step
+- `fundamental_analysis`
+- `macro_analysis`
+- `market_sentiment`
 - `llm_judge`
 - `scenario_debate`
 - section-level narrative rendering inside `report_finalize`

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -99,6 +100,19 @@ def _mock_macro(fred: dict | None = None, signals: dict | None = None):
     return client
 
 
+class _OkLLM:
+    def __init__(self, queries: list[str]):
+        self._queries = queries
+
+    async def call_with_retry(self, prompt, *, system, node):
+        return json.dumps({"queries": self._queries})
+
+
+class _FailLLM:
+    async def call_with_retry(self, prompt, *, system, node):
+        raise RuntimeError("llm unavailable")
+
+
 def _patch(finance=None, web=None, macro=None):
     """Context manager — patches module-level service singletons in research.py
     and the cache singletons in each capability module."""
@@ -109,6 +123,8 @@ def _patch(finance=None, web=None, macro=None):
     stack.enter_context(patch("src.server.agents.research._macro", macro or _mock_macro()))
     stack.enter_context(patch("src.server.agents.research._web", web or _mock_web()))
     stack.enter_context(patch("src.server.agents.research._cache", _mock_cache()))
+    # Prevent unit tests from running real LLM backoff/retry paths via module-level _llm.
+    stack.enter_context(patch("src.server.agents.research._llm", _FailLLM()))
     # capability modules pass through the same client/cache objects received from research.py,
     # so patching research.py singletons is sufficient — no extra patches needed.
     return stack
@@ -179,6 +195,38 @@ def test_all_services_fail_raises():
     with pytest.raises(RuntimeError, match="research"):
         with _patch(finance=finance, web=web):
             _run(research_node(_base_state()))
+
+
+def test_research_uses_llm_planned_multi_queries():
+    web = _mock_web()
+    llm_queries = [
+        "Apple margin trend latest",
+        "Apple segment revenue mix latest",
+        "Apple guidance revision 2026",
+    ]
+    llm = _OkLLM(llm_queries)
+
+    with _patch(web=web):
+        result = _run(research_node(_base_state(), llm=llm))
+
+    assert isinstance(result["evidence"], list)
+    called_queries = [call.args[0] for call in web.search.call_args_list]
+    assert web.search.call_count == 3
+    assert set(called_queries) == set(llm_queries)
+
+
+def test_research_falls_back_to_default_queries_when_llm_fails():
+    web = _mock_web()
+    state = _base_state()
+    state["retry_questions"] = ["profitability trend"]
+
+    with _patch(web=web):
+        result = _run(research_node(state, llm=_FailLLM()))
+
+    assert isinstance(result["evidence"], list)
+    called_queries = [call.args[0] for call in web.search.call_args_list]
+    assert "Apple Inc profitability trend" in called_queries
+    assert "Apple Inc investment analysis latest" in called_queries
 
 
 # ── Conflict detection ─────────────────────────────────────────────────────

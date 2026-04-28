@@ -19,6 +19,7 @@ _GRAPH_NODES = {
     "macro_analysis",
     "market_sentiment",
     "llm_judge",
+    "policy_router",
     "scenario_scoring",
     "scenario_debate",
     "report_finalize",
@@ -98,7 +99,8 @@ def test_parallel_group_nodes_are_all_degrade_mode():
 # ── Data-flow topology sanity ─────────────────────────────────────────────
 
 def test_no_node_reads_and_writes_same_field():
-    skip = {"agent_statuses", "retry_questions", "research_iteration"}
+    # policy_router reads the judge's hint then overwrites it with the engine decision
+    skip = {"agent_statuses", "retry_questions", "research_iteration", "policy_decision"}
     for agent_id, entry in AGENT_REGISTRY.items():
         overlap = (entry.reads & entry.writes) - skip
         assert not overlap, f"{agent_id} reads and writes same fields: {overlap}"

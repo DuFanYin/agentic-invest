@@ -1,11 +1,17 @@
-"""Research node — thin coordinator over capability layer.
+"""Research node — tactical execution layer.
 
-Calls fetch_finance, fetch_macro, fetch_web, then normalize_evidence.
-No evidence-assembly or conflict-detection logic lives here.
+Responsibilities:
+  1. LLM query planner: given plan_context + current gaps, generates 3-5 targeted
+     web search queries (adaptive search).
+  2. Calls fetch_finance, fetch_macro, fetch_web (concurrent multi-query), then
+     normalize_evidence.
+
+The planner runs on every iteration (first pass and retries alike).
 """
 
 from __future__ import annotations
 
+import json
 import logging
 from datetime import UTC, datetime
 
@@ -17,6 +23,7 @@ from src.server.config import CACHE_DB_PATH
 from src.server.models.state import ResearchState
 from src.server.services.cache import Cache
 from src.server.services.finance_data import FinanceDataClient
+from src.server.services.llm_provider import LLMClient
 from src.server.services.macro_data import MacroDataClient
 from src.server.services.web_research import WebResearchClient
 from src.server.utils.contract import NODE_CONTRACTS, assert_reads, assert_writes
@@ -31,29 +38,106 @@ _finance = FinanceDataClient()
 _macro   = MacroDataClient()
 _web     = WebResearchClient()
 _cache   = Cache(db_path=CACHE_DB_PATH)
+_llm     = LLMClient()
+
+_SYSTEM_QUERY_PLANNER = (
+    "You are a tactical research analyst. "
+    "Given a research plan and current evidence gaps, generate specific web search queries "
+    "to fill those gaps. Each query must be concrete and directly answerable by a web search. "
+    "Return only valid JSON, no markdown."
+)
+
+_QUERY_PLANNER_SCHEMA = """Return exactly this JSON (no extra keys):
+{
+  "queries": [
+    "specific search query 1",
+    "specific search query 2",
+    "specific search query 3"
+  ]
+}
+Rules:
+- Return 3 to 5 queries. Never fewer than 3, never more than 5.
+- Each query must be a standalone search string (not a question, not a directive).
+- Queries must be diverse — cover different angles of the topic.
+- If retry_question is provided, the first query must directly address it.
+- Prefer recency: add year or "latest" where relevant.
+- Do not repeat queries that are already covered by existing_queries.
+"""
 
 
-async def research_node(state: ResearchState) -> ResearchState:
+async def _plan_web_queries(
+    subject: str,
+    *,
+    research_focus: list[str],
+    must_have_metrics: list[str],
+    retry_questions: list[str],
+    existing_queries: list[str],
+    llm: LLMClient,
+) -> list[str]:
+    """Call LLM to generate 3-5 targeted web search queries."""
+    focus_lines = "\n".join(f"- {f}" for f in research_focus[:4]) or "none"
+    metrics = ", ".join(must_have_metrics[:6]) or "none"
+    retry_q = retry_questions[0] if retry_questions else "none"
+    existing = ", ".join(existing_queries[:10]) or "none"
+
+    prompt = f"""{_QUERY_PLANNER_SCHEMA}
+
+SUBJECT: {subject}
+RESEARCH FOCUS:
+{focus_lines}
+MUST-HAVE METRICS: {metrics}
+RETRY QUESTION: {retry_q}
+ALREADY SEARCHED (do not repeat): {existing}
+"""
+    try:
+        raw = await llm.call_with_retry(prompt, system=_SYSTEM_QUERY_PLANNER, node="research")
+        parsed = json.loads(raw)
+        queries = [q for q in (parsed.get("queries") or []) if isinstance(q, str) and q.strip()]
+        if queries:
+            return queries[:5]
+    except Exception:
+        logger.warning("research: query planner LLM failed, using fallback queries")
+
+    # Fallback: build queries from available context
+    fallback = []
+    if retry_questions:
+        fallback.append(f"{subject} {retry_questions[0]}")
+    if research_focus:
+        fallback.append(f"{subject} {research_focus[0]}")
+    fallback.append(f"{subject} investment analysis latest")
+    return fallback[:5]
+
+
+async def research_node(state: ResearchState, *, llm: LLMClient | None = None) -> ResearchState:
     assert_reads(state, _READS, "research")
 
     query           = state["query"]
     intent          = state.get("intent")
     plan_ctx        = state.get("plan_context")
     research_focus  = plan_ctx.research_focus if plan_ctx else []
+    must_have_metrics = plan_ctx.must_have_metrics if plan_ctx else []
     retry_questions = state.get("retry_questions") or []
+    retry_scope     = state.get("retry_scope")          # None = full; list = scoped
     iteration_id    = state.get("research_iteration", 0)
     statuses        = list(state.get("agent_statuses") or [])
+    prior_evidence  = state.get("evidence") or []
+
+    # When retry_scope is set, only run the listed capabilities.
+    # None means full research (all caps enabled).
+    def _cap_enabled(cap: str) -> bool:
+        return retry_scope is None or cap in retry_scope
 
     retrieved_at = datetime.now(UTC).isoformat()
     ticker       = intent.ticker if intent else None
+    subject      = (intent.subjects[0] if intent and intent.subjects else None) or query
     ev_id        = iteration_id * 100 + 1
 
     new_evidence: list = []
     all_metrics:  dict = {}
     all_missing:  list[str] = []
 
-    # ── Finance (ticker-gated) ────────────────────────────────────────────
-    if ticker:
+    # ── Finance (ticker-gated, scope-gated) ──────────────────────────────
+    if ticker and _cap_enabled("cap.fetch_finance"):
         fin = await fetch_finance_evidence(
             ticker,
             ev_id_start=ev_id,
@@ -66,35 +150,40 @@ async def research_node(state: ResearchState) -> ResearchState:
         all_missing.extend(fin.missing_fields)
         ev_id = fin.next_ev_id
 
-    # ── Macro (always) ────────────────────────────────────────────────────
-    mac = await fetch_macro_evidence(
-        ev_id_start=ev_id,
-        retrieved_at=retrieved_at,
-        client=_macro,
-    )
-    new_evidence.extend(mac.evidence)
-    ev_id = mac.next_ev_id
+    # ── Macro (scope-gated) ───────────────────────────────────────────────
+    if _cap_enabled("cap.fetch_macro"):
+        mac = await fetch_macro_evidence(
+            ev_id_start=ev_id,
+            retrieved_at=retrieved_at,
+            client=_macro,
+        )
+        new_evidence.extend(mac.evidence)
+        ev_id = mac.next_ev_id
 
-    # ── Web search (always) ───────────────────────────────────────────────
-    subject = intent.subjects[0] if intent and intent.subjects else query
-    if retry_questions:
-        web_query = f"{subject} {retry_questions[0]}"
-    elif research_focus:
-        web_query = f"{subject} {research_focus[0]}"
-    else:
-        web_query = f"{subject} investment analysis"
-    web_query = web_query.strip()
-
-    seen_urls = {ev.url for ev in new_evidence if ev.url}
-    web = await fetch_web_evidence(
-        web_query,
-        ev_id_start=ev_id,
-        retrieved_at=retrieved_at,
-        seen_urls=seen_urls,
-        cache=_cache,
-        client=_web,
-    )
-    new_evidence.extend(web.evidence)
+    # ── Web search: LLM query planner → concurrent multi-query fetch ──────
+    if _cap_enabled("cap.fetch_web"):
+        existing_queries = [
+            ev.title for ev in prior_evidence if getattr(ev, "source_type", "") == "web"
+        ]
+        web_queries = await _plan_web_queries(
+            subject,
+            research_focus=research_focus,
+            must_have_metrics=must_have_metrics,
+            retry_questions=retry_questions,
+            existing_queries=existing_queries,
+            llm=llm or _llm,
+        )
+        seen_urls = {ev.url for ev in new_evidence if ev.url}
+        web = await fetch_web_evidence(
+            web_queries,
+            ev_id_start=ev_id,
+            retrieved_at=retrieved_at,
+            seen_urls=seen_urls,
+            cache=_cache,
+            client=_web,
+        )
+        new_evidence.extend(web.evidence)
+        ev_id = web.next_ev_id
 
     # ── Fail if nothing collected ─────────────────────────────────────────
     if not new_evidence:

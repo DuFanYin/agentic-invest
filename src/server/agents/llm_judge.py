@@ -5,8 +5,8 @@ Retries only when there is a concrete reason to believe new evidence can be obta
   - analysis_robustness: LLM judge decides if the three analysis outputs are robust enough
   - evidence_conflict: LLM judge decides whether detected conflicts merit another research pass
 
-LLM missing_fields (analysis wishlist) no longer trigger retries — they are recorded
-in the report as data limitations, not routed back to research.
+Outputs PolicyDecision to state. policy_router_node reads it, applies deterministic
+rules, and decides the actual routing action + retry_scope.
 """
 
 from __future__ import annotations
@@ -17,6 +17,7 @@ import logging
 from src.server.models.analysis import JudgeDecision
 from src.server.models.state import ResearchState
 from src.server.services.llm_provider import LLMClient
+from src.server.services.policy import PolicyDecision
 from src.server.utils.contract import NODE_CONTRACTS, assert_reads, assert_writes
 from src.server.utils.status import update_status
 
@@ -29,7 +30,9 @@ MAX_RESEARCH_ITERATIONS = 2
 
 _SYSTEM_ANALYSIS_JUDGE = (
     "You are a conservative research-quality gate. "
-    "Layer 1: decide if the three analyses (fundamental, macro, sentiment) are robust enough to proceed. "
+    "Your only job is to decide if the evidence and analyses are good enough to proceed to scenario generation. "
+    "You do NOT decide what to search for in detail — the research node handles tactical search planning. "
+    "If a retry is needed, provide one concrete directional question; the research node will expand it into specific queries. "
     "Bias toward proceeding unless there is a clear, material gap that another research pass is likely to fix. "
     "Return only valid JSON, no markdown, no extra keys."
 )
@@ -50,7 +53,9 @@ Rules:
 
 _SYSTEM_CONFLICT_JUDGE = (
     "You are a conservative evidence-conflict gate. "
-    "Layer 2: decide whether the detected conflicts are serious enough that one more research pass is worth it. "
+    "Your only job is to decide whether detected conflicts are serious enough to warrant another research pass. "
+    "You do NOT resolve the conflict yourself — provide one directional question pointing at the conflict; "
+    "the research node will generate targeted search queries to resolve it. "
     "Bias toward proceeding unless the conflict is material, decision-relevant, and likely resolvable with one more pass. "
     "Return only valid JSON, no markdown, no extra keys."
 )
@@ -88,15 +93,15 @@ async def llm_judge_node(state: ResearchState, *, llm: LLMClient | None = None) 
         or "the subject"
     )
 
-    retry_question: str | None = None
-    retry_reason: str = "none"
+    judge_reason: str = "none"
+    judge_retry_question: str = ""
 
     if current_iteration < MAX_RESEARCH_ITERATIONS:
         scope = (intent.scope if intent else "").lower()
 
         if intent and scope == "company" and not intent.ticker:
-            retry_question = "Need clearer company/ticker mapping from query context"
-            retry_reason = "structural"
+            judge_reason = "structural"
+            judge_retry_question = "Need clearer company/ticker mapping from query context"
 
         elif evidence:
             llm = llm or LLMClient()
@@ -160,13 +165,13 @@ MUST-HAVE METRICS:
                 )
                 decision = JudgeDecision.model_validate(json.loads(raw))
                 if decision.should_retry and decision.retry_question:
-                    retry_question = decision.retry_question
-                    retry_reason = "analysis_robustness"
+                    judge_retry_question = decision.retry_question
+                    judge_reason = "analysis_robustness"
             except Exception as exc:
                 logging.getLogger(__name__).warning("%s: analysis judge LLM failed — %s", _NODE, exc)
-                retry_reason = "judge_degraded"
+                judge_reason = "judge_degraded"
 
-        if retry_question is None and normalized_data and normalized_data.conflicts:
+        if not judge_retry_question and normalized_data and normalized_data.conflicts:
             try:
                 llm = llm or LLMClient()
                 topics = ", ".join(
@@ -195,44 +200,41 @@ CONFLICT DETAILS:
                 )
                 decision = JudgeDecision.model_validate(json.loads(raw))
                 if decision.should_retry and decision.retry_question:
-                    retry_question = decision.retry_question
-                    retry_reason = "evidence_conflict"
+                    judge_retry_question = decision.retry_question
+                    judge_reason = "evidence_conflict"
             except Exception as exc:
                 logging.getLogger(__name__).warning("%s: conflict judge LLM failed — %s", _NODE, exc)
-                retry_reason = "judge_degraded"
+                judge_reason = "judge_degraded"
 
-    will_retry = retry_question is not None
+    # Package LLM reasoning into PolicyDecision for policy_router to evaluate.
+    # The action here is a hint — policy_router's rule engine makes the final call.
+    _hint_action = (
+        "retry_full_research" if judge_retry_question and judge_reason not in ("none", "judge_degraded")
+        else "continue"
+    )
+    policy_decision = PolicyDecision(
+        action=_hint_action,
+        targets=[],
+        retry_question=judge_retry_question,
+        reason_code=judge_reason,
+        rationale=f"judge reason: {judge_reason}",
+    )
 
-    is_degraded = retry_reason == "judge_degraded"
+    is_degraded = judge_reason == "judge_degraded"
+    will_hint_retry = bool(judge_retry_question)
+
     if statuses:
         statuses = update_status(
             statuses, "llm_judge",
-            lifecycle="waiting" if will_retry else ("degraded" if is_degraded else "standby"),
-            phase="gap_retry_required" if will_retry else "gap_resolved",
-            action="retrying research" if will_retry else ("judge degraded" if is_degraded else "gaps resolved"),
-            details=[f"reason={retry_reason}"],
+            lifecycle="waiting" if will_hint_retry else ("degraded" if is_degraded else "standby"),
+            phase="gap_retry_required" if will_hint_retry else "gap_resolved",
+            action="retry hinted" if will_hint_retry else ("judge degraded" if is_degraded else "gaps resolved"),
+            details=[f"reason={judge_reason}"],
         )
-        if will_retry:
-            statuses = update_status(
-                statuses, "research",
-                lifecycle="active", phase="retrying_evidence", action="supplementary evidence collection",
-            )
-        else:
-            statuses = update_status(
-                statuses, "scenario_scoring",
-                lifecycle="active", phase="scoring_scenarios", action="scoring scenarios",
-            )
 
     delta = {
-        "retry_questions": [retry_question] if will_retry else [],
-        "retry_reason": retry_reason,
+        "policy_decision": policy_decision,
         "agent_statuses": statuses,
     }
     assert_writes(delta, _WRITES, _NODE)
     return delta
-
-
-def llm_judge_router(state: ResearchState) -> str:
-    if state.get("retry_questions"):
-        return "research"
-    return "scenario_scoring"

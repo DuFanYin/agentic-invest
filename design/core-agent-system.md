@@ -16,7 +16,9 @@ Shared Research State
 ├── fundamental_analysis
 ├── macro_analysis
 ├── market_sentiment
-├── retry_reason            ← current retry cause (`structural|analysis_robustness|evidence_conflict|judge_degraded|none`)
+├── policy_decision          ← llm_judge hint, finalized by policy_router
+├── retry_scope              ← capability scope for scoped retry (e.g. ["cap.fetch_web"])
+├── retry_reason             ← current retry cause (`structural|analysis_robustness|evidence_conflict|judge_degraded|none`)
 ├── retry_questions[]        ← replaced each cycle (plain assign)
 ├── research_iteration       ← incremented by Research Agent; read by llm_judge
 ├── scenarios[]
@@ -26,6 +28,7 @@ Shared Research State
 ├── report_json
 ├── validation_result
 ├── quality_metrics
+├── stop_reason
 └── agent_statuses[]         ← _last_list reducer (merges per-agent parallel writes)
 ```
 
@@ -122,34 +125,29 @@ Each analysis agent outputs a structured result with explicit evidence bindings.
 
 ## 4) Runtime Topology
 
-The system uses a LangGraph `StateGraph` with a shared `ResearchState`. It has one active retry loop after `llm_judge`.
+The system uses a LangGraph `StateGraph` with a shared `ResearchState`. It has one active retry loop after `policy_router`.
 
 Flow summary:
 
 - `parse_intent` extracts planning context from the raw query.
 - `research` collects evidence and may run again on retry iterations.
 - `fundamental_analysis`, `macro_analysis`, and `market_sentiment` run in parallel after each research pass.
-- `llm_judge` decides whether to retry or continue.
+- `llm_judge` writes a retry hint (`policy_decision`).
+- `policy_router` applies deterministic policy rules and routes retry or continue.
 - `scenario_scoring` generates baseline scenarios, then `scenario_debate` recalibrates them.
 - `report_finalize` renders narrative sections, assembles the export report, and runs final validation.
 
 ```text
-                              ┌─────────────────────────────────────────┐
-                              │ retry: retry_questions detected,        │
-                              │ research_iteration < 2                  │
-                              ▼                                          │
-START → parse_intent → research → fundamental_analysis ──┐              │
-                                → macro_analysis       ───┼─→ llm_judge ┤
-                                → market_sentiment    ───┘              │
-                                                                         │
-                                                          (no gaps) ─────┘
-                                                               ↓
-                                                      scenario_scoring
-                                                               ↓
-                                                      scenario_debate
-                                                               ↓
-                                                     report_finalize
-                                                               END
+START → parse_intent → research → fundamental_analysis ──┐
+                                → macro_analysis       ───┼─→ llm_judge → policy_router
+                                → market_sentiment    ───┘                  │
+                                                                            ├─ (retry) → research
+                                                                            └─ (continue) → scenario_scoring
+                                                                                           ↓
+                                                                                  scenario_debate
+                                                                                           ↓
+                                                                                 report_finalize
+                                                                                           END
 ```
 
 State mutation rules:
@@ -170,7 +168,7 @@ The orchestrator is a workflow/runtime coordinator, not a peer analysis agent.
 - Output: graph execution, streamed runtime events, and final aggregated response
 - Key strategies:
   - Run analysis nodes in parallel after each research pass
-  - Route retries through `llm_judge` for evidence adequacy/conflict resolution
+  - Route retries through `llm_judge` + `policy_router` for evidence adequacy/conflict resolution
   - Interleave graph updates, LLM telemetry, and section-ready events during streaming
 
 ### Node Roles
@@ -195,7 +193,10 @@ The orchestrator is a workflow/runtime coordinator, not a peer analysis agent.
   - Prioritize high-quality sources (`financial_api` → `news` → `web`)
   - Retrieve finance data, macro data, and Tavily web results in a common evidence schema
   - Evidence schema carries `summary`/`reliability`; collectors populate `retrieved_at`; `url` remains optional
+  - Use adaptive web query planning: generate 3-5 targeted web queries from `research_focus`/`must_have_metrics` and retry question
+  - Fall back to deterministic queries if the research query-planning LLM call fails
   - Deduplicate web results by URL within each pass
+  - Support scoped retries via `retry_scope` (e.g. web-only retry)
   - Normalize fields and units; mark `missing_fields` when data is absent
   - Include conflict signals (`normalized_data.conflicts`) from cumulative evidence across iterations
   - If no usable evidence can be collected, raise a runtime error (no synthetic low-reliability fallback)
@@ -246,12 +247,22 @@ The orchestrator is a workflow/runtime coordinator, not a peer analysis agent.
 
 - Role: decide whether the pipeline should perform one more research pass before scenario generation
 - Input: analysis outputs + evidence + planning context + conflict signals
-- Output: `retry_questions` + `retry_reason`
+- Output: `policy_decision` (hint action + reason + optional retry question)
 - Key strategies:
   - Run a two-stage check: analysis robustness first, then conflict severity
   - Use a structural shortcut for missing company ticker
   - Bias toward proceeding unless the evidence gap or conflict is material
-  - Treat judge failure as best-effort (`retry_reason=judge_degraded`) and continue downstream
+  - Treat judge failure as best-effort (`policy_decision.reason_code=judge_degraded`) and continue downstream
+
+#### Policy Router Agent
+
+- Role: finalize retry decision and route graph execution based on deterministic policy rules
+- Input: `policy_decision` hint + state signals (iteration, degradation flags, conflict/missing counts)
+- Output: finalized `policy_decision`, `retry_questions`, `retry_reason`, `retry_scope`
+- Key strategies:
+  - Apply explicit rule precedence (iteration limit > structural > all-degraded > conflict > robustness > default continue)
+  - Route `retry_capability_only` to `research` with scoped capabilities
+  - Preserve backward-compatible retry fields for downstream report warnings
 
 #### Scenario Debate Agent
 
