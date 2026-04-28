@@ -24,8 +24,6 @@ def validate_scenario_scores(scenarios: list[Scenario]) -> list[str]:
             missing.append("drivers")
         if not s.triggers:
             missing.append("triggers")
-        if not s.signals:
-            missing.append("signals")
         if missing:
             errors.append(f"Scenario '{s.name}' missing required fields: {', '.join(missing)}")
         if not any(_MAGNITUDE_TAG.match(t) for t in s.tags):

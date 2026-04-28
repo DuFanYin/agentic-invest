@@ -17,7 +17,11 @@ from src.server.models.analysis import (
 from src.server.models.scenario import Scenario
 from src.server.models.state import ResearchState
 from src.server.services.openrouter import OpenRouterClient
+from src.server.utils.contract import NODE_CONTRACTS, assert_writes
 from src.server.utils.status import update_status
+
+_READS  = NODE_CONTRACTS["scenario_debate"].reads
+_WRITES = NODE_CONTRACTS["scenario_debate"].writes
 
 logger = logging.getLogger(__name__)
 
@@ -48,8 +52,7 @@ _SYSTEM_ARBITRATOR = (
 _ADVOCATE_SCHEMA = """Return this JSON (no extra keys):
 {
   "scenario_name": "exact name of your assigned scenario",
-  "advocacy_thesis": "2-3 sentence argument for why this scenario deserves its claimed probability",
-  "probability_claim": 0.50,
+  "advocacy_thesis": "2-3 sentence argument for why this scenario deserves its probability",
   "supporting_arguments": [
     "specific argument backed by evidence"
   ],
@@ -57,7 +60,6 @@ _ADVOCATE_SCHEMA = """Return this JSON (no extra keys):
   "contested_scenarios": ["Name of scenario you argue is overweighted"]
 }
 Rules:
-- probability_claim: your argued probability for YOUR scenario only, in [0, 1].
 - supporting_arguments: at least 1, grounded in the provided evidence.
 - evidence_refs: IDs from the available evidence list.
 - contested_scenarios: list scenario names you think are overweighted and briefly why in advocacy_thesis.
@@ -73,15 +75,13 @@ _ARBITRATOR_SCHEMA = """Return this JSON (no extra keys):
       "before": 0.45,
       "after": 0.50,
       "delta": 0.05,
-      "reason": "advocate's evidence was stronger than contested claims",
-      "evidence_refs": ["ev_001"]
+      "reason": "advocate's evidence was stronger than contested claims"
     }
   ],
   "calibrated_scenarios": [
     {
       "name": "...",
-      "probability": 0.50,
-      "tags": ["bullish-2"]
+      "probability": 0.50
     }
   ],
   "confidence": "high|medium|low",
@@ -159,7 +159,7 @@ def _arbitrator_prompt(
         args = "\n".join(f"    - {a}" for a in adv.supporting_arguments)
         contested = ", ".join(adv.contested_scenarios) or "none"
         advocacy_blocks.append(
-            f"ADVOCATE FOR '{adv.scenario_name}' (claims prob: {adv.probability_claim:.3f}):\n"
+            f"ADVOCATE FOR '{adv.scenario_name}':\n"
             f"  Thesis: {adv.advocacy_thesis}\n"
             f"  Arguments:\n{args}\n"
             f"  Evidence cited: {', '.join(adv.evidence_refs) or 'none'}\n"
@@ -182,7 +182,7 @@ def _fallback_debate(scenarios: list[Scenario]) -> ScenarioDebate:
         advocacy_summaries=[],
         probability_adjustments=[],
         calibrated_scenarios=[
-            {"name": s.name, "probability": s.probability, "tags": s.tags}
+            {"name": s.name, "probability": s.probability}
             for s in scenarios
         ],
         confidence="low",
@@ -210,7 +210,6 @@ def _validate_and_fix(
             after=round(after, 6),
             delta=round(delta, 6),
             reason=adj.get("reason", ""),
-            evidence_refs=adj.get("evidence_refs", []),
         ))
 
     calibrated = raw.get("calibrated_scenarios", [])
@@ -233,7 +232,6 @@ def _validate_and_fix(
     advocacy_summaries = [
         {
             "scenario_name": adv.scenario_name,
-            "probability_claim": adv.probability_claim,
             "thesis": adv.advocacy_thesis,
         }
         for adv in advocacies
@@ -318,6 +316,7 @@ async def _run_debate(
 async def scenario_debate_node(
     state: ResearchState, *, llm: OpenRouterClient = _default_llm
 ) -> ResearchState:
+
     scenarios = state.get("scenarios") or []
     evidence = state.get("evidence") or []
     fa = state.get("fundamental_analysis")
@@ -352,4 +351,6 @@ async def scenario_debate_node(
         lifecycle="active", phase="generating_report", action="generating report",
     )
 
-    return {"scenario_debate": debate, "agent_statuses": statuses}
+    delta = {"scenario_debate": debate, "agent_statuses": statuses}
+    assert_writes(delta, _WRITES, "scenario_debate")
+    return delta

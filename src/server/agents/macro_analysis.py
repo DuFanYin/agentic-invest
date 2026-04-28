@@ -8,7 +8,11 @@ import logging
 from src.server.models.analysis import MacroAnalysis
 from src.server.models.state import ResearchState
 from src.server.services.openrouter import OpenRouterClient
+from src.server.utils.contract import NODE_CONTRACTS, assert_writes
 from src.server.utils.status import update_status
+
+_READS  = NODE_CONTRACTS["macro_analysis"].reads
+_WRITES = NODE_CONTRACTS["macro_analysis"].writes
 
 logger = logging.getLogger(__name__)
 
@@ -16,8 +20,8 @@ _default_llm = OpenRouterClient()
 _NODE = "macro_analysis"
 
 _SYSTEM = (
-    "You are a macro economist and market strategist. "
-    "Analyse the provided macroeconomic data and return a JSON object assessing the macro environment. "
+    "You are a macro economist and market strategist writing for a sophisticated investor. "
+    "Translate macro data into insight-driven statements that embed actual figures and rates. "
     "Return only valid JSON — no markdown, no prose outside the JSON."
 )
 
@@ -29,19 +33,17 @@ Return exactly this JSON structure (no extra keys):
   "macro_risks": [
     { "name": "...", "impact": "high|medium|low", "signal": "..." }
   ],
-  "macro_signals": ["...", "..."],
   "rate_environment": "tightening|easing|stable",
   "growth_environment": "expanding|contracting|stable",
   "missing_fields": ["..."]
 }
 Rules:
-- macro_view: one concise sentence summarising the current macro state.
-- macro_drivers: 2-4 key macro forces and their direction (e.g. "Fed easing cycle underway", "Yield curve steepening").
-- macro_risks: 1-3 risks. impact must be exactly one of: high, medium, low.
-- macro_signals: 2-3 macro indicators to monitor going forward.
-- rate_environment: classify overall monetary policy stance.
-- growth_environment: classify overall economic growth trajectory.
-- missing_fields: data points you wish you had but were not provided.
+- macro_view: one sentence that embeds a key figure (e.g. "The Fed held rates at 5.25–5.5% for the fourth consecutive meeting as core PCE remains above 3%").
+- macro_drivers: 2-4 drivers, each embedding the actual rate/level/change (e.g. "10-year yield at 4.6%, up 40bps in 30 days — compressing equity multiples").
+- macro_risks: 1-3 risks. signal must be a specific threshold or event to watch (e.g. "CPI re-accelerating above 3.5%").
+- rate_environment: exactly one of tightening|easing|stable.
+- growth_environment: exactly one of expanding|contracting|stable.
+- missing_fields: macro data absent from the evidence that would change the view. Short phrases only, max 5 words each.
 """
 
 
@@ -80,6 +82,7 @@ SUPPLEMENTAL EVIDENCE (for context only):
 async def macro_analysis_node(
     state: ResearchState, *, llm: OpenRouterClient = _default_llm
 ) -> ResearchState:
+
     evidence = state.get("evidence") or []
     intent = state.get("intent")
     statuses = list(state.get("agent_statuses") or [])
@@ -133,8 +136,10 @@ async def macro_analysis_node(
             lifecycle="active", phase="evaluating_gaps", action="checking for gaps",
         )
 
-    return {
+    delta = {
         "macro_analysis": result,
         "agent_statuses": statuses,
         "agent_questions": agent_questions,
     }
+    assert_writes(delta, _WRITES, "macro_analysis")
+    return delta

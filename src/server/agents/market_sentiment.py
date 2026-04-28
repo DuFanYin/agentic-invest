@@ -8,7 +8,11 @@ import logging
 from src.server.models.analysis import MarketSentiment
 from src.server.models.state import ResearchState
 from src.server.services.openrouter import OpenRouterClient
+from src.server.utils.contract import NODE_CONTRACTS, assert_writes
 from src.server.utils.status import update_status
+
+_READS  = NODE_CONTRACTS["market_sentiment"].reads
+_WRITES = NODE_CONTRACTS["market_sentiment"].writes
 
 logger = logging.getLogger(__name__)
 
@@ -17,7 +21,7 @@ _NODE = "market_sentiment"
 
 _SYSTEM = (
     "You are a market analyst specialising in sentiment and price action. "
-    "Analyse the provided news headlines and price data and return a JSON object. "
+    "Synthesise news and price data into insight-driven statements that embed actual figures. "
     "Return only valid JSON — no markdown, no prose outside the JSON."
 )
 
@@ -27,19 +31,23 @@ Return exactly this JSON structure (no extra keys):
   "claims": [
     { "statement": "...", "confidence": "high|medium|low", "evidence_ids": ["ev_001", ...] }
   ],
-  "news_sentiment": { "direction": "positive|neutral|negative", "confidence": "high|medium|low" },
-  "price_action": { "trend": "...", "return_30d_pct": 0.0, "volatility": "high|medium|low" },
-  "market_narrative": { "summary": "...", "crowding_risk": "high|medium|low" },
+  "news_sentiment": { "direction": "positive|neutral|negative" },
+  "price_action": { "return_30d_pct": 0.0, "volatility": "high|medium|low" },
+  "market_narrative": { "summary": "..." },
   "sentiment_risks": [
     { "name": "...", "impact": "high|medium|low", "signal": "...", "evidence_ids": ["ev_001", ...] }
   ],
   "missing_fields": ["..."]
 }
 Rules:
-- Every claim and sentiment_risk must cite at least one evidence_id from the list provided.
-- news_sentiment.direction must be exactly one of: positive, neutral, negative.
-- Provide 1-3 claims and 1-2 sentiment_risks.
-- missing_fields: list data points you wish you had but were not provided.
+- claims: 2-4 statements. Embed actual figures where available (e.g. "Stock fell 8% in 30 days on volume 2x the 90-day average, signalling institutional exit"). If price data is provided, at least one claim must reference return_30d_pct or volatility with the actual value.
+- news_sentiment.direction: exactly one of positive|neutral|negative.
+- news_sentiment.confidence: omit this field — not needed.
+- price_action.return_30d_pct: numeric, positive = gain, negative = loss.
+- market_narrative.summary: 1-2 sentences describing the dominant market story right now.
+- sentiment_risks: 1-2 risks. signal must name a specific observable trigger.
+- Every claim and sentiment_risk must cite at least one evidence_id.
+- missing_fields: data you needed but lacked. Short phrases only, max 5 words each.
 """
 
 
@@ -66,6 +74,7 @@ PRICE / MARKET DATA:
 async def market_sentiment_node(
     state: ResearchState, *, llm: OpenRouterClient = _default_llm
 ) -> ResearchState:
+
     evidence = state.get("evidence") or []
     normalized_data = state.get("normalized_data")
     statuses = list(state.get("agent_statuses") or [])
@@ -124,8 +133,10 @@ async def market_sentiment_node(
             lifecycle="active", phase="evaluating_gaps", action="checking for gaps",
         )
 
-    return {
+    delta = {
         "market_sentiment": result,
         "agent_statuses": statuses,
         "agent_questions": agent_questions,
     }
+    assert_writes(delta, _WRITES, "market_sentiment")
+    return delta

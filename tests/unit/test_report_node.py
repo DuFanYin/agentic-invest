@@ -50,11 +50,11 @@ def _evidence(n: int = 3) -> list[Evidence]:
 def _scenarios() -> list[Scenario]:
     return [
         Scenario(name="Rate plateau stalls growth", description="Downside.", tags=["bearish-1"],
-                 probability=0.2, drivers=["d"], triggers=["t"], signals=["s"], evidence_ids=["ev_001"]),
+                 probability=0.2, drivers=["d"], triggers=["t"], evidence_ids=["ev_001"]),
         Scenario(name="AI capex supercycle", description="Base.", tags=["neutral"],
-                 probability=0.5, drivers=["d"], triggers=["t"], signals=["s"], evidence_ids=["ev_001"]),
+                 probability=0.5, drivers=["d"], triggers=["t"], evidence_ids=["ev_001"]),
         Scenario(name="Margin expansion", description="Upside.", tags=["bullish-1"],
-                 probability=0.3, drivers=["d"], triggers=["t"], signals=["s"], evidence_ids=["ev_001"]),
+                 probability=0.3, drivers=["d"], triggers=["t"], evidence_ids=["ev_001"]),
     ]
 
 
@@ -134,11 +134,11 @@ def test_valid_state_produces_no_errors():
 def test_validation_errors_appended_to_report():
     bad_scenarios = [
         Scenario(name="Upside", description=".", tags=["bullish-1"], probability=0.5,
-                 drivers=["d"], triggers=["t"], signals=["s"], evidence_ids=["ev_001"]),
+                 drivers=["d"], triggers=["t"], evidence_ids=["ev_001"]),
         Scenario(name="Base", description=".", tags=["neutral"], probability=0.5,
-                 drivers=["d"], triggers=["t"], signals=["s"], evidence_ids=["ev_001"]),
+                 drivers=["d"], triggers=["t"], evidence_ids=["ev_001"]),
         Scenario(name="Downside", description=".", tags=["bearish-1"], probability=0.5,
-                 drivers=["d"], triggers=["t"], signals=["s"], evidence_ids=["ev_001"]),
+                 drivers=["d"], triggers=["t"], evidence_ids=["ev_001"]),
     ]
     result = _run(report_finalize_node(_state(scenarios=bad_scenarios), llm=_mock_llm()))
     assert "Validation Errors" in result["report_markdown"]

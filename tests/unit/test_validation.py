@@ -5,7 +5,6 @@ import pytest
 from src.server.models.analysis import (
     BusinessQuality,
     Claim,
-    Financials,
     FundamentalAnalysis,
     Valuation,
 )
@@ -20,7 +19,7 @@ from src.server.utils.validation import (
 def _scenario(**kwargs) -> Scenario:
     defaults = dict(
         name="Test", description=".", probability=1.0,
-        drivers=["d"], triggers=["t"], signals=["s"], evidence_ids=["ev_001"],
+        drivers=["d"], triggers=["t"], evidence_ids=["ev_001"],
         tags=["neutral"],
     )
     return Scenario(**{**defaults, **kwargs})
@@ -31,7 +30,7 @@ def _scenario(**kwargs) -> Scenario:
     [
         ({"probability": 0.5}, ["sum"]),
         ({"drivers": []}, ["drivers"]),
-        ({"triggers": [], "signals": []}, ["triggers", "signals"]),
+        ({"triggers": []}, ["triggers"]),
     ],
 )
 def test_scenario_validation_errors(scenario_kwargs, expected_markers) -> None:
@@ -83,9 +82,8 @@ def test_evidence_completeness_fails_when_required_field_missing() -> None:
 def test_claim_coverage_cases(evidence_ids, known_ids, expect_errors) -> None:
     analysis = FundamentalAnalysis(
         claims=[Claim(statement="claim A", confidence="medium", evidence_ids=evidence_ids)],
-        business_quality=BusinessQuality(view="stable", drivers=[]),
-        financials=Financials(profitability_trend="flat", cash_flow_quality="stable"),
-        valuation=Valuation(relative_multiple_view="fair", simplified_dcf_view=""),
+        business_quality=BusinessQuality(view="stable"),
+        valuation=Valuation(relative_multiple_view="fair"),
         fundamental_risks=[],
         missing_fields=[],
         metrics={},

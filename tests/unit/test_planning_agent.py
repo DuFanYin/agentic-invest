@@ -97,13 +97,15 @@ def test_plan_derives_fallback_when_focus_empty():
 # ── make_planning_node() ────────────────────────────────────────────────────
 
 def test_node_returns_state_fields():
+    from src.server.models.analysis import PlanContext
     node = make_planning_node(_mock_llm())
     state = {"query": "Analyse NVDA", "agent_statuses": []}
     result = _run(node(state))
     assert isinstance(result["intent"], ResearchIntent)
-    assert isinstance(result["research_focus"], list)
-    assert isinstance(result["must_have_metrics"], list)
-    assert isinstance(result["plan_notes"], list)
+    assert isinstance(result["plan_context"], PlanContext)
+    assert isinstance(result["plan_context"].research_focus, list)
+    assert isinstance(result["plan_context"].must_have_metrics, list)
+    assert isinstance(result["plan_context"].plan_notes, list)
     assert result["research_iteration"] == 0
     assert result["retry_questions"] == []
 

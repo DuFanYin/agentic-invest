@@ -9,12 +9,17 @@ Boundary:
 from __future__ import annotations
 
 from src.server.models.state import ResearchState, _RESET
+from src.server.utils.contract import NODE_CONTRACTS, assert_writes
 from src.server.utils.status import update_status
+
+_READS  = NODE_CONTRACTS["retry_gate"].reads
+_WRITES = NODE_CONTRACTS["retry_gate"].writes
 
 MAX_RESEARCH_ITERATIONS = 2
 
 
 def retry_gate_node(state: ResearchState) -> ResearchState:
+
     intent = state.get("intent")
     normalized_data = state.get("normalized_data")
     current_iteration = state.get("research_iteration", 1)
@@ -70,11 +75,13 @@ def retry_gate_node(state: ResearchState) -> ResearchState:
                 lifecycle="active", phase="scoring_scenarios", action="scoring scenarios",
             )
 
-    return {
+    delta = {
         "retry_questions": new_questions,
         "agent_questions": [_RESET],  # sentinel: reducer clears list for next cycle
         "agent_statuses": statuses,
     }
+    assert_writes(delta, _WRITES, "retry_gate")
+    return delta
 
 
 def retry_router(state: ResearchState) -> str:

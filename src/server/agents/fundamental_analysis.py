@@ -8,7 +8,11 @@ import logging
 from src.server.models.analysis import FundamentalAnalysis
 from src.server.models.state import ResearchState
 from src.server.services.openrouter import OpenRouterClient
+from src.server.utils.contract import NODE_CONTRACTS, assert_writes
 from src.server.utils.status import update_status
+
+_READS  = NODE_CONTRACTS["fundamental_analysis"].reads
+_WRITES = NODE_CONTRACTS["fundamental_analysis"].writes
 
 logger = logging.getLogger(__name__)
 
@@ -16,8 +20,9 @@ _default_llm = OpenRouterClient()
 _NODE = "fundamental_analysis"
 
 _SYSTEM = (
-    "You are a senior equity analyst. "
-    "Analyse the provided evidence and financial metrics and return a JSON object. "
+    "You are a senior equity analyst writing for a sophisticated but non-specialist investor. "
+    "Your job is to synthesise financial data into clear, insight-driven statements. "
+    "Every claim must embed the actual numbers — do not separate data from interpretation. "
     "Return only valid JSON — no markdown, no prose outside the JSON."
 )
 
@@ -27,18 +32,20 @@ Return exactly this JSON structure (no extra keys):
   "claims": [
     { "statement": "...", "confidence": "high|medium|low", "evidence_ids": ["ev_001", ...] }
   ],
-  "business_quality": { "view": "strong|stable|weak|deteriorating", "drivers": ["..."] },
-  "financials": { "profitability_trend": "...", "cash_flow_quality": "..." },
-  "valuation": { "relative_multiple_view": "...", "simplified_dcf_view": "..." },
+  "business_quality": { "view": "strong|stable|weak|deteriorating" },
+  "valuation": { "relative_multiple_view": "..." },
   "fundamental_risks": [
     { "name": "...", "impact": "high|medium|low", "signal": "...", "evidence_ids": ["ev_001", ...] }
   ],
   "missing_fields": ["..."]
 }
 Rules:
+- claims: 3-5 statements. Each must embed specific numbers from the metrics (e.g. "Revenue grew 22% YoY to $44.1B"). Lead with the insight, embed the data inline. No claim without a number.
+- business_quality.view: one of strong|stable|weak|deteriorating.
+- valuation.relative_multiple_view: one sentence with the actual multiple (e.g. "Trades at 28x forward P/E, a 15% premium to sector median").
+- fundamental_risks: 1-3 risks. signal must be a specific observable indicator, not a generic phrase.
 - Every claim and risk must cite at least one evidence_id from the list provided.
-- missing_fields: list any important data points absent from the evidence.
-- Provide 2-4 claims and 1-3 risks.
+- missing_fields: list data points absent from the evidence that would change the analysis. Short phrases only, max 5 words each.
 """
 
 
@@ -98,12 +105,14 @@ MISSING DATA: {', '.join(missing_fields) if missing_fields else 'none reported'}
 async def fundamental_analysis_node(
     state: ResearchState, *, llm: OpenRouterClient = _default_llm
 ) -> ResearchState:
+
     evidence = state.get("evidence") or []
     normalized_data = state.get("normalized_data")
     intent = state.get("intent")
-    research_focus: list[str] = state.get("research_focus") or []
-    must_have_metrics: list[str] = state.get("must_have_metrics") or []
-    plan_notes: list[str] = state.get("plan_notes") or []
+    plan_ctx = state.get("plan_context")
+    research_focus: list[str] = plan_ctx.research_focus if plan_ctx else []
+    must_have_metrics: list[str] = plan_ctx.must_have_metrics if plan_ctx else []
+    plan_notes: list[str] = plan_ctx.plan_notes if plan_ctx else []
     statuses = list(state.get("agent_statuses") or [])
     if statuses:
         statuses = update_status(
@@ -160,8 +169,10 @@ async def fundamental_analysis_node(
             lifecycle="active", phase="evaluating_gaps", action="checking for gaps",
         )
 
-    return {
+    delta = {
         "fundamental_analysis": result,
         "agent_statuses": statuses,
         "agent_questions": agent_questions,
     }
+    assert_writes(delta, _WRITES, "fundamental_analysis")
+    return delta

@@ -9,7 +9,11 @@ from src.server.models.analysis import FundamentalAnalysis, MacroAnalysis, Marke
 from src.server.models.scenario import Scenario
 from src.server.models.state import ResearchState
 from src.server.services.openrouter import OpenRouterClient
+from src.server.utils.contract import NODE_CONTRACTS, assert_writes
 from src.server.utils.status import update_status
+
+_READS  = NODE_CONTRACTS["scenario_scoring"].reads
+_WRITES = NODE_CONTRACTS["scenario_scoring"].writes
 
 logger = logging.getLogger(__name__)
 
@@ -35,27 +39,22 @@ Return a JSON object with exactly one key "scenarios" containing an array of 3�
       "raw_probability": 0.4,
       "drivers": ["..."],
       "triggers": ["..."],
-      "signals": ["..."],
       "evidence_ids": ["ev_001", ...],
-      "time_horizon": "...",
-      "tags": ["bullish-2", "ai-demand", "rate-sensitive"]
+      "tags": ["bullish-2", "rate-sensitive"]
     },
     ...
   ]
 }
 Rules:
-- Scenarios are centered on what future state occurs, not on bull/bear framing.
-  Use descriptive names: "AI capex supercycle", "Rate plateau stalls growth", not "Bull case".
-- raw_probability: your estimated weight (need not sum to 1 — Python normalises).
-- drivers: what structural forces make this scenario possible.
-- triggers: specific events that would cause this scenario to play out.
-- signals: observable early indicators to watch for.
+- name: descriptive of the future state, not bull/bear labels.
+- raw_probability: estimated weight, need not sum to 1 — Python normalises.
+- drivers: structural forces that make this scenario possible (2-4 items).
+- triggers: specific events that would cause this scenario to play out (1-3 items).
 - tags (required, at least 1): must include exactly one magnitude tag from:
     bearish-3, bearish-2, bearish-1, neutral, bullish-1, bullish-2, bullish-3
-  plus any domain labels that apply, e.g. "ai-demand", "policy-risk", "rate-sensitive".
-- Each scenario must cite at least one evidence_id from the list provided.
-- Scenarios must represent meaningfully different causal paths, not just optimistic/pessimistic
-  variants of the same story.
+  plus any relevant domain labels (e.g. "policy-risk", "rate-sensitive").
+- evidence_ids: cite at least one ID from the AVAILABLE EVIDENCE IDs list provided.
+- Scenarios must represent meaningfully different causal paths.
 """
 
 
@@ -161,9 +160,7 @@ def _parse_llm_scenarios(raw: str, evidence_ids: list[str]) -> list[Scenario]:
             probability=round(w / total, 6),
             drivers=item.get("drivers", []),
             triggers=item.get("triggers", []),
-            signals=item.get("signals", []),
             evidence_ids=item.get("evidence_ids", evidence_ids[:1]),
-            time_horizon=item.get("time_horizon"),
             tags=tags,
         ))
     if len(scenarios) < _MIN_SCENARIOS or len(scenarios) > _MAX_SCENARIOS:
@@ -176,13 +173,15 @@ def _parse_llm_scenarios(raw: str, evidence_ids: list[str]) -> list[Scenario]:
 async def scenario_scoring_node(
     state: ResearchState, *, llm: OpenRouterClient = _default_llm
 ) -> ResearchState:
+
     evidence = state.get("evidence") or []
     fundamental_analysis = state.get("fundamental_analysis")
     macro_analysis = state.get("macro_analysis")
     market_sentiment = state.get("market_sentiment")
     intent = state.get("intent")
-    research_focus: list[str] = state.get("research_focus") or []
-    plan_notes: list[str] = state.get("plan_notes") or []
+    plan_ctx = state.get("plan_context")
+    research_focus: list[str] = plan_ctx.research_focus if plan_ctx else []
+    plan_notes: list[str] = plan_ctx.plan_notes if plan_ctx else []
     statuses = list(state.get("agent_statuses") or [])
     statuses = update_status(
         statuses, "scenario_scoring",
@@ -236,4 +235,6 @@ async def scenario_scoring_node(
         lifecycle="active", phase="debating_scenarios", action="starting debate",
     )
 
-    return {"scenarios": scenarios, "agent_statuses": statuses}
+    delta = {"scenarios": scenarios, "agent_statuses": statuses}
+    assert_writes(delta, _WRITES, "scenario_scoring")
+    return delta

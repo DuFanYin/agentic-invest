@@ -39,7 +39,6 @@ def _llm_scenarios(probs=(0.3, 0.5, 0.2)) -> list[dict]:
             "raw_probability": probs[i],
             "drivers": ["driver"],
             "triggers": ["trigger"],
-            "signals": ["signal"],
             "evidence_ids": [f"ev_{i + 1:03d}"],
             "tags": tags[i],
         }

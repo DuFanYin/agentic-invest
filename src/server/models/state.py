@@ -25,8 +25,8 @@ from src.server.models.analysis import (
     MacroAnalysis,
     MarketSentiment,
     NormalizedData,
+    PlanContext,
     QualityMetrics,
-    ReportPlan,
     ScenarioDebate,
 )
 from src.server.models.evidence import Evidence
@@ -103,10 +103,7 @@ class ResearchState(TypedDict, total=False):
 
     # ── Orchestrator ───────────────────────────────────────────────────────
     intent: ResearchIntent | None
-    research_focus: list[str]       # key areas the research should cover
-    must_have_metrics: list[str]    # metrics that must be present in evidence
-    plan_notes: list[str]           # specific questions/flags for downstream agents
-    report_plan: ReportPlan | None  # customised report structure from planning agent
+    plan_context: PlanContext | None  # consolidated planning output (replaces 4 scattered fields)
 
     # ── Research agent ─────────────────────────────────────────────────────
     evidence: Annotated[list[Evidence], operator.add]   # append across passes

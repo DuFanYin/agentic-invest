@@ -5,11 +5,11 @@ from __future__ import annotations
 import logging
 
 from src.server.models.analysis import (
+    CustomSection,
     FundamentalAnalysis,
     MacroAnalysis,
     MarketSentiment,
     QualityMetrics,
-    ReportPlan,
     ReportSection,
     ScenarioDebate,
 )
@@ -18,7 +18,11 @@ from src.server.models.scenario import Scenario
 from src.server.models.state import ResearchState
 from src.server.services.openrouter import OpenRouterClient
 from src.server.services.section_queue import SectionQueue
+from src.server.utils.contract import NODE_CONTRACTS, assert_writes
 from src.server.utils.status import update_status
+
+_READS  = NODE_CONTRACTS["report_finalize"].reads
+_WRITES = NODE_CONTRACTS["report_finalize"].writes
 from src.server.utils.validation import (
     validate_claim_coverage,
     validate_evidence_completeness,
@@ -77,7 +81,7 @@ def _fmt_fundamental(fa: FundamentalAnalysis) -> str:
     return (
         f"Business quality: {fa.business_quality.view}\n"
         f"Valuation: {fa.valuation.relative_multiple_view}\n"
-        f"Claims:\n{claims}\n"
+        f"Key findings:\n{claims}\n"
         f"Risks:\n{risks or 'none'}"
     )
 
@@ -85,14 +89,12 @@ def _fmt_fundamental(fa: FundamentalAnalysis) -> str:
 def _fmt_macro(macro: MacroAnalysis) -> str:
     drivers = "\n".join(f"- {d}" for d in macro.macro_drivers)
     risks = "\n".join(f"- {r.name} [{r.impact}]: {r.signal}" for r in macro.macro_risks)
-    signals = "\n".join(f"- {s}" for s in macro.macro_signals)
     return (
         f"View: {macro.macro_view}\n"
         f"Rate environment: {macro.rate_environment}\n"
         f"Growth environment: {macro.growth_environment}\n"
         f"Drivers:\n{drivers or 'none'}\n"
-        f"Risks:\n{risks or 'none'}\n"
-        f"Signals:\n{signals or 'none'}"
+        f"Risks:\n{risks or 'none'}"
     )
 
 
@@ -102,12 +104,12 @@ def _fmt_sentiment(ms: MarketSentiment) -> str:
     )
     risks = "\n".join(f"- {r.name} [{r.impact}]: {r.signal}" for r in ms.sentiment_risks)
     pa = ms.price_action
-    price_str = f"Price trend: {pa.trend} | 30d: {pa.return_30d_pct}% | vol: {pa.volatility}\n" if pa else ""
+    price_str = f"30d return: {pa.return_30d_pct}% | volatility: {pa.volatility}\n" if pa else ""
     return (
-        f"News direction: {ms.news_sentiment.direction} ({ms.news_sentiment.confidence})\n"
+        f"News direction: {ms.news_sentiment.direction}\n"
         f"{price_str}"
         f"Narrative: {ms.market_narrative.summary}\n"
-        f"Claims:\n{claims or 'none'}\n"
+        f"Key findings:\n{claims or 'none'}\n"
         f"Risks:\n{risks or 'none'}"
     )
 
@@ -213,6 +215,7 @@ async def report_finalize_node(
     llm: OpenRouterClient = _default_llm,
     section_queue: SectionQueue | None = None,
 ) -> ResearchState:
+
     intent = state.get("intent")
     evidence = state.get("evidence") or []
     fa = state.get("fundamental_analysis")
@@ -220,7 +223,9 @@ async def report_finalize_node(
     ms = state.get("market_sentiment")
     scenarios: list[Scenario] = state.get("scenarios") or []
     debate = state.get("scenario_debate")
-    report_plan: ReportPlan | None = state.get("report_plan")
+    plan_ctx = state.get("plan_context")
+    report_plan = plan_ctx.report_plan if plan_ctx else None
+    custom_sections: list[CustomSection] = plan_ctx.custom_sections if plan_ctx else []
     statuses = list(state.get("agent_statuses") or [])
 
     if statuses:
@@ -283,6 +288,24 @@ async def report_finalize_node(
                 statuses, "report_finalize",
                 lifecycle="active", phase="generating_report",
                 action=f"section ready: {section.title}",
+            )
+
+    # Custom sections — query-specific narratives proposed by planning agent
+    full_ctx = _all_context(intent, evidence_dump, fa, macro, ms, scenarios, debate, metrics)
+    for cs in custom_sections:
+        synthetic = ReportSection(id=cs.id, title=cs.title, source="all", required=False)
+        # Prepend the focus directive so the LLM answers the specific question
+        focused_ctx = f"FOCUS FOR THIS SECTION: {cs.focus}\n\n{full_ctx}"
+        content = await _render_narrative(synthetic, focused_ctx, llm)
+        narrative_sections[cs.id] = content
+        report_parts.append(content)
+        if section_queue:
+            section_queue.push(cs.id, content, "custom", title=cs.title)
+        if statuses:
+            statuses = update_status(
+                statuses, "report_finalize",
+                lifecycle="active", phase="generating_report",
+                action=f"section ready: {cs.title}",
             )
 
     if section_queue:
@@ -351,6 +374,7 @@ async def report_finalize_node(
     report_json = {
         "intent": intent.model_dump() if intent else {},
         "report_plan": report_plan.model_dump() if report_plan else {},
+        "custom_sections": [cs.model_dump() for cs in custom_sections],
         "narrative_sections": narrative_sections,
         "evidence": evidence_dump,
         "fundamental_analysis": fa.model_dump() if isinstance(fa, FundamentalAnalysis) else {},
@@ -377,7 +401,7 @@ async def report_finalize_node(
             lifecycle="standby", phase="workflow_complete", action="workflow complete",
         )
 
-    return {
+    delta = {
         "narrative_sections": narrative_sections,
         "report_markdown": report_markdown,
         "report_json": report_json,
@@ -387,3 +411,5 @@ async def report_finalize_node(
         "stop_reason": stop_reason,
         "agent_statuses": statuses,
     }
+    assert_writes(delta, _WRITES, "report_finalize")
+    return delta

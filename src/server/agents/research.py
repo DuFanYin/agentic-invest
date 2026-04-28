@@ -14,7 +14,11 @@ from src.server.services.cache import Cache
 from src.server.services.finance_data import FinanceDataClient
 from src.server.services.macro_data import MacroDataClient
 from src.server.services.web_research import WebResearchClient
+from src.server.utils.contract import NODE_CONTRACTS, assert_writes
 from src.server.utils.status import update_status
+
+_READS  = NODE_CONTRACTS["research"].reads
+_WRITES = NODE_CONTRACTS["research"].writes
 
 logger = logging.getLogger(__name__)
 
@@ -69,11 +73,13 @@ def _detect_conflicts(evidence: list[Evidence]) -> list[dict]:
 
 
 async def research_node(state: ResearchState) -> ResearchState:
+
     query = state["query"]
     intent = state.get("intent")
-    research_focus: list[str] = state.get("research_focus") or []
-    must_have_metrics: list[str] = state.get("must_have_metrics") or []
-    plan_notes: list[str] = state.get("plan_notes") or []
+    plan_ctx = state.get("plan_context")
+    research_focus: list[str] = plan_ctx.research_focus if plan_ctx else []
+    must_have_metrics: list[str] = plan_ctx.must_have_metrics if plan_ctx else []
+    plan_notes: list[str] = plan_ctx.plan_notes if plan_ctx else []
     retry_questions: list[str] = state.get("retry_questions") or []
     iteration_id: int = state.get("research_iteration", 0)
     statuses = list(state.get("agent_statuses") or [])
@@ -380,9 +386,11 @@ async def research_node(state: ResearchState) -> ResearchState:
             lifecycle="active", phase="analyzing_sentiment", action="analysing sentiment",
         )
 
-    return {
+    delta = {
         "evidence": new_evidence,
         "normalized_data": normalized_data,
         "research_iteration": iteration_id + 1,
         "agent_statuses": statuses,
     }
+    assert_writes(delta, _WRITES, "research")
+    return delta

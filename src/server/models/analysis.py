@@ -31,24 +31,16 @@ class Risk(BaseModel):
 
 class BusinessQuality(BaseModel):
     view: Literal["strong", "stable", "weak", "deteriorating"]
-    drivers: list[str] = Field(default_factory=list)
-
-
-class Financials(BaseModel):
-    profitability_trend: str
-    cash_flow_quality: str
 
 
 class Valuation(BaseModel):
     relative_multiple_view: str
-    simplified_dcf_view: str = ""
 
 
 class FundamentalAnalysis(BaseModel):
     agent: str = "fundamental_analysis"
     claims: list[Claim] = Field(..., min_length=1)
     business_quality: BusinessQuality
-    financials: Financials
     valuation: Valuation
     fundamental_risks: list[Risk] = Field(default_factory=list)
     missing_fields: list[str] = Field(default_factory=list)
@@ -63,18 +55,15 @@ class FundamentalAnalysis(BaseModel):
 
 class NewsSentiment(BaseModel):
     direction: Literal["positive", "neutral", "negative"]
-    confidence: Literal["high", "medium", "low"]
 
 
 class PriceAction(BaseModel):
-    trend: str
     return_30d_pct: float | None = None
     volatility: Literal["high", "medium", "low"] = "medium"
 
 
 class MarketNarrative(BaseModel):
     summary: str
-    crowding_risk: Literal["high", "medium", "low"] = "low"
 
 
 class MarketSentiment(BaseModel):
@@ -119,7 +108,6 @@ class MacroAnalysis(BaseModel):
     macro_view: str
     macro_drivers: list[str] = Field(default_factory=list)
     macro_risks: list[MacroRisk] = Field(default_factory=list)
-    macro_signals: list[str] = Field(default_factory=list)
     rate_environment: Literal["tightening", "easing", "stable"] = "stable"
     growth_environment: Literal["expanding", "contracting", "stable"] = "stable"
     missing_fields: list[str] = Field(default_factory=list)
@@ -131,7 +119,6 @@ class ScenarioAdvocacy(BaseModel):
     """Output from one scenario advocate in round 1."""
     scenario_name: str
     advocacy_thesis: str
-    probability_claim: float = Field(..., ge=0, le=1)
     supporting_arguments: list[str] = Field(default_factory=list)
     evidence_refs: list[str] = Field(default_factory=list)
     contested_scenarios: list[str] = Field(default_factory=list)
@@ -143,7 +130,6 @@ class ProbabilityAdjustment(BaseModel):
     after: float = Field(..., ge=0, le=1)
     delta: float
     reason: str
-    evidence_refs: list[str] = Field(default_factory=list)
 
 
 class ScenarioDebate(BaseModel):
@@ -167,6 +153,22 @@ class ReportSection(BaseModel):
 class ReportPlan(BaseModel):
     report_type: str  # e.g. "valuation", "comparison", "risk_review", "scenario", "general"
     sections: list[ReportSection]
+
+
+class CustomSection(BaseModel):
+    """A query-specific narrative section proposed by the planning agent."""
+    id: str        # snake_case, unique, e.g. "valuation_deep_dive"
+    title: str     # display title, e.g. "Valuation Deep-Dive"
+    focus: str     # the specific question/angle LLM must answer in this section
+
+
+class PlanContext(BaseModel):
+    """Consolidated planning-agent output consumed by downstream nodes."""
+    research_focus: list[str] = Field(default_factory=list)
+    must_have_metrics: list[str] = Field(default_factory=list)
+    plan_notes: list[str] = Field(default_factory=list)
+    report_plan: ReportPlan
+    custom_sections: list[CustomSection] = Field(default_factory=list)
 
 
 # ── QualityMetrics ─────────────────────────────────────────────────────────

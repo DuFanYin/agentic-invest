@@ -13,8 +13,8 @@ class SectionQueue:
     def __init__(self) -> None:
         self._q: asyncio.Queue = asyncio.Queue()
 
-    def push(self, section_id: str, content: str, source: str) -> None:
-        self._q.put_nowait({"id": section_id, "content": content, "source": source})
+    def push(self, section_id: str, content: str, source: str, title: str = "") -> None:
+        self._q.put_nowait({"id": section_id, "content": content, "source": source, "title": title})
 
     def done(self) -> None:
         self._q.put_nowait(self._SENTINEL)
