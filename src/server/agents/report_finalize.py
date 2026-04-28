@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 import logging
 
 from src.server.models.analysis import (
@@ -18,13 +17,11 @@ from src.server.models.analysis import (
 from src.server.models.response import ValidationResult
 from src.server.models.scenario import Scenario
 from src.server.models.state import ResearchState
+from src.server.prompts import build_prompt
 from src.server.services.llm_provider import LLMClient
 from src.server.services.section_queue import SectionQueue
 from src.server.utils.contract import NODE_CONTRACTS, assert_reads, assert_writes
 from src.server.utils.status import update_status
-
-_READS = NODE_CONTRACTS["report_finalize"].reads
-_WRITES = NODE_CONTRACTS["report_finalize"].writes
 from src.server.utils.validation import (
     SCENARIO_PROB_TOLERANCE,
     validate_claim_coverage,
@@ -38,12 +35,8 @@ _default_llm = LLMClient()
 _default_llm.max_retries = 1
 _NODE = "report_finalize"
 
-_SYSTEM = (
-    "You are a senior investment analyst writing one section of a structured research report. "
-    "Write clear, concise Markdown. Ground every claim in the evidence provided. "
-    "Do not invent data. Return only the Markdown for this section — no JSON wrapper, "
-    "no preamble, start directly with the section heading."
-)
+_READS = NODE_CONTRACTS["report_finalize"].reads
+_WRITES = NODE_CONTRACTS["report_finalize"].writes
 
 # Sections that are rendered from structured data — no LLM narrative needed
 _STRUCTURED_SOURCES = {
@@ -132,8 +125,10 @@ def _validate_report_plan(
 
         canonical = _FALLBACK_SECTION_BY_ID[section_id]
         if source != canonical.source:
+            prev = source or "<empty>"
             warnings.append(
-                f"Normalizing report_plan source for section '{section_id}' from '{source or '<empty>'}' to '{canonical.source}'"
+                f"Normalizing report_plan source for section '{section_id}' "
+                f"from '{prev}' to '{canonical.source}'"
             )
             source = canonical.source
         if not title:
@@ -320,17 +315,14 @@ async def _render_narrative(
     context: str,
     llm: LLMClient,
 ) -> str:
-    prompt = (
-        f"Write the '{section.title}' section of an investment research report.\n\n"
-        f"DATA FOR THIS SECTION:\n{context}\n\n"
-        f"Instructions:\n"
-        f"- Start with '## {section.title}' as the heading.\n"
-        f"- Ground claims in the data above — cite evidence IDs like [ev_001] where relevant.\n"
-        f"- 80-150 words. Concise and substantive.\n"
-        f"- Not financial advice."
+    system, prompt = build_prompt(
+        "report_finalize",
+        "narrative_section",
+        section_title=section.title,
+        context=context,
     )
     try:
-        raw = await llm.complete_text(prompt, system=_SYSTEM, node=_NODE)
+        raw = await llm.complete_text(prompt, system=system, node=_NODE)
         content = (raw or "").strip()
         if len(content) > 50:
             return content

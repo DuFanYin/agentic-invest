@@ -1,6 +1,5 @@
 """Unit tests for the deterministic policy engine and its 6 rules."""
 
-import pytest
 
 from src.server.services.policy import PolicyInput, evaluate_policy
 

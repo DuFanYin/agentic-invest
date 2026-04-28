@@ -11,7 +11,6 @@ import logging
 from datetime import UTC, datetime
 
 import httpx
-
 from src.server.config import TAVILY_API_KEY
 from src.server.services.retry import (
     DEFAULT_FETCH_TIMEOUT_SECONDS,

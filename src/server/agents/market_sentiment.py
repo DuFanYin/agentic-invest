@@ -7,6 +7,7 @@ import logging
 
 from src.server.models.analysis import MarketNarrative, MarketSentiment, NewsSentiment
 from src.server.models.state import ResearchState
+from src.server.prompts import build_prompt
 from src.server.services.llm_provider import LLMClient
 from src.server.utils.contract import NODE_CONTRACTS, assert_reads, assert_writes
 from src.server.utils.status import update_status
@@ -19,37 +20,8 @@ logger = logging.getLogger(__name__)
 _default_llm = LLMClient()
 _NODE = "market_sentiment"
 
-_SYSTEM = (
-    "You are a market analyst specialising in sentiment and price action. "
-    "Synthesise news and price data into insight-driven statements that embed actual figures. "
-    "Return only valid JSON — no markdown, no prose outside the JSON."
-)
 
-_SCHEMA = """
-Return exactly this JSON structure (no extra keys):
-{
-  "claims": [
-    { "statement": "...", "confidence": "high|medium|low", "evidence_ids": ["ev_001", ...] }
-  ],
-  "news_sentiment": { "direction": "positive|neutral|negative" },
-  "price_action": { "return_30d_pct": 0.0, "volatility": "high|medium|low" },
-  "market_narrative": { "summary": "..." },
-  "sentiment_risks": [
-    { "name": "...", "impact": "high|medium|low", "signal": "...", "evidence_ids": ["ev_001", ...] }
-  ]
-}
-Rules:
-- claims: 2-4 statements. Embed actual figures where available (e.g. "Stock fell 8% in 30 days on volume 2x the 90-day average, signalling institutional exit"). If price data is provided, at least one claim must reference return_30d_pct or volatility with the actual value.
-- news_sentiment.direction: exactly one of positive|neutral|negative.
-- news_sentiment.confidence: omit this field — not needed.
-- price_action.return_30d_pct: numeric, positive = gain, negative = loss.
-- market_narrative.summary: 1-2 sentences describing the dominant market story right now.
-- sentiment_risks: 1-2 risks. signal must name a specific observable trigger.
-- Every claim and sentiment_risk must cite at least one evidence_id.
-"""
-
-
-def _build_prompt(news_evidence, price_history, all_evidence_ids) -> str:
+def _build_prompt(news_evidence, price_history, all_evidence_ids) -> tuple[str, str]:
     news_lines = (
         "\n".join(f"[{ev.id}] {ev.summary}" for ev in news_evidence)
         or "No news evidence available."
@@ -59,16 +31,13 @@ def _build_prompt(news_evidence, price_history, all_evidence_ids) -> str:
 
     ids_str = ", ".join(all_evidence_ids) if all_evidence_ids else "none"
 
-    return f"""{_SCHEMA}
-
-AVAILABLE EVIDENCE IDs: {ids_str}
-
-NEWS HEADLINES:
-{news_lines}
-
-PRICE / MARKET DATA:
-{price_str}
-"""
+    return build_prompt(
+        "market_sentiment",
+        "main",
+        ids_str=ids_str,
+        news_lines=news_lines,
+        price_str=price_str,
+    )
 
 
 async def market_sentiment_node(
@@ -95,9 +64,9 @@ async def market_sentiment_node(
     result: MarketSentiment | None = None
 
     if evidence:
-        prompt = _build_prompt(news_evidence, price_history, all_evidence_ids)
+        system, prompt = _build_prompt(news_evidence, price_history, all_evidence_ids)
         try:
-            raw = await llm.call_with_retry(prompt, system=_SYSTEM, node=_NODE)
+            raw = await llm.call_with_retry(prompt, system=system, node=_NODE)
             parsed = json.loads(raw)
             result = MarketSentiment.model_validate(parsed)
         except Exception as exc:

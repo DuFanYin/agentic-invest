@@ -6,7 +6,6 @@ from __future__ import annotations
 import time
 
 import pytest
-
 from src.server.services.cache import Cache
 
 

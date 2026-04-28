@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 from src.server.models.analysis import (
     CustomSection,
@@ -14,6 +14,7 @@ from src.server.models.analysis import (
 )
 from src.server.models.intent import ResearchIntent
 from src.server.models.state import ResearchState
+from src.server.prompts import build_prompt
 from src.server.services.llm_provider import LLMClient
 from src.server.utils.contract import NODE_CONTRACTS, assert_reads, assert_writes
 from src.server.utils.status import initial_agent_statuses, update_status
@@ -24,42 +25,6 @@ _WRITES = NODE_CONTRACTS["parse_intent"].writes
 logger = logging.getLogger(__name__)
 
 _NODE = "parse_intent"
-
-_SYSTEM = (
-    "You are a senior investment research director. "
-    "Your job is to read an investment question, understand what the user actually needs, "
-    "and produce a structured research plan that guides a team of analysts. "
-    "Focus on WHAT to research and WHY — not how to search for it. "
-    "Define the strategic direction: scope, focus areas, required metrics, and report structure. "
-    "Return only valid JSON — no markdown, no prose outside the JSON."
-)
-
-_SCHEMA = """
-Return exactly this JSON structure (no extra keys):
-{
-  "intent": "investment_research|comparison|scenario_analysis|risk_review|valuation_check|market_event_analysis",
-  "subjects": ["..."],
-  "scope": "company|sector|theme|macro|event|mixed",
-  "ticker": "string|null",
-  "time_horizon": "string|null",
-  "research_focus": ["2-4 specific focus areas derived from the user's question"],
-  "must_have_metrics": ["3-6 metric names in snake_case"],
-  "plan_notes": ["2-4 specific questions or risk flags the research must address"],
-  "custom_sections": [
-    {
-      "id": "unique_snake_case_id",
-      "title": "Display Title",
-      "focus": "The specific question this section must answer, written as a directive to the analyst."
-    }
-  ]
-}
-
-Rules:
-- research_focus: be specific and actionable. Not "analyse fundamentals" but "Is the margin expansion sustainable given rising input costs?"
-- must_have_metrics: name the exact metrics needed (e.g. revenue_growth_yoy, gross_margin_pct, fcf_yield).
-- plan_notes: name specific risks or angles that must appear somewhere in the report. Short phrases only, max 10 words each.
-- custom_sections: REQUIRED, 1-3 sections addressing the specific angle of this query that the standard template does not cover. Always produce at least 1. The standard template already covers: fundamentals, macro environment, market sentiment, scenarios, and scenario calibration — do not duplicate these. Each custom section must answer a question that a sophisticated investor would specifically want answered given this exact query. The id must be unique snake_case, the title a concise display label, and the focus a precise directive to the analyst writing this section.
-"""
 
 
 @dataclass
@@ -141,9 +106,9 @@ def _parse_custom_sections(raw: dict) -> list[CustomSection]:
 
 
 async def plan(query: str, llm_client: LLMClient) -> PlanningResult:
-    prompt = f"{_SCHEMA}\n\nUser query: {query}"
+    system, prompt = build_prompt("parse_intent", "main", query=query)
     try:
-        raw = await llm_client.complete(prompt, system=_SYSTEM, node=_NODE)
+        raw = await llm_client.complete(prompt, system=system, node=_NODE)
         parsed = json.loads(raw)
 
         intent = ResearchIntent(

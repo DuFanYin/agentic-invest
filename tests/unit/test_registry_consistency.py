@@ -6,10 +6,8 @@ These tests catch drift when an agent is added/removed without updating the regi
 
 from __future__ import annotations
 
-import pytest
-
-from src.server.agents.registry import AGENT_REGISTRY, AgentRegistryEntry
-from src.server.utils.contract import NODE_CONTRACTS, NodeContract
+from src.server.agents.registry import AGENT_REGISTRY
+from src.server.utils.contract import NODE_CONTRACTS
 
 # All agents wired into the LangGraph graph (must match orchestrator.build_graph)
 _GRAPH_NODES = {

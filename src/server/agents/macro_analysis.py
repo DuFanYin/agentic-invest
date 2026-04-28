@@ -7,6 +7,7 @@ import logging
 
 from src.server.models.analysis import MacroAnalysis
 from src.server.models.state import ResearchState
+from src.server.prompts import build_prompt
 from src.server.services.llm_provider import LLMClient
 from src.server.utils.contract import NODE_CONTRACTS, assert_reads, assert_writes
 from src.server.utils.status import update_status
@@ -19,33 +20,8 @@ logger = logging.getLogger(__name__)
 _default_llm = LLMClient()
 _NODE = "macro_analysis"
 
-_SYSTEM = (
-    "You are a macro economist and market strategist writing for a sophisticated investor. "
-    "Translate macro data into insight-driven statements that embed actual figures and rates. "
-    "Return only valid JSON — no markdown, no prose outside the JSON."
-)
 
-_SCHEMA = """
-Return exactly this JSON structure (no extra keys):
-{
-  "macro_view": "...",
-  "macro_drivers": ["...", "..."],
-  "macro_risks": [
-    { "name": "...", "impact": "high|medium|low", "signal": "..." }
-  ],
-  "rate_environment": "tightening|easing|stable",
-  "growth_environment": "expanding|contracting|stable"
-}
-Rules:
-- macro_view: one sentence that embeds a key figure (e.g. "The Fed held rates at 5.25–5.5% for the fourth consecutive meeting as core PCE remains above 3%").
-- macro_drivers: 2-4 drivers, each embedding the actual rate/level/change (e.g. "10-year yield at 4.6%, up 40bps in 30 days — compressing equity multiples").
-- macro_risks: 1-3 risks. signal must be a specific threshold or event to watch (e.g. "CPI re-accelerating above 3.5%").
-- rate_environment: exactly one of tightening|easing|stable.
-- growth_environment: exactly one of expanding|contracting|stable.
-"""
-
-
-def _build_prompt(macro_evidence, all_evidence, intent) -> str:
+def _build_prompt(macro_evidence, all_evidence, intent) -> tuple[str, str]:
     macro_lines = (
         "\n".join(f"[{ev.id}] {ev.summary}" for ev in macro_evidence)
         or "No macro data available."
@@ -66,16 +42,15 @@ def _build_prompt(macro_evidence, all_evidence, intent) -> str:
             f"Horizon: {intent.time_horizon or 'unspecified'}"
         )
 
-    return f"""{_SCHEMA}
+    supplemental_lines = supplemental_lines or "None"
 
-RESEARCH CONTEXT: {intent_str}
-
-MACRO DATA (primary source):
-{macro_lines}
-
-SUPPLEMENTAL EVIDENCE (for context only):
-{supplemental_lines or "None"}
-"""
+    return build_prompt(
+        "macro_analysis",
+        "main",
+        intent_str=intent_str,
+        macro_lines=macro_lines,
+        supplemental_lines=supplemental_lines,
+    )
 
 
 async def macro_analysis_node(
@@ -100,9 +75,9 @@ async def macro_analysis_node(
     result: MacroAnalysis | None = None
 
     if evidence:
-        prompt = _build_prompt(macro_evidence, evidence, intent)
+        system, prompt = _build_prompt(macro_evidence, evidence, intent)
         try:
-            raw = await llm.call_with_retry(prompt, system=_SYSTEM, node=_NODE)
+            raw = await llm.call_with_retry(prompt, system=system, node=_NODE)
             parsed = json.loads(raw)
             result = MacroAnalysis.model_validate(parsed)
         except Exception as exc:

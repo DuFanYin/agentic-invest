@@ -14,8 +14,6 @@ import operator
 from datetime import datetime
 from typing import Annotated, Any
 
-from typing_extensions import TypedDict
-
 from src.server.models.analysis import (
     FundamentalAnalysis,
     MacroAnalysis,
@@ -25,11 +23,12 @@ from src.server.models.analysis import (
     QualityMetrics,
     ScenarioDebate,
 )
-from src.server.services.policy import PolicyDecision
 from src.server.models.evidence import Evidence
 from src.server.models.intent import ResearchIntent
 from src.server.models.response import AgentStatus, ValidationResult
 from src.server.models.scenario import Scenario
+from src.server.services.policy import PolicyDecision
+from typing_extensions import TypedDict
 
 
 def _last_list(left: list, right: list) -> list:

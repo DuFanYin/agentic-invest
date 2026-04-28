@@ -4,14 +4,14 @@ from __future__ import annotations
 
 import asyncio
 import json
-import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import pytest
 from src.server.agents.research import research_node
 from src.server.capabilities.normalize import detect_conflicts
 from src.server.models.analysis import NormalizedData
-from src.server.models.intent import ResearchIntent
 from src.server.models.evidence import Evidence
+from src.server.models.intent import ResearchIntent
 
 
 def _run(coro):

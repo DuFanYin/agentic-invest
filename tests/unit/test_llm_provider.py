@@ -7,9 +7,7 @@ import json
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-
 from src.server.services.llm_provider import LLMClient
-
 
 # ── helpers ────────────────────────────────────────────────────────────────
 

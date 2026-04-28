@@ -9,8 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from dataclasses import dataclass, field
-from datetime import UTC, datetime
+from dataclasses import dataclass
 
 from src.server.models.evidence import Evidence
 from src.server.services.cache import Cache

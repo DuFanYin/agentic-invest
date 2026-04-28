@@ -6,8 +6,6 @@ import asyncio
 import json
 from unittest.mock import AsyncMock, MagicMock
 
-import pytest
-
 from src.server.agents.macro_analysis import macro_analysis_node
 from src.server.models.analysis import MacroAnalysis
 from src.server.models.evidence import Evidence

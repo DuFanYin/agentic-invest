@@ -7,8 +7,7 @@ import logging
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
-from src.server.config import CACHE_DB_PATH
-from src.server.config import FRED_API_KEY
+from src.server.config import CACHE_DB_PATH, FRED_API_KEY
 from src.server.services.cache import Cache
 from src.server.services.retry import (
     DEFAULT_FETCH_TIMEOUT_SECONDS,

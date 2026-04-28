@@ -3,9 +3,9 @@
 from __future__ import annotations
 
 import asyncio
-import pytest
 from unittest.mock import AsyncMock, MagicMock
 
+import pytest
 from src.server.agents.report_finalize import report_finalize_node
 from src.server.models.analysis import (
     BusinessQuality,

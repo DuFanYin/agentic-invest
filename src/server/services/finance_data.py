@@ -30,6 +30,7 @@ def _safe(value: Any) -> Any:
     """Convert numpy scalars / NaN to plain Python types; coerce NaN → None."""
     try:
         import math
+
         import numpy as np  # type: ignore[import]
 
         if isinstance(value, (np.integer,)):
@@ -155,7 +156,6 @@ class FinanceDataClient:
             eps_latest = _row(inc, "Diluted EPS", 0)
 
             rev_prior2 = _row(inc, "Total Revenue", 2)  # for 3y avg
-            gp_prior = _row(inc, "Gross Profit", 1)
             op_prior = _row(inc, "Operating Income", 1)
 
             fcf_latest = _row(cf, "Free Cash Flow", 0)

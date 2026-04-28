@@ -4,7 +4,6 @@ from pathlib import Path
 from fastapi import FastAPI
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
-
 from src.server import shutdown
 from src.server.routes.health import router as health_router
 from src.server.routes.research import router as research_router

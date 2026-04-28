@@ -1,7 +1,6 @@
 """Unit tests: validation helpers."""
 
 import pytest
-
 from src.server.models.analysis import (
     BusinessQuality,
     Claim,

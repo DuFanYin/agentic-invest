@@ -21,6 +21,7 @@ from src.server.capabilities.normalize import normalize_evidence
 from src.server.capabilities.web import fetch_web_evidence
 from src.server.config import CACHE_DB_PATH
 from src.server.models.state import ResearchState
+from src.server.prompts import build_prompt
 from src.server.services.cache import Cache
 from src.server.services.finance_data import FinanceDataClient
 from src.server.services.llm_provider import LLMClient
@@ -40,30 +41,6 @@ _web = WebResearchClient()
 _cache = Cache(db_path=CACHE_DB_PATH)
 _llm = LLMClient()
 
-_SYSTEM_QUERY_PLANNER = (
-    "You are a tactical research analyst. "
-    "Given a research plan and current evidence gaps, generate specific web search queries "
-    "to fill those gaps. Each query must be concrete and directly answerable by a web search. "
-    "Return only valid JSON, no markdown."
-)
-
-_QUERY_PLANNER_SCHEMA = """Return exactly this JSON (no extra keys):
-{
-  "queries": [
-    "specific search query 1",
-    "specific search query 2",
-    "specific search query 3"
-  ]
-}
-Rules:
-- Return 3 to 5 queries. Never fewer than 3, never more than 5.
-- Each query must be a standalone search string (not a question, not a directive).
-- Queries must be diverse — cover different angles of the topic.
-- If retry_question is provided, the first query must directly address it.
-- Prefer recency: add year or "latest" where relevant.
-- Do not repeat queries that are already covered by existing_queries.
-"""
-
 
 async def _plan_web_queries(
     subject: str,
@@ -80,19 +57,17 @@ async def _plan_web_queries(
     retry_q = retry_questions[0] if retry_questions else "none"
     existing = ", ".join(existing_queries[:10]) or "none"
 
-    prompt = f"""{_QUERY_PLANNER_SCHEMA}
-
-SUBJECT: {subject}
-RESEARCH FOCUS:
-{focus_lines}
-MUST-HAVE METRICS: {metrics}
-RETRY QUESTION: {retry_q}
-ALREADY SEARCHED (do not repeat): {existing}
-"""
+    system, prompt = build_prompt(
+        "research",
+        "query_planner",
+        subject=subject,
+        focus_lines=focus_lines,
+        metrics=metrics,
+        retry_q=retry_q,
+        existing=existing,
+    )
     try:
-        raw = await llm.call_with_retry(
-            prompt, system=_SYSTEM_QUERY_PLANNER, node="research"
-        )
+        raw = await llm.call_with_retry(prompt, system=system, node="research")
         parsed = json.loads(raw)
         queries = [
             q for q in (parsed.get("queries") or []) if isinstance(q, str) and q.strip()

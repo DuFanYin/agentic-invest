@@ -8,14 +8,12 @@ The tests serve as a living spec of the data-flow topology.
 from __future__ import annotations
 
 import pytest
-
 from src.server.utils.contract import (
     NODE_CONTRACTS,
     ContractViolation,
     assert_reads,
     assert_writes,
 )
-
 
 # ── Helpers ────────────────────────────────────────────────────────────────
 

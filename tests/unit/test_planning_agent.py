@@ -6,9 +6,7 @@ import asyncio
 import json
 from unittest.mock import AsyncMock, MagicMock
 
-import pytest
-
-from src.server.agents.planning_agent import plan, make_planning_node
+from src.server.agents.planning_agent import make_planning_node, plan
 from src.server.models.intent import ResearchIntent
 from src.server.services.llm_provider import LLMClient
 

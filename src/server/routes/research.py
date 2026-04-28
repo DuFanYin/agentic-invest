@@ -4,7 +4,6 @@ from datetime import UTC, datetime
 
 from fastapi import APIRouter
 from fastapi.responses import StreamingResponse
-
 from src.server import shutdown
 from src.server.agents.orchestrator import OrchestratorAgent
 from src.server.models.request import ResearchRequest

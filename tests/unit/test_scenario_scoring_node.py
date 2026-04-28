@@ -7,7 +7,6 @@ import json
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-
 from src.server.agents.scenario_scoring import scenario_scoring_node
 from src.server.models.analysis import FundamentalAnalysis, MarketSentiment
 from src.server.models.evidence import Evidence

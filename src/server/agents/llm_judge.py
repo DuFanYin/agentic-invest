@@ -17,6 +17,7 @@ import logging
 
 from src.server.models.analysis import JudgeDecision
 from src.server.models.state import ResearchState
+from src.server.prompts import build_prompt
 from src.server.services.llm_provider import LLMClient
 from src.server.services.policy import PolicyDecision, PolicyInput, evaluate_policy
 from src.server.utils.contract import NODE_CONTRACTS, assert_reads, assert_writes
@@ -27,53 +28,6 @@ _WRITES = NODE_CONTRACTS["llm_judge"].writes
 
 _NODE = "llm_judge"
 MAX_RESEARCH_ITERATIONS = 2
-
-
-_SYSTEM_ANALYSIS_JUDGE = (
-    "You are a conservative research-quality gate. "
-    "Your only job is to decide if the evidence and analyses are good enough to proceed to scenario generation. "
-    "You do NOT decide what to search for in detail — the research node handles tactical search planning. "
-    "If a retry is needed, provide one concrete directional question; the research node will expand it into specific queries. "
-    "Bias toward proceeding unless there is a clear, material gap that another research pass is likely to fix. "
-    "Return only valid JSON, no markdown, no extra keys."
-)
-
-_ANALYSIS_JUDGE_SCHEMA = """Return exactly this JSON (no extra keys):
-{
-  "should_retry": true,
-  "retry_question": "one concrete web/news search directive, <= 20 words",
-  "reason": "short reason, <= 12 words"
-}
-Rules:
-- Default to should_retry=false.
-- should_retry=true only if analyses are clearly not robust enough, the missing support is material, AND more evidence is likely obtainable in one more pass.
-- Do not retry for minor thinness, normal uncertainty, or issues that report caveats can handle.
-- retry_question must be an actionable search instruction (not generic).
-- If should_retry=false, retry_question="".
-"""
-
-_SYSTEM_CONFLICT_JUDGE = (
-    "You are a conservative evidence-conflict gate. "
-    "Your only job is to decide whether detected conflicts are serious enough to warrant another research pass. "
-    "You do NOT resolve the conflict yourself — provide one directional question pointing at the conflict; "
-    "the research node will generate targeted search queries to resolve it. "
-    "Bias toward proceeding unless the conflict is material, decision-relevant, and likely resolvable with one more pass. "
-    "Return only valid JSON, no markdown, no extra keys."
-)
-
-_CONFLICT_JUDGE_SCHEMA = """Return exactly this JSON (no extra keys):
-{
-  "should_retry": true,
-  "retry_question": "one concrete search directive to resolve the conflict, <= 20 words",
-  "reason": "short reason, <= 12 words"
-}
-Rules:
-- Default to should_retry=false.
-- should_retry=true only if the conflicts are material, central to the thesis, and likely resolvable with one more search pass.
-- Do not retry for normal source disagreement, small differences in framing, or conflicts that can simply be disclosed in the report.
-- retry_question must target the conflict directly and be actionable.
-- If should_retry=false, retry_question="".
-"""
 
 
 def _evidence_counts(evidence: list) -> dict[str, int]:
@@ -156,33 +110,28 @@ async def llm_judge_node(
                 fa_claims = _claims_count(fundamental) if fa_present else 0
                 ms_claims = _claims_count(sentiment) if ms_present else 0
 
-                judge_prompt = f"""{_ANALYSIS_JUDGE_SCHEMA}
-
-SUBJECT: {subject}
-HORIZON: {intent.time_horizon if intent else "unspecified"}
-SCOPE: {intent.scope if intent else "unknown"}
-
-EVIDENCE COUNTS:
-- financial_api: {fin_count}
-- macro_api: {macro_count}
-- news: {news_count}
-- web: {web_count}
-- total: {len(evidence)}
-
-ANALYSIS PRESENCE / SIGNAL:
-- fundamental_present: {fa_present} (claims={fa_claims})
-- macro_present: {macro_present}
-- sentiment_present: {ms_present} (claims={ms_claims})
-
-RESEARCH FOCUS:
-{focus_lines}
-
-MUST-HAVE METRICS:
-{must_metrics}
-"""
+                system_j, judge_prompt = build_prompt(
+                    "llm_judge",
+                    "analysis",
+                    subject=subject,
+                    horizon=intent.time_horizon if intent else "unspecified",
+                    scope=intent.scope if intent else "unknown",
+                    fin_count=fin_count,
+                    macro_count=macro_count,
+                    news_count=news_count,
+                    web_count=web_count,
+                    evidence_total=len(evidence),
+                    fa_present=fa_present,
+                    fa_claims=fa_claims,
+                    macro_present=macro_present,
+                    ms_present=ms_present,
+                    ms_claims=ms_claims,
+                    focus_lines=focus_lines,
+                    must_metrics=must_metrics,
+                )
                 raw = await llm.call_with_retry(
                     judge_prompt,
-                    system=_SYSTEM_ANALYSIS_JUDGE,
+                    system=system_j,
                     node=_NODE,
                 )
                 decision = JudgeDecision.model_validate(json.loads(raw))
@@ -203,26 +152,26 @@ MUST-HAVE METRICS:
                 )
                 conflict_lines = (
                     "\n".join(
-                        f"- topic={getattr(c, 'topic', '')}; type={getattr(c, 'type', '')}; note={getattr(c, 'note', '')}"
+                        (
+                            f"- topic={getattr(c, 'topic', '')}; "
+                            f"type={getattr(c, 'type', '')}; note={getattr(c, 'note', '')}"
+                        )
                         for c in normalized_data.conflicts[:5]
                     )
                     or "none"
                 )
-                conflict_prompt = f"""{_CONFLICT_JUDGE_SCHEMA}
-
-SUBJECT: {subject}
-HORIZON: {intent.time_horizon if intent else "unspecified"}
-SCOPE: {intent.scope if intent else "unknown"}
-
-DETECTED CONFLICT TOPICS:
-{topics}
-
-CONFLICT DETAILS:
-{conflict_lines}
-"""
+                system_c, conflict_prompt = build_prompt(
+                    "llm_judge",
+                    "conflict",
+                    subject=subject,
+                    horizon=intent.time_horizon if intent else "unspecified",
+                    scope=intent.scope if intent else "unknown",
+                    topics=topics,
+                    conflict_lines=conflict_lines,
+                )
                 raw = await llm.call_with_retry(
                     conflict_prompt,
-                    system=_SYSTEM_CONFLICT_JUDGE,
+                    system=system_c,
                     node=_NODE,
                 )
                 decision = JudgeDecision.model_validate(json.loads(raw))

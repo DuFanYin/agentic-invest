@@ -7,6 +7,7 @@ import logging
 
 from src.server.models.analysis import BusinessQuality, FundamentalAnalysis, Valuation
 from src.server.models.state import ResearchState
+from src.server.prompts import build_prompt
 from src.server.services.llm_provider import LLMClient
 from src.server.utils.contract import NODE_CONTRACTS, assert_reads, assert_writes
 from src.server.utils.status import update_status
@@ -19,33 +20,6 @@ logger = logging.getLogger(__name__)
 _default_llm = LLMClient()
 _NODE = "fundamental_analysis"
 
-_SYSTEM = (
-    "You are a senior equity analyst writing for a sophisticated but non-specialist investor. "
-    "Your job is to synthesise financial data into clear, insight-driven statements. "
-    "Every claim must embed the actual numbers — do not separate data from interpretation. "
-    "Return only valid JSON — no markdown, no prose outside the JSON."
-)
-
-_SCHEMA = """
-Return exactly this JSON structure (no extra keys):
-{
-  "claims": [
-    { "statement": "...", "confidence": "high|medium|low", "evidence_ids": ["ev_001", ...] }
-  ],
-  "business_quality": { "view": "strong|stable|weak|deteriorating" },
-  "valuation": { "relative_multiple_view": "..." },
-  "fundamental_risks": [
-    { "name": "...", "impact": "high|medium|low", "signal": "...", "evidence_ids": ["ev_001", ...] }
-  ]
-}
-Rules:
-- claims: 3-5 statements. Each must embed specific numbers from the metrics (e.g. "Revenue grew 22% YoY to $44.1B"). Lead with the insight, embed the data inline. No claim without a number.
-- business_quality.view: one of strong|stable|weak|deteriorating.
-- valuation.relative_multiple_view: one sentence with the actual multiple (e.g. "Trades at 28x forward P/E, a 15% premium to sector median").
-- fundamental_risks: 1-3 risks. signal must be a specific observable indicator, not a generic phrase.
-- Every claim and risk must cite at least one evidence_id from the list provided.
-"""
-
 
 def _build_prompt(
     evidence,
@@ -54,7 +28,7 @@ def _build_prompt(
     research_focus,
     must_have_metrics,
     plan_notes,
-) -> str:
+) -> tuple[str, str]:
     financial_evidence = [ev for ev in evidence if ev.source_type == "financial_api"]
     supplemental = [ev for ev in evidence if ev.source_type != "financial_api"]
 
@@ -89,29 +63,19 @@ def _build_prompt(
         ", ".join(must_have_metrics) if must_have_metrics else "standard financials"
     )
     notes_str = "\n".join(f"- {n}" for n in plan_notes) if plan_notes else "none"
+    supp = supplemental_lines or "none"
 
-    return f"""{_SCHEMA}
-
-INTENT: {intent_str}
-
-RESEARCH PLAN:
-Focus areas:
-{focus_str}
-
-Must-have metrics: {metrics_str}
-
-Specific questions to address:
-{notes_str}
-
-FINANCIAL API EVIDENCE (primary source):
-{ev_lines}
-
-FINANCIAL METRICS:
-{metrics_json}
-
-SUPPLEMENTAL EVIDENCE (macro/news — for context only, do not lead with these):
-{supplemental_lines or "none"}
-"""
+    return build_prompt(
+        "fundamental_analysis",
+        "main",
+        intent_str=intent_str,
+        focus_str=focus_str,
+        metrics_str=metrics_str,
+        notes_str=notes_str,
+        ev_lines=ev_lines,
+        metrics_json=metrics_json,
+        supplemental_lines=supp,
+    )
 
 
 async def fundamental_analysis_node(
@@ -140,7 +104,7 @@ async def fundamental_analysis_node(
     result: FundamentalAnalysis | None = None
 
     if evidence:
-        prompt = _build_prompt(
+        system, prompt = _build_prompt(
             evidence,
             metrics,
             intent,
@@ -149,7 +113,7 @@ async def fundamental_analysis_node(
             plan_notes,
         )
         try:
-            raw = await llm.call_with_retry(prompt, system=_SYSTEM, node=_NODE)
+            raw = await llm.call_with_retry(prompt, system=system, node=_NODE)
             parsed = json.loads(raw)
             parsed["metrics"] = metrics
             result = FundamentalAnalysis.model_validate(parsed)

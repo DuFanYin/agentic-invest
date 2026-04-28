@@ -23,11 +23,8 @@ import re
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
-from src.server import shutdown
-
 import httpx
-
-from src.server.models.response import LLMCall
+from src.server import shutdown
 from src.server.config import (
     LLM_API_KEY,
     LLM_APP_TITLE,
@@ -35,6 +32,7 @@ from src.server.config import (
     LLM_HTTP_REFERER,
     LLM_PROVIDER,
 )
+from src.server.models.response import LLMCall
 from src.server.utils.status import AGENT_TAG_BY_NODE
 
 if TYPE_CHECKING:
@@ -85,9 +83,9 @@ def _simplify_prompt(prompt: str) -> str:
     data_start = next(
         (
             i
-            for i, l in enumerate(lines)
+            for i, line in enumerate(lines)
             if any(
-                marker in l
+                marker in line
                 for marker in (
                     "EVIDENCE",
                     "DATA",

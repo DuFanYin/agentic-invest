@@ -7,7 +7,6 @@ from unittest.mock import MagicMock, patch
 
 import httpx as _httpx
 import pytest
-
 from src.server.services.web_research import WebResearchClient
 
 _DEFAULT_RESULTS = [

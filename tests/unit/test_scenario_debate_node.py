@@ -6,8 +6,6 @@ import asyncio
 import json
 from unittest.mock import AsyncMock, MagicMock
 
-import pytest
-
 from src.server.agents.scenario_debate import scenario_debate_node
 from src.server.models.analysis import ScenarioDebate
 from src.server.models.scenario import Scenario

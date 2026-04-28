@@ -1,6 +1,15 @@
 from typing import Literal, TypeAlias
 
 from pydantic import BaseModel, Field
+from src.server.models.analysis import (
+    FundamentalAnalysis,
+    MacroAnalysis,
+    MarketSentiment,
+    ScenarioDebate,
+)
+from src.server.models.evidence import Evidence
+from src.server.models.intent import ResearchIntent
+from src.server.models.scenario import Scenario
 
 AgentLifecycle: TypeAlias = Literal[
     "standby",
@@ -28,17 +37,6 @@ AgentPhase: TypeAlias = Literal[
     "generating_report",
     "workflow_complete",
 ]
-
-
-from src.server.models.evidence import Evidence
-from src.server.models.intent import ResearchIntent
-from src.server.models.analysis import (
-    FundamentalAnalysis,
-    MacroAnalysis,
-    MarketSentiment,
-    ScenarioDebate,
-)
-from src.server.models.scenario import Scenario
 
 
 class ValidationResult(BaseModel):

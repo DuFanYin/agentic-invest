@@ -5,13 +5,11 @@ from __future__ import annotations
 import json
 from unittest.mock import AsyncMock, MagicMock, patch
 
-import pytest
 from fastapi.testclient import TestClient
-
+from src.server import shutdown
 from src.server.agents.orchestrator import OrchestratorAgent
 from src.server.main import app
 from src.server.services.llm_provider import LLMClient
-from src.server import shutdown
 
 
 def _mock_llm(

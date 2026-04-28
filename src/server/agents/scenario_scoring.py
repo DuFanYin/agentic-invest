@@ -12,6 +12,7 @@ from src.server.models.analysis import (
 )
 from src.server.models.scenario import Scenario
 from src.server.models.state import ResearchState
+from src.server.prompts import build_prompt
 from src.server.services.llm_provider import LLMClient
 from src.server.utils.contract import NODE_CONTRACTS, assert_reads, assert_writes
 from src.server.utils.status import update_status
@@ -27,40 +28,6 @@ _NODE = "scenario_scoring"
 _MIN_SCENARIOS = 3
 _MAX_SCENARIOS = 5
 
-_SYSTEM = (
-    "You are an investment strategist. "
-    "Given the analysis below, generate distinct future scenarios with probability weights. "
-    "Return only valid JSON — no markdown, no prose outside the JSON."
-)
-
-_SCHEMA = """
-Return a JSON object with exactly one key "scenarios" containing an array of 3–5 scenario objects.
-{
-  "scenarios": [
-    {
-      "name": "...",
-      "description": "...",
-      "raw_probability": 0.4,
-      "drivers": ["..."],
-      "triggers": ["..."],
-      "evidence_ids": ["ev_001", ...],
-      "tags": ["bullish-2", "rate-sensitive"]
-    },
-    ...
-  ]
-}
-Rules:
-- name: descriptive of the future state, not bull/bear labels.
-- raw_probability: estimated weight, need not sum to 1 — Python normalises.
-- drivers: structural forces that make this scenario possible (2-4 items).
-- triggers: specific events that would cause this scenario to play out (1-3 items).
-- tags (required, at least 1): must include exactly one magnitude tag from:
-    bearish-3, bearish-2, bearish-1, neutral, bullish-1, bullish-2, bullish-3
-  plus any relevant domain labels (e.g. "policy-risk", "rate-sensitive").
-- evidence_ids: cite at least one ID from the AVAILABLE EVIDENCE IDs list provided.
-- Scenarios must represent meaningfully different causal paths.
-"""
-
 
 def _build_prompt(
     fundamental_analysis,
@@ -70,7 +37,7 @@ def _build_prompt(
     intent,
     research_focus=None,
     plan_notes=None,
-) -> str:
+) -> tuple[str, str]:
     evidence_ids = ", ".join(ev.id for ev in evidence) if evidence else "none"
 
     if isinstance(fundamental_analysis, FundamentalAnalysis):
@@ -117,35 +84,24 @@ def _build_prompt(
     )
     notes_str = "\n".join(f"- {n}" for n in (plan_notes or [])) or "none"
 
-    return f"""{_SCHEMA}
-
-AVAILABLE EVIDENCE IDs: {evidence_ids}
-
-TICKER: {ticker} | HORIZON: {horizon}
-
-RESEARCH PLAN (scenarios must address these focus areas):
-{focus_str}
-
-Key questions the scenarios should resolve:
-{notes_str}
-
-FUNDAMENTAL ANALYSIS:
-Business quality: {fa_view}
-Valuation: {fa_val}
-Key claims:
-{fa_claims}
-
-MACRO ENVIRONMENT:
-View: {macro_view}
-Rate environment: {macro_rate}
-Growth environment: {macro_growth}
-Key drivers:
-{macro_drivers}
-
-MARKET SENTIMENT:
-Direction: {ms_direction}
-Narrative: {ms_narrative}
-"""
+    return build_prompt(
+        "scenario_scoring",
+        "main",
+        evidence_ids=evidence_ids,
+        ticker=ticker,
+        horizon=horizon,
+        focus_str=focus_str,
+        notes_str=notes_str,
+        fa_view=fa_view,
+        fa_val=fa_val,
+        fa_claims=fa_claims,
+        macro_view=macro_view,
+        macro_rate=macro_rate,
+        macro_growth=macro_growth,
+        macro_drivers=macro_drivers,
+        ms_direction=ms_direction,
+        ms_narrative=ms_narrative,
+    )
 
 
 def _normalise(scenarios: list[Scenario]) -> list[Scenario]:
@@ -221,7 +177,7 @@ async def scenario_scoring_node(
     llm_used = False
 
     if evidence:
-        prompt = _build_prompt(
+        system, prompt = _build_prompt(
             fundamental_analysis,
             macro_analysis,
             market_sentiment,
@@ -231,7 +187,7 @@ async def scenario_scoring_node(
             plan_notes,
         )
         try:
-            raw = await llm.call_with_retry(prompt, system=_SYSTEM, node=_NODE)
+            raw = await llm.call_with_retry(prompt, system=system, node=_NODE)
             parsed = _parse_llm_scenarios(raw, evidence_ids)
             scenarios = _normalise(parsed)
             llm_used = True

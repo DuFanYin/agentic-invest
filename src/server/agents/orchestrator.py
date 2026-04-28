@@ -22,24 +22,22 @@ import asyncio
 from collections.abc import AsyncGenerator
 
 from langgraph.graph import END, START, StateGraph
-
-from src.server.config import REQUEST_TIMEOUT_SECONDS
 from src.server.agents.fundamental_analysis import fundamental_analysis_node
+from src.server.agents.llm_judge import llm_judge_node, llm_judge_router_fn
 from src.server.agents.macro_analysis import macro_analysis_node
-from src.server.agents.planning_agent import make_planning_node
 from src.server.agents.market_sentiment import market_sentiment_node
+from src.server.agents.planning_agent import make_planning_node
 from src.server.agents.report_finalize import report_finalize_node
 from src.server.agents.research import research_node
-from src.server.agents.llm_judge import llm_judge_node, llm_judge_router_fn
 from src.server.agents.scenario_debate import scenario_debate_node
 from src.server.agents.scenario_scoring import scenario_scoring_node
+from src.server.config import REQUEST_TIMEOUT_SECONDS
 from src.server.models.request import ResearchRequest
 from src.server.models.response import LLMCall, ResearchResponse, ValidationResult
 from src.server.models.state import ResearchState
 from src.server.services.collector import LLMCallCollector
 from src.server.services.llm_provider import LLMClient
 from src.server.services.section_queue import SectionQueue
-
 
 # ── graph builder ──────────────────────────────────────────────────────────
 

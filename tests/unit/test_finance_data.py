@@ -2,15 +2,12 @@
 
 from __future__ import annotations
 
-import math
 from unittest.mock import MagicMock, patch
 
 import numpy as np
 import pandas as pd
 import pytest
-
 from src.server.services.finance_data import FinanceDataClient
-
 
 # ── helper builders ────────────────────────────────────────────────────────
 

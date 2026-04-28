@@ -16,6 +16,7 @@ from src.server.models.analysis import (
 )
 from src.server.models.scenario import Scenario
 from src.server.models.state import ResearchState
+from src.server.prompts import build_prompt
 from src.server.services.llm_provider import LLMClient
 from src.server.utils.contract import NODE_CONTRACTS, assert_reads, assert_writes
 from src.server.utils.status import update_status
@@ -28,74 +29,6 @@ logger = logging.getLogger(__name__)
 
 _default_llm = LLMClient()
 _NODE = "scenario_debate"
-
-# ── System prompts ─────────────────────────────────────────────────────────
-
-_SYSTEM_ADVOCATE = (
-    "You are an investment analyst assigned to argue for a specific scenario. "
-    "Your job is to build the strongest evidence-based case for why your assigned scenario "
-    "deserves a higher or maintained probability weight, given the competition from other scenarios. "
-    "Be rigorous and specific — cite evidence IDs, challenge other scenarios' claims where warranted. "
-    "Return only valid JSON, no markdown, no prose outside the JSON."
-)
-
-_SYSTEM_ARBITRATOR = (
-    "You are a senior investment committee chair conducting a scenario arbitration. "
-    "You have received advocacy statements from each scenario's analyst. "
-    "Probabilities are zero-sum: if one scenario goes up, others must come down. "
-    "Your job is to weigh the evidence quality behind each advocacy, resolve conflicts, "
-    "and produce final calibrated probabilities that are internally consistent. "
-    "Return only valid JSON, no markdown, no prose outside the JSON."
-)
-
-# ── Schemas ────────────────────────────────────────────────────────────────
-
-_ADVOCATE_SCHEMA = """Return this JSON (no extra keys):
-{
-  "scenario_name": "exact name of your assigned scenario",
-  "advocacy_thesis": "2-3 sentence argument for why this scenario deserves its probability",
-  "supporting_arguments": [
-    "specific argument backed by evidence"
-  ],
-  "evidence_refs": ["ev_001", "ev_002"],
-  "contested_scenarios": ["Name of scenario you argue is overweighted"]
-}
-Rules:
-- supporting_arguments: at least 1, grounded in the provided evidence.
-- evidence_refs: IDs from the available evidence list.
-- contested_scenarios: list scenario names you think are overweighted and briefly why in advocacy_thesis.
-- Do not adjust other scenarios' probabilities — that is the arbitrator's job.
-"""
-
-_ARBITRATOR_SCHEMA = """Return this JSON (no extra keys):
-{
-  "debate_summary": "2-3 sentences: the key tension across scenarios and how you resolved it",
-  "probability_adjustments": [
-    {
-      "scenario_name": "...",
-      "before": 0.45,
-      "after": 0.50,
-      "delta": 0.05,
-      "reason": "advocate's evidence was stronger than contested claims"
-    }
-  ],
-  "calibrated_scenarios": [
-    {
-      "name": "...",
-      "probability": 0.50
-    }
-  ],
-  "confidence": "high|medium|low",
-  "debate_flags": []
-}
-Hard constraints:
-- calibrated_scenarios MUST include ALL scenarios — no additions, no omissions.
-- Probabilities MUST sum to 1.0 exactly.
-- No single scenario may move more than 0.15 from its initial probability.
-- Only adjust a scenario if an advocate made a substantive evidence-backed argument for it.
-- confidence: your certainty in the calibration quality given the evidence presented.
-- debate_flags: include "weak_advocacy" if arguments lacked evidence, "contested" if advocates directly clashed.
-"""
 
 # ── Context builders ───────────────────────────────────────────────────────
 
@@ -139,15 +72,15 @@ def _shared_context(scenarios: list[Scenario], fa, macro, sentiment, evidence) -
     )
 
 
-def _advocate_prompt(scenario: Scenario, context: str) -> str:
-    return (
-        f"{_ADVOCATE_SCHEMA}\n\n"
-        f"YOUR ASSIGNED SCENARIO: {scenario.name}\n"
-        f"Current probability: {scenario.probability:.3f}\n"
-        f"Description: {scenario.description}\n"
-        f"Drivers: {', '.join(scenario.drivers) or 'not specified'}\n\n"
-        f"{context}\n\n"
-        f"Build the strongest case for '{scenario.name}'."
+def _advocate_prompt(scenario: Scenario, context: str) -> tuple[str, str]:
+    return build_prompt(
+        "scenario_debate",
+        "advocate",
+        scenario_name=scenario.name,
+        probability=f"{scenario.probability:.3f}",
+        description=scenario.description,
+        drivers=", ".join(scenario.drivers) or "not specified",
+        context=context,
     )
 
 
@@ -155,7 +88,7 @@ def _arbitrator_prompt(
     scenarios: list[Scenario],
     advocacies: list[ScenarioAdvocacy],
     context: str,
-) -> str:
+) -> tuple[str, str]:
     advocacy_blocks = []
     for adv in advocacies:
         args = "\n".join(f"    - {a}" for a in adv.supporting_arguments)
@@ -168,11 +101,11 @@ def _arbitrator_prompt(
             f"  Contests: {contested}"
         )
 
-    return (
-        f"{_ARBITRATOR_SCHEMA}\n\n"
-        f"{context}\n\n"
-        + "\n\n".join(advocacy_blocks)
-        + "\n\nArbitrate: weigh the evidence quality behind each advocacy and produce final probabilities."
+    return build_prompt(
+        "scenario_debate",
+        "arbitrator",
+        context=context,
+        advocacy_blocks="\n\n".join(advocacy_blocks),
     )
 
 
@@ -258,9 +191,9 @@ async def _run_advocate(
     context: str,
     llm: LLMClient,
 ) -> ScenarioAdvocacy | None:
-    prompt = _advocate_prompt(scenario, context)
+    system, prompt = _advocate_prompt(scenario, context)
     try:
-        raw = await llm.call_with_retry(prompt, system=_SYSTEM_ADVOCATE, node=_NODE)
+        raw = await llm.call_with_retry(prompt, system=system, node=_NODE)
         parsed = json.loads(raw)
         return ScenarioAdvocacy.model_validate(parsed)
     except Exception as exc:
@@ -311,11 +244,9 @@ async def _run_debate(
         action="arbitrator ruling",
         progress_hint=f"{succeeded}/{total} advocates",
     )
-    arb_prompt = _arbitrator_prompt(scenarios, advocacies, context)
+    system_arb, arb_prompt = _arbitrator_prompt(scenarios, advocacies, context)
     try:
-        raw = await llm.call_with_retry(
-            arb_prompt, system=_SYSTEM_ARBITRATOR, node=_NODE
-        )
+        raw = await llm.call_with_retry(arb_prompt, system=system_arb, node=_NODE)
         parsed = json.loads(raw)
         debate = _validate_and_fix(parsed, scenarios, advocacies)
         if succeeded < total:
