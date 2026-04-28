@@ -129,31 +129,12 @@ AGENT_REGISTRY: dict[str, AgentRegistryEntry] = {
                 "retry_questions",
             }
         ),
-        writes=frozenset({"policy_decision"}),
-        parallel_group=None,
-        depends_on=["fundamental_analysis", "macro_analysis", "market_sentiment"],
-        failure_mode="degrade",
-        capability_deps=[],
-    ),
-    "policy_router": AgentRegistryEntry(
-        agent_id="policy_router",
-        reads=frozenset(
-            {
-                "policy_decision",
-                "evidence",
-                "normalized_data",
-                "fundamental_analysis",
-                "macro_analysis",
-                "market_sentiment",
-                "research_iteration",
-            }
-        ),
         writes=frozenset(
             {"policy_decision", "retry_questions", "retry_reason", "retry_scope"}
         ),
         parallel_group=None,
-        depends_on=["llm_judge"],
-        failure_mode="fail",  # routing broken = unrecoverable
+        depends_on=["fundamental_analysis", "macro_analysis", "market_sentiment"],
+        failure_mode="degrade",
         capability_deps=[],
     ),
     "scenario_scoring": AgentRegistryEntry(

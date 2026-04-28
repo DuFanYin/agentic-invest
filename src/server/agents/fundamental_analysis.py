@@ -36,8 +36,7 @@ Return exactly this JSON structure (no extra keys):
   "valuation": { "relative_multiple_view": "..." },
   "fundamental_risks": [
     { "name": "...", "impact": "high|medium|low", "signal": "...", "evidence_ids": ["ev_001", ...] }
-  ],
-  "missing_fields": ["..."]
+  ]
 }
 Rules:
 - claims: 3-5 statements. Each must embed specific numbers from the metrics (e.g. "Revenue grew 22% YoY to $44.1B"). Lead with the insight, embed the data inline. No claim without a number.
@@ -45,14 +44,12 @@ Rules:
 - valuation.relative_multiple_view: one sentence with the actual multiple (e.g. "Trades at 28x forward P/E, a 15% premium to sector median").
 - fundamental_risks: 1-3 risks. signal must be a specific observable indicator, not a generic phrase.
 - Every claim and risk must cite at least one evidence_id from the list provided.
-- missing_fields: list data points absent from the evidence that would change the analysis. Short phrases only, max 5 words each.
 """
 
 
 def _build_prompt(
     evidence,
     metrics,
-    missing_fields,
     intent,
     research_focus,
     must_have_metrics,
@@ -114,8 +111,6 @@ FINANCIAL METRICS:
 
 SUPPLEMENTAL EVIDENCE (macro/news — for context only, do not lead with these):
 {supplemental_lines or "none"}
-
-MISSING DATA: {", ".join(missing_fields) if missing_fields else "none reported"}
 """
 
 
@@ -142,15 +137,12 @@ async def fundamental_analysis_node(
         )
 
     metrics = normalized_data.metrics.model_dump() if normalized_data else {}
-    missing_fields = normalized_data.missing_fields if normalized_data else []
-
     result: FundamentalAnalysis | None = None
 
     if evidence:
         prompt = _build_prompt(
             evidence,
             metrics,
-            missing_fields,
             intent,
             research_focus,
             must_have_metrics,
@@ -160,7 +152,6 @@ async def fundamental_analysis_node(
             raw = await llm.call_with_retry(prompt, system=_SYSTEM, node=_NODE)
             parsed = json.loads(raw)
             parsed["metrics"] = metrics
-            parsed.setdefault("missing_fields", missing_fields)
             result = FundamentalAnalysis.model_validate(parsed)
         except Exception as exc:
             logger.warning("%s: LLM step failed — %s", _NODE, exc)
@@ -195,8 +186,8 @@ async def fundamental_analysis_node(
             statuses,
             "llm_judge",
             lifecycle="active",
-            phase="evaluating_gaps",
-            action="checking for gaps",
+            phase="evaluating_readiness",
+            action="reviewing analysis readiness",
         )
 
     delta = {

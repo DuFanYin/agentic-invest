@@ -10,7 +10,7 @@ START → parse_intent → research → [parallel] ─────────�
                          ▲         fundamental_analysis                             │
                          │         macro_analysis                                  │
                          │         market_sentiment                                │
-                         │       → llm_judge → policy_router ── (retry?) ─────────┘
+                        │       → llm_judge ── (retry?) ──────────────────────────┘
                          │                                   └── (no) → scenario_scoring
                          │                                               → scenario_debate
                          │                                               → report_finalize
@@ -30,8 +30,7 @@ from src.server.agents.planning_agent import make_planning_node
 from src.server.agents.market_sentiment import market_sentiment_node
 from src.server.agents.report_finalize import report_finalize_node
 from src.server.agents.research import research_node
-from src.server.agents.llm_judge import llm_judge_node
-from src.server.agents.policy_router import policy_router_node, policy_router_fn
+from src.server.agents.llm_judge import llm_judge_node, llm_judge_router_fn
 from src.server.agents.scenario_debate import scenario_debate_node
 from src.server.agents.scenario_scoring import scenario_scoring_node
 from src.server.models.request import ResearchRequest
@@ -83,7 +82,6 @@ def build_graph(
     builder.add_node("macro_analysis", _macro_node)
     builder.add_node("market_sentiment", _sentiment_node)
     builder.add_node("llm_judge", _judge_node)
-    builder.add_node("policy_router", policy_router_node)
     builder.add_node("scenario_scoring", _scenario_node)
     builder.add_node("scenario_debate", _debate_node)
     builder.add_node("report_finalize", _report_node)
@@ -96,15 +94,14 @@ def build_graph(
     builder.add_edge("research", "macro_analysis")
     builder.add_edge("research", "market_sentiment")
 
-    # Fan-in: all three analysis nodes → llm_judge → policy_router
+    # Fan-in: all three analysis nodes → llm_judge (assess+decide)
     builder.add_edge("fundamental_analysis", "llm_judge")
     builder.add_edge("macro_analysis", "llm_judge")
     builder.add_edge("market_sentiment", "llm_judge")
-    builder.add_edge("llm_judge", "policy_router")
 
     builder.add_conditional_edges(
-        "policy_router",
-        policy_router_fn,
+        "llm_judge",
+        llm_judge_router_fn,
         {"research": "research", "scenario_scoring": "scenario_scoring"},
     )
 

@@ -49,7 +49,6 @@ class FundamentalAnalysis(BaseModel):
         default_factory=lambda: Valuation(relative_multiple_view="unavailable")
     )
     fundamental_risks: list[Risk] = Field(default_factory=list)
-    missing_fields: list[str] = Field(default_factory=list)
     metrics: dict[str, Any] = Field(default_factory=dict)
     degraded: bool = False
 
@@ -85,7 +84,6 @@ class MarketSentiment(BaseModel):
         )
     )
     sentiment_risks: list[Risk] = Field(default_factory=list)
-    missing_fields: list[str] = Field(default_factory=list)
     degraded: bool = False
 
     model_config = {"populate_by_name": True}
@@ -124,7 +122,6 @@ class MacroAnalysis(BaseModel):
     macro_risks: list[MacroRisk] = Field(default_factory=list)
     rate_environment: Literal["tightening", "easing", "stable"] = "stable"
     growth_environment: Literal["expanding", "contracting", "stable"] = "stable"
-    missing_fields: list[str] = Field(default_factory=list)
     degraded: bool = False
 
 

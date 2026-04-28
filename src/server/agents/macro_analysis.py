@@ -34,8 +34,7 @@ Return exactly this JSON structure (no extra keys):
     { "name": "...", "impact": "high|medium|low", "signal": "..." }
   ],
   "rate_environment": "tightening|easing|stable",
-  "growth_environment": "expanding|contracting|stable",
-  "missing_fields": ["..."]
+  "growth_environment": "expanding|contracting|stable"
 }
 Rules:
 - macro_view: one sentence that embeds a key figure (e.g. "The Fed held rates at 5.25–5.5% for the fourth consecutive meeting as core PCE remains above 3%").
@@ -43,7 +42,6 @@ Rules:
 - macro_risks: 1-3 risks. signal must be a specific threshold or event to watch (e.g. "CPI re-accelerating above 3.5%").
 - rate_environment: exactly one of tightening|easing|stable.
 - growth_environment: exactly one of expanding|contracting|stable.
-- missing_fields: macro data absent from the evidence that would change the view. Short phrases only, max 5 words each.
 """
 
 
@@ -142,8 +140,8 @@ async def macro_analysis_node(
             statuses,
             "llm_judge",
             lifecycle="active",
-            phase="evaluating_gaps",
-            action="checking for gaps",
+            phase="evaluating_readiness",
+            action="reviewing analysis readiness",
         )
 
     delta = {

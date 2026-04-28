@@ -46,8 +46,9 @@ def test_judge_clears_after_max_iterations():
         )
     )
     pd = result["policy_decision"]
-    assert pd.reason_code == "none"
+    assert pd.reason_code == "iteration_limit"
     assert pd.retry_question == ""
+    assert result["retry_questions"] == []
 
 
 def test_judge_triggers_structural_gap_when_ticker_missing():
@@ -65,6 +66,7 @@ def test_judge_triggers_structural_gap_when_ticker_missing():
     assert pd.reason_code == "structural"
     assert "ticker" in pd.retry_question.lower()
     assert pd.action == "retry_full_research"
+    assert result["retry_questions"] == [pd.retry_question]
 
 
 def test_judge_triggers_conflict_retry_with_hint():
@@ -115,6 +117,7 @@ def test_judge_triggers_conflict_retry_with_hint():
     pd = result["policy_decision"]
     assert pd.reason_code == "evidence_conflict"
     assert pd.retry_question != ""
+    assert result["retry_scope"] == ["cap.fetch_web"]
     assert len(llm.calls) == 2
 
 
@@ -134,6 +137,7 @@ def test_judge_triggers_analysis_robustness_retry_from_first_judge():
     pd = result["policy_decision"]
     assert pd.reason_code == "analysis_robustness"
     assert pd.retry_question == "gather margin trend and guidance"
+    assert result["retry_scope"] is None
     assert len(llm.calls) == 1
 
 

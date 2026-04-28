@@ -1,12 +1,13 @@
-"""LLM judge — two-stage retry decision before scenario generation.
+"""LLM judge — unified assess+decide stage before scenario generation.
 
 Retries only when there is a concrete reason to believe new evidence can be obtained:
   - structural: intent lacks ticker (company scope cannot proceed without it)
   - analysis_robustness: LLM judge decides if the three analysis outputs are robust enough
   - evidence_conflict: LLM judge decides whether detected conflicts merit another research pass
 
-Outputs PolicyDecision to state. policy_router_node reads it, applies deterministic
-rules, and decides the actual routing action + retry_scope.
+This node does both:
+  1) LLM assessment (should we retry? with what directional question?)
+  2) Deterministic policy evaluation (final action + retry_scope)
 """
 
 from __future__ import annotations
@@ -17,7 +18,7 @@ import logging
 from src.server.models.analysis import JudgeDecision
 from src.server.models.state import ResearchState
 from src.server.services.llm_provider import LLMClient
-from src.server.services.policy import PolicyDecision
+from src.server.services.policy import PolicyDecision, PolicyInput, evaluate_policy
 from src.server.utils.contract import NODE_CONTRACTS, assert_reads, assert_writes
 from src.server.utils.status import update_status
 
@@ -73,6 +74,14 @@ Rules:
 - retry_question must target the conflict directly and be actionable.
 - If should_retry=false, retry_question="".
 """
+
+
+def _evidence_counts(evidence: list) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for ev in evidence:
+        src = getattr(ev, "source_type", "unknown")
+        counts[src] = counts.get(src, 0) + 1
+    return counts
 
 
 async def llm_judge_node(
@@ -140,18 +149,12 @@ async def llm_judge_node(
                 def _claims_count(x: object) -> int:
                     return len(getattr(x, "claims", []) or [])
 
-                def _missing_count(x: object) -> int:
-                    return len(getattr(x, "missing_fields", []) or [])
-
                 fa_present = fundamental is not None
                 macro_present = macro is not None
                 ms_present = sentiment is not None
 
                 fa_claims = _claims_count(fundamental) if fa_present else 0
                 ms_claims = _claims_count(sentiment) if ms_present else 0
-                fa_missing = _missing_count(fundamental) if fa_present else 0
-                macro_missing = _missing_count(macro) if macro_present else 0
-                ms_missing = _missing_count(sentiment) if ms_present else 0
 
                 judge_prompt = f"""{_ANALYSIS_JUDGE_SCHEMA}
 
@@ -167,9 +170,9 @@ EVIDENCE COUNTS:
 - total: {len(evidence)}
 
 ANALYSIS PRESENCE / SIGNAL:
-- fundamental_present: {fa_present} (claims={fa_claims}, missing_fields={fa_missing})
-- macro_present: {macro_present} (missing_fields={macro_missing})
-- sentiment_present: {ms_present} (claims={ms_claims}, missing_fields={ms_missing})
+- fundamental_present: {fa_present} (claims={fa_claims})
+- macro_present: {macro_present}
+- sentiment_present: {ms_present} (claims={ms_claims})
 
 RESEARCH FOCUS:
 {focus_lines}
@@ -232,41 +235,108 @@ CONFLICT DETAILS:
                 )
                 judge_reason = "judge_degraded"
 
-    # Package LLM reasoning into PolicyDecision for policy_router to evaluate.
-    # The action here is a hint — policy_router's rule engine makes the final call.
+    # Package LLM reasoning as a hint, then run deterministic policy rules here.
     _hint_action = (
         "retry_full_research"
         if judge_retry_question and judge_reason not in ("none", "judge_degraded")
         else "continue"
     )
-    policy_decision = PolicyDecision(
+    hint_decision = PolicyDecision(
         action=_hint_action,
         targets=[],
         retry_question=judge_retry_question,
         reason_code=judge_reason,
         rationale=f"judge reason: {judge_reason}",
     )
+    if judge_reason == "judge_degraded":
+        policy_decision = PolicyDecision(
+            action="continue",
+            targets=[],
+            retry_question="",
+            reason_code="judge_degraded",
+            rationale="judge degraded; proceeding without retry hint",
+        )
+    else:
+        inp = PolicyInput(
+            research_iteration=current_iteration,
+            evidence_counts=_evidence_counts(evidence),
+            conflict_count=len(normalized_data.conflicts) if normalized_data else 0,
+            missing_field_count=len(normalized_data.missing_fields)
+            if normalized_data
+            else 0,
+            fa_degraded=bool(getattr(fundamental, "degraded", False)),
+            macro_degraded=bool(getattr(macro, "degraded", False)),
+            ms_degraded=bool(getattr(sentiment, "degraded", False)),
+            judge_reason=hint_decision.reason_code,
+            judge_retry_question=hint_decision.retry_question,
+            max_iterations=MAX_RESEARCH_ITERATIONS,
+        )
+        policy_decision = evaluate_policy(inp)
+    will_retry = policy_decision.action in (
+        "retry_full_research",
+        "retry_capability_only",
+    )
+    retry_scope = (
+        policy_decision.targets
+        if policy_decision.action == "retry_capability_only" and policy_decision.targets
+        else None
+    )
+    retry_questions = (
+        [policy_decision.retry_question]
+        if will_retry and policy_decision.retry_question
+        else []
+    )
 
     is_degraded = judge_reason == "judge_degraded"
-    will_hint_retry = bool(judge_retry_question)
 
     if statuses:
         statuses = update_status(
             statuses,
             "llm_judge",
             lifecycle="waiting"
-            if will_hint_retry
+            if will_retry
             else ("degraded" if is_degraded else "standby"),
-            phase="gap_retry_required" if will_hint_retry else "gap_resolved",
-            action="retry hinted"
-            if will_hint_retry
-            else ("judge degraded" if is_degraded else "gaps resolved"),
-            details=[f"reason={judge_reason}"],
+            phase="retry_required" if will_retry else "ready_to_proceed",
+            action="supplementary research suggested"
+            if will_retry
+            else ("judge degraded" if is_degraded else "ready to continue"),
+            details=[
+                f"reason={policy_decision.reason_code}",
+                f"action={policy_decision.action}",
+                f"scope={retry_scope or 'full'}",
+            ],
         )
+        if will_retry:
+            statuses = update_status(
+                statuses,
+                "research",
+                lifecycle="active",
+                phase="retrying_evidence",
+                action="supplementary evidence collection",
+            )
+        else:
+            statuses = update_status(
+                statuses,
+                "scenario_scoring",
+                lifecycle="active",
+                phase="scoring_scenarios",
+                action="scoring scenarios",
+            )
 
     delta = {
         "policy_decision": policy_decision,
+        "retry_questions": retry_questions,
+        "retry_reason": policy_decision.reason_code,
+        "retry_scope": retry_scope,
         "agent_statuses": statuses,
     }
     assert_writes(delta, _WRITES, _NODE)
     return delta
+
+
+def llm_judge_router_fn(state: ResearchState) -> str:
+    """Routing function: maps PolicyDecision.action to graph target."""
+    decision = state.get("policy_decision")
+    if decision and decision.action in ("retry_full_research", "retry_capability_only"):
+        return "research"
+    return "scenario_scoring"

@@ -274,6 +274,14 @@ function DegradedBanner({ label }) {
   );
 }
 
+const SECTION_HANDLED_WARNING_PREFIXES = [
+  'fundamental_analysis unavailable:',
+  'macro_analysis unavailable:',
+  'market_sentiment unavailable:',
+  'scenario_debate unavailable:',
+  'llm_judge unavailable:',
+];
+
 function IntentSection({ intent }) {
   if (!intent) return null;
   const outputs = Array.isArray(intent.required_outputs) ? intent.required_outputs : [];
@@ -367,7 +375,7 @@ function FundamentalSection({ analysis, sectionTitle, loading }) {
       <SectionLabel>{sectionTitle || 'Fundamental Analysis'}</SectionLabel>
       <div className="section-title">{sectionTitle || 'Business & Financials'}</div>
       {isDegraded
-        ? <DegradedBanner label="Fundamental analysis unavailable — LLM exhausted." />
+        ? <DegradedBanner label="LLM failed: fundamental analysis unavailable." />
         : <>
           {(bqView || valView) && (
             <div className="analysis-meta-row">
@@ -417,7 +425,7 @@ function SentimentSection({ sentiment, sectionTitle, loading }) {
       <SectionLabel>{sectionTitle || 'Market Sentiment'}</SectionLabel>
       <div className="section-title">{sectionTitle || 'Sentiment & Price Action'}</div>
       {isSentimentDegraded
-        ? <DegradedBanner label="Market sentiment unavailable — LLM exhausted." />
+        ? <DegradedBanner label="LLM failed: market sentiment unavailable." />
         : <>
           <div className="analysis-meta-row">
             {direction && <span className={`sentiment-badge dir-${direction}`}>{direction}</span>}
@@ -468,7 +476,7 @@ function MacroSection({ macro, sectionTitle, loading }) {
       <SectionLabel>{sectionTitle || 'Macro Environment'}</SectionLabel>
       <div className="section-title">{sectionTitle || 'Macro Regime'}</div>
       {isMacroDegraded
-        ? <DegradedBanner label="Macro analysis unavailable — LLM exhausted." />
+        ? <DegradedBanner label="LLM failed: macro analysis unavailable." />
         : <>
           <div className="analysis-meta-row">
             {macro?.rate_environment && <span className="intent-tag"><span className="intent-key">rate</span><span className="intent-val">{macro.rate_environment}</span></span>}
@@ -584,7 +592,7 @@ function DebateSection({ debate, loading }) {
       <SectionLabel>Scenario Debate</SectionLabel>
       <div className="section-title">Calibration Summary</div>
       {isDebateDegraded
-        ? <DegradedBanner label="Scenario debate unavailable — LLM exhausted. Scenario probabilities are baseline (not debate-calibrated)." />
+        ? <DegradedBanner label="LLM failed: scenario debate unavailable. Scenario probabilities are baseline (not debate-calibrated)." />
         : <>
           <div className="section-body" style={{marginBottom:'12px'}}>
             {debate.debate_summary || 'No debate summary available.'}
@@ -947,7 +955,9 @@ function App() {
   const activeCount = Object.values(agentStatuses).filter((s) => deriveExecutionPhase(s) === 'ACTIVE').length;
   const waitingCount = Object.values(agentStatuses).filter((s) => deriveExecutionPhase(s) === 'WAITING').length;
   const isValid = reportData?.validation_result?.is_valid;
-  const validationWarnings = reportData?.validation_result?.warnings || [];
+  const validationWarnings = (reportData?.validation_result?.warnings || []).filter(
+    (w) => !SECTION_HANDLED_WARNING_PREFIXES.some((prefix) => String(w).startsWith(prefix))
+  );
   const llmCalling = llmCalls.filter(c => c?.status === 'calling').length;
   const llmRetry = llmCalls.filter(c => c?.status === 'retry').length;
   const llmFailed = llmCalls.filter(c => c?.status === 'failed').length;

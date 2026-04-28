@@ -21,7 +21,7 @@ AGENT_REGISTRY: tuple[AgentMeta, ...] = (
     ),
     AgentMeta(name="macro_analysis", tag="X", failed_phase="analyzing_macro"),
     AgentMeta(name="market_sentiment", tag="M", failed_phase="analyzing_sentiment"),
-    AgentMeta(name="llm_judge", tag="G", failed_phase="evaluating_gaps"),
+    AgentMeta(name="llm_judge", tag="G", failed_phase="evaluating_readiness"),
     AgentMeta(name="scenario_scoring", tag="S", failed_phase="scoring_scenarios"),
     AgentMeta(name="scenario_debate", tag="D", failed_phase="debating_scenarios"),
     AgentMeta(name="report_finalize", tag="V", failed_phase="generating_report"),

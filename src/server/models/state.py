@@ -106,7 +106,7 @@ class ResearchState(TypedDict, total=False):
     research_iteration: int  # incremented by research_node; read by llm_judge
 
     # ── Policy routing ─────────────────────────────────────────────────────
-    policy_decision: PolicyDecision  # written by llm_judge, finalised by policy_router
+    policy_decision: PolicyDecision  # written by llm_judge (final action)
     retry_scope: list[str] | None  # None = full research; ["cap.fetch_web"] = scoped
 
     # ── Scenario scoring & debate ──────────────────────────────────────────

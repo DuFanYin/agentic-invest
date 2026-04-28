@@ -410,11 +410,6 @@ async def report_finalize_node(
     retry_reason = state.get("retry_reason", "none")
     if retry_reason == "judge_degraded":
         warnings.append("llm_judge unavailable: retry decision skipped")
-    if isinstance(fa, FundamentalAnalysis) and fa.missing_fields:
-        warnings.append(f"Missing fields: {', '.join(fa.missing_fields)}")
-    if isinstance(ms, MarketSentiment) and ms.missing_fields:
-        warnings.append(f"Missing sentiment fields: {', '.join(ms.missing_fields)}")
-
     sections, plan_warnings, report_plan = _validate_report_plan(report_plan)
     warnings.extend(plan_warnings)
 

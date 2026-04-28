@@ -36,8 +36,7 @@ Return exactly this JSON structure (no extra keys):
   "market_narrative": { "summary": "..." },
   "sentiment_risks": [
     { "name": "...", "impact": "high|medium|low", "signal": "...", "evidence_ids": ["ev_001", ...] }
-  ],
-  "missing_fields": ["..."]
+  ]
 }
 Rules:
 - claims: 2-4 statements. Embed actual figures where available (e.g. "Stock fell 8% in 30 days on volume 2x the 90-day average, signalling institutional exit"). If price data is provided, at least one claim must reference return_30d_pct or volatility with the actual value.
@@ -47,7 +46,6 @@ Rules:
 - market_narrative.summary: 1-2 sentences describing the dominant market story right now.
 - sentiment_risks: 1-2 risks. signal must name a specific observable trigger.
 - Every claim and sentiment_risk must cite at least one evidence_id.
-- missing_fields: data you needed but lacked. Short phrases only, max 5 words each.
 """
 
 
@@ -137,8 +135,8 @@ async def market_sentiment_node(
             statuses,
             "llm_judge",
             lifecycle="active",
-            phase="evaluating_gaps",
-            action="checking for gaps",
+            phase="evaluating_readiness",
+            action="reviewing analysis readiness",
         )
 
     delta = {
