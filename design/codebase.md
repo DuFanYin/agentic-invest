@@ -51,9 +51,8 @@ Important files:
 
 - `orchestrator.py`: builds and runs the graph.
 - `research.py`: coordinates capability calls and normalization.
-- `llm_judge.py`: turns evidence/analysis gaps into a policy hint.
-- `policy_router.py`: finalizes retry/continue routing.
-- `report_finalize.py`: assembles report outputs.
+- `llm_judge.py`: assesses evidence/analysis gaps and applies deterministic policy to route retry/continue.
+- `report_finalize.py`: renders narrative sections and assembles report outputs.
 - `registry.py`: source of truth for node reads/writes, dependencies, and failure mode.
 
 ### `src/server/capabilities/`
@@ -71,10 +70,10 @@ External clients and runtime support.
 
 - `llm_provider.py`: model calls, retries, failover, and telemetry.
 - `finance_data.py`, `macro_data.py`, `web_research.py`: data sources.
-- `policy.py`: deterministic policy rules.
+- `policy.py`: deterministic policy rules (called by `llm_judge`).
+- `report_assembly.py`: pure validation, quality metrics, and report JSON/Markdown assembly.
 - `cache.py`: SQLite TTL cache.
 - `collector.py`: per-request LLM call stream.
-- `section_queue.py`: per-section report streaming.
 - `retry.py`: shared fetch retry helpers.
 
 ### `src/server/models/`
@@ -109,7 +108,7 @@ Streaming request:
 ```text
 POST /research/stream
   -> OrchestratorAgent.run_stream()
-  -> agent_status + llm_call + section_ready + final/error/done events
+  -> agent_status + llm_call + final/error/done events
 ```
 
 Graph details live in [`core-system.md`](core-system.md).

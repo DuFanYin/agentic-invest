@@ -3,18 +3,16 @@
 import asyncio
 from unittest.mock import AsyncMock, MagicMock
 
-from src.server.agents.planning_agent import parse_intent as _parse_intent
+from src.server.agents.planning_agent import plan
 from src.server.services.llm_provider import LLMClient
 
 
-def test_parse_intent_from_query_fallback() -> None:
-    """When the LLM client raises, _parse_intent returns a sane fallback."""
+def test_intent_from_query_planner_fallback() -> None:
+    """When the LLM client raises, plan() returns a sane fallback intent."""
     broken_client = MagicMock(spec=LLMClient)
     broken_client.complete = AsyncMock(side_effect=RuntimeError("no key"))
 
-    intent = asyncio.run(
-        _parse_intent("Analyse NVDA for long-term investment", broken_client)
-    )
+    result = asyncio.run(plan("Analyse NVDA for long-term investment", broken_client))
 
-    assert intent.intent == "investment_research"
-    assert intent.subjects  # non-empty fallback
+    assert result.intent.intent == "investment_research"
+    assert result.intent.subjects  # non-empty fallback

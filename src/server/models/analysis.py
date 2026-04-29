@@ -41,12 +41,8 @@ class Valuation(BaseModel):
 class FundamentalAnalysis(BaseModel):
     agent: str = "fundamental_analysis"
     claims: list[Claim] = Field(default_factory=list)
-    business_quality: BusinessQuality = Field(
-        default_factory=lambda: BusinessQuality(view="stable")
-    )
-    valuation: Valuation = Field(
-        default_factory=lambda: Valuation(relative_multiple_view="unavailable")
-    )
+    business_quality: BusinessQuality = Field(default_factory=lambda: BusinessQuality(view="stable"))
+    valuation: Valuation = Field(default_factory=lambda: Valuation(relative_multiple_view="unavailable"))
     fundamental_risks: list[Risk] = Field(default_factory=list)
     metrics: dict[str, Any] = Field(default_factory=dict)
     degraded: bool = False
@@ -73,14 +69,10 @@ class MarketNarrative(BaseModel):
 class MarketSentiment(BaseModel):
     agent: str = "market_sentiment"
     claims: list[Claim] = Field(default_factory=list)
-    news_sentiment: NewsSentiment = Field(
-        default_factory=lambda: NewsSentiment(direction="neutral")
-    )
+    news_sentiment: NewsSentiment = Field(default_factory=lambda: NewsSentiment(direction="neutral"))
     price_action: PriceAction | None = None
     market_narrative: MarketNarrative = Field(
-        default_factory=lambda: MarketNarrative(
-            summary="Sentiment analysis unavailable."
-        )
+        default_factory=lambda: MarketNarrative(summary="Sentiment analysis unavailable.")
     )
     sentiment_risks: list[Risk] = Field(default_factory=list)
     degraded: bool = False
@@ -150,17 +142,23 @@ class ProbabilityAdjustment(BaseModel):
     scenario_name: str
     before: float = Field(..., ge=0, le=1)
     after: float = Field(..., ge=0, le=1)
-    delta: float
+    delta: float = Field(..., ge=-1, le=1)
     reason: str
+
+
+class CalibratedScenario(BaseModel):
+    """Arbitrator output row: scenario name, calibrated probability, optional tags."""
+
+    name: str
+    probability: float = Field(..., ge=0, le=1)
+    tags: list[str] = Field(default_factory=list)
 
 
 class ScenarioDebate(BaseModel):
     debate_summary: str = "Debate unavailable."
     advocacy_summaries: list[dict[str, Any]] = Field(default_factory=list)
     probability_adjustments: list[ProbabilityAdjustment] = Field(default_factory=list)
-    calibrated_scenarios: list[Any] = Field(
-        default_factory=list
-    )  # list[Scenario] — avoids circular import
+    calibrated_scenarios: list[CalibratedScenario] = Field(default_factory=list)
     confidence: Literal["high", "medium", "low"] = "medium"
     debate_flags: list[str] = Field(default_factory=list)
     degraded: bool = False
@@ -177,9 +175,7 @@ class ReportSection(BaseModel):
 
 
 class ReportPlan(BaseModel):
-    report_type: (
-        str  # e.g. "valuation", "comparison", "risk_review", "scenario", "general"
-    )
+    report_type: str  # e.g. "valuation", "comparison", "risk_review", "scenario", "general"
     sections: list[ReportSection]
 
 

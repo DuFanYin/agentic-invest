@@ -7,6 +7,7 @@ import json
 import logging
 
 from src.server.models.analysis import (
+    CalibratedScenario,
     FundamentalAnalysis,
     MacroAnalysis,
     MarketSentiment,
@@ -27,8 +28,8 @@ _WRITES = NODE_CONTRACTS["scenario_debate"].writes
 
 logger = logging.getLogger(__name__)
 
-_default_llm = LLMClient()
 _NODE = "scenario_debate"
+_MAX_PROB_DELTA = 0.15  # matches the cap stated in the arbitrator prompt template
 
 # ── Context builders ───────────────────────────────────────────────────────
 
@@ -42,17 +43,12 @@ def _shared_context(scenarios: list[Scenario], fa, macro, sentiment, evidence) -
 
     fa_summary = "not available"
     if isinstance(fa, FundamentalAnalysis):
-        fa_summary = (
-            f"Business quality: {fa.business_quality.view} | "
-            f"Valuation: {fa.valuation.relative_multiple_view}"
-        )
+        fa_summary = f"Business quality: {fa.business_quality.view} | Valuation: {fa.valuation.relative_multiple_view}"
 
     macro_summary = "not available"
     if isinstance(macro, MacroAnalysis):
         macro_summary = (
-            f"{macro.macro_view} | "
-            f"Rate env: {macro.rate_environment} | "
-            f"Growth env: {macro.growth_environment}"
+            f"{macro.macro_view} | Rate env: {macro.rate_environment} | Growth env: {macro.growth_environment}"
         )
 
     sentiment_summary = "not available"
@@ -84,11 +80,7 @@ def _advocate_prompt(scenario: Scenario, context: str) -> tuple[str, str]:
     )
 
 
-def _arbitrator_prompt(
-    scenarios: list[Scenario],
-    advocacies: list[ScenarioAdvocacy],
-    context: str,
-) -> tuple[str, str]:
+def _arbitrator_prompt(scenarios: list[Scenario], advocacies: list[ScenarioAdvocacy], context: str) -> tuple[str, str]:
     advocacy_blocks = []
     for adv in advocacies:
         args = "\n".join(f"    - {a}" for a in adv.supporting_arguments)
@@ -101,12 +93,7 @@ def _arbitrator_prompt(
             f"  Contests: {contested}"
         )
 
-    return build_prompt(
-        "scenario_debate",
-        "arbitrator",
-        context=context,
-        advocacy_blocks="\n\n".join(advocacy_blocks),
-    )
+    return build_prompt("scenario_debate", "arbitrator", context=context, advocacy_blocks="\n\n".join(advocacy_blocks))
 
 
 # ── Validation & fallback ──────────────────────────────────────────────────
@@ -116,7 +103,7 @@ def _degraded_debate(scenarios: list[Scenario]) -> ScenarioDebate:
     return ScenarioDebate(
         debate_summary="Debate unavailable.",
         calibrated_scenarios=[
-            {"name": s.name, "probability": s.probability} for s in scenarios
+            CalibratedScenario(name=s.name, probability=s.probability, tags=list(s.tags)) for s in scenarios
         ],
         confidence="low",
         debate_flags=["debate_degraded"],
@@ -124,60 +111,45 @@ def _degraded_debate(scenarios: list[Scenario]) -> ScenarioDebate:
     )
 
 
-def _validate_and_fix(
-    raw: dict,
-    scenarios: list[Scenario],
-    advocacies: list[ScenarioAdvocacy],
-) -> ScenarioDebate:
+def _validate_and_fix(raw: dict, scenarios: list[Scenario], advocacies: list[ScenarioAdvocacy]) -> ScenarioDebate:
     adjustments = []
     for adj in raw.get("probability_adjustments", []):
         before = float(adj.get("before", 0))
         after = float(adj.get("after", 0))
-        delta = after - before
-        if abs(delta) > 0.15:
-            after = before + (0.15 if delta > 0 else -0.15)
+        raw_delta = after - before
+        if abs(raw_delta) > _MAX_PROB_DELTA:
+            after = before + (_MAX_PROB_DELTA if raw_delta > 0 else -_MAX_PROB_DELTA)
             after = max(0.0, min(1.0, after))
-            delta = round(after - before, 6)
+        delta = round(after - before, 6)
         adjustments.append(
             ProbabilityAdjustment(
                 scenario_name=adj["scenario_name"],
                 before=round(before, 6),
                 after=round(after, 6),
-                delta=round(delta, 6),
+                delta=delta,
                 reason=adj.get("reason", ""),
             )
         )
 
     calibrated = raw.get("calibrated_scenarios", [])
     baseline_by_name = {s.name: s for s in scenarios}
-    calibrated_names = {
-        str(item.get("name"))
-        for item in calibrated
-        if isinstance(item, dict) and item.get("name")
-    }
+    calibrated_names = {str(item.get("name")) for item in calibrated if isinstance(item, dict) and item.get("name")}
     if calibrated_names != set(baseline_by_name):
         return _degraded_debate(scenarios)
 
     total = sum(s.get("probability", 0) for s in calibrated) or 1.0
     if abs(total - 1.0) > SCENARIO_PROB_TOLERANCE:
-        calibrated = [
-            {**s, "probability": round(s.get("probability", 0) / total, 6)}
-            for s in calibrated
-        ]
+        calibrated = [{**s, "probability": round(s.get("probability", 0) / total, 6)} for s in calibrated]
 
-    advocacy_summaries = [
-        {
-            "scenario_name": adv.scenario_name,
-            "thesis": adv.advocacy_thesis,
-        }
-        for adv in advocacies
-    ]
+    advocacy_summaries = [{"scenario_name": adv.scenario_name, "thesis": adv.advocacy_thesis} for adv in advocacies]
+
+    calibrated_rows = [CalibratedScenario.model_validate(item) for item in calibrated if isinstance(item, dict)]
 
     return ScenarioDebate(
         debate_summary=raw.get("debate_summary", ""),
         advocacy_summaries=advocacy_summaries,
         probability_adjustments=adjustments,
-        calibrated_scenarios=calibrated,
+        calibrated_scenarios=calibrated_rows,
         confidence=raw.get("confidence", "medium"),
         debate_flags=raw.get("debate_flags", []),
     )
@@ -186,11 +158,7 @@ def _validate_and_fix(
 # ── Core debate logic ──────────────────────────────────────────────────────
 
 
-async def _run_advocate(
-    scenario: Scenario,
-    context: str,
-    llm: LLMClient,
-) -> ScenarioAdvocacy | None:
+async def _run_advocate(scenario: Scenario, context: str, llm: LLMClient) -> ScenarioAdvocacy | None:
     system, prompt = _advocate_prompt(scenario, context)
     try:
         raw = await llm.call_with_retry(prompt, system=system, node=_NODE)
@@ -202,13 +170,7 @@ async def _run_advocate(
 
 
 async def _run_debate(
-    scenarios: list[Scenario],
-    fa,
-    macro,
-    sentiment,
-    evidence,
-    llm: LLMClient,
-    statuses: list,
+    scenarios: list[Scenario], fa, macro, sentiment, evidence, llm: LLMClient, statuses: list
 ) -> tuple[ScenarioDebate, list]:
     context = _shared_context(scenarios, fa, macro, sentiment, evidence)
 
@@ -231,9 +193,7 @@ async def _run_debate(
 
     succeeded = len(advocacies)
     total = len(scenarios)
-    logger.info(
-        "%s: round 1 complete — %d/%d advocates succeeded", _NODE, succeeded, total
-    )
+    logger.info("%s: round 1 complete — %d/%d advocates succeeded", _NODE, succeeded, total)
 
     # Round 2: single arbitrator sees all advocacy statements
     statuses = update_status(
@@ -260,10 +220,9 @@ async def _run_debate(
 # ── Node entry point ───────────────────────────────────────────────────────
 
 
-async def scenario_debate_node(
-    state: ResearchState, *, llm: LLMClient = _default_llm
-) -> ResearchState:
+async def scenario_debate_node(state: ResearchState, *, llm: LLMClient | None = None) -> ResearchState:
     assert_reads(state, _READS, _NODE)
+    llm = llm or LLMClient()
 
     scenarios = state.get("scenarios") or []
     evidence = state.get("evidence") or []
@@ -275,9 +234,7 @@ async def scenario_debate_node(
     if not scenarios:
         debate = _degraded_debate([])
     else:
-        debate, statuses = await _run_debate(
-            scenarios, fa, macro, sentiment, evidence, llm, statuses
-        )
+        debate, statuses = await _run_debate(scenarios, fa, macro, sentiment, evidence, llm, statuses)
 
     flags_str = ",".join(debate.debate_flags) if debate.debate_flags else "none"
     statuses = update_status(
@@ -294,11 +251,7 @@ async def scenario_debate_node(
         ],
     )
     statuses = update_status(
-        statuses,
-        "report_finalize",
-        lifecycle="active",
-        phase="generating_report",
-        action="generating report",
+        statuses, "report_finalize", lifecycle="active", phase="generating_report", action="generating report"
     )
 
     delta = {"scenario_debate": debate, "agent_statuses": statuses}

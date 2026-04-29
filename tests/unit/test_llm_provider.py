@@ -43,9 +43,7 @@ def _run(coro):
 
 def test_complete_strips_markdown_fences():
     with patch("httpx.AsyncClient") as mock_http:
-        mock_http.return_value.__aenter__.return_value.post.return_value = _ok_response(
-            '```json\n{"ok": true}\n```'
-        )
+        mock_http.return_value.__aenter__.return_value.post.return_value = _ok_response('```json\n{"ok": true}\n```')
         result = _run(_client().complete("test prompt"))
     assert result == '{"ok": true}'
 
@@ -98,9 +96,7 @@ def test_complete_raises_when_all_models_exhausted():
     client.retry_backoff = 0.0
 
     with patch("httpx.AsyncClient") as mock_http:
-        mock_http.return_value.__aenter__.return_value.post.return_value = (
-            _error_response(429)
-        )
+        mock_http.return_value.__aenter__.return_value.post.return_value = _error_response(429)
         with pytest.raises(RuntimeError, match="All models exhausted"):
             _run(client.complete("test"))
 

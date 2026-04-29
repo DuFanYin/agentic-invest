@@ -4,7 +4,7 @@ Each AgentRegistryEntry records:
 - data-flow contracts (reads/writes) — derived into NODE_CONTRACTS in contract.py
 - scheduling intent (parallel_group, depends_on)
 - failure semantics (failure_mode)
-- capability dependencies (capability_deps) — used by Goal 2 selective rerun
+- capability dependencies (capability_deps)
 
 Adding a new agent: add one entry here. No other file needs to change for
 data-flow or scheduling intent (orchestrator.py still wires the edges).
@@ -33,25 +33,14 @@ class AgentRegistryEntry:
     # "fail"    → raises RuntimeError; LangGraph propagates → pipeline stops
     # "degrade" → returns minimal valid object with degraded=True; pipeline continues
 
-    # Capability dependencies (for Goal 2 retry_capability_only / rerun_agent_only)
     capability_deps: list[str] = field(default_factory=list)
-
-    # Reserved for Goal 2 policy layer
-    retry_policy: str | None = None
 
 
 AGENT_REGISTRY: dict[str, AgentRegistryEntry] = {
-    "parse_intent": AgentRegistryEntry(
-        agent_id="parse_intent",
+    "planner": AgentRegistryEntry(
+        agent_id="planner",
         reads=frozenset({"query"}),
-        writes=frozenset(
-            {
-                "intent",
-                "plan_context",
-                "research_iteration",
-                "retry_questions",
-            }
-        ),
+        writes=frozenset({"intent", "plan_context", "research_iteration", "retry_questions"}),
         parallel_group=None,
         depends_on=[],
         failure_mode="fail",
@@ -59,26 +48,12 @@ AGENT_REGISTRY: dict[str, AgentRegistryEntry] = {
     ),
     "research": AgentRegistryEntry(
         agent_id="research",
-        reads=frozenset(
-            {
-                "query",
-                "intent",
-                "plan_context",
-                "retry_questions",
-                "retry_scope",
-                "research_iteration",
-            }
-        ),
+        reads=frozenset({"query", "intent", "plan_context", "retry_questions", "retry_scope", "research_iteration"}),
         writes=frozenset({"evidence", "normalized_data", "research_iteration"}),
         parallel_group=None,
-        depends_on=["parse_intent"],
+        depends_on=["planner"],
         failure_mode="fail",
-        capability_deps=[
-            "cap.fetch_finance",
-            "cap.fetch_macro",
-            "cap.fetch_web",
-            "cap.normalize",
-        ],
+        capability_deps=["cap.fetch_finance", "cap.fetch_macro", "cap.fetch_web", "cap.normalize"],
     ),
     "fundamental_analysis": AgentRegistryEntry(
         agent_id="fundamental_analysis",
@@ -88,6 +63,9 @@ AGENT_REGISTRY: dict[str, AgentRegistryEntry] = {
                 "normalized_data",
                 "intent",
                 "plan_context",
+                "research_iteration",
+                "retry_questions",
+                "retry_reason",
             }
         ),
         writes=frozenset({"fundamental_analysis"}),
@@ -98,7 +76,7 @@ AGENT_REGISTRY: dict[str, AgentRegistryEntry] = {
     ),
     "macro_analysis": AgentRegistryEntry(
         agent_id="macro_analysis",
-        reads=frozenset({"evidence", "intent"}),
+        reads=frozenset({"evidence", "intent", "research_iteration", "retry_questions", "retry_reason"}),
         writes=frozenset({"macro_analysis"}),
         parallel_group="analysis",
         depends_on=["research"],
@@ -107,7 +85,9 @@ AGENT_REGISTRY: dict[str, AgentRegistryEntry] = {
     ),
     "market_sentiment": AgentRegistryEntry(
         agent_id="market_sentiment",
-        reads=frozenset({"evidence", "normalized_data", "intent"}),
+        reads=frozenset(
+            {"evidence", "normalized_data", "intent", "research_iteration", "retry_questions", "retry_reason"}
+        ),
         writes=frozenset({"market_sentiment"}),
         parallel_group="analysis",
         depends_on=["research"],
@@ -129,9 +109,7 @@ AGENT_REGISTRY: dict[str, AgentRegistryEntry] = {
                 "retry_questions",
             }
         ),
-        writes=frozenset(
-            {"policy_decision", "retry_questions", "retry_reason", "retry_scope"}
-        ),
+        writes=frozenset({"policy_decision", "retry_questions", "retry_reason", "retry_scope"}),
         parallel_group=None,
         depends_on=["fundamental_analysis", "macro_analysis", "market_sentiment"],
         failure_mode="degrade",
@@ -140,14 +118,7 @@ AGENT_REGISTRY: dict[str, AgentRegistryEntry] = {
     "scenario_scoring": AgentRegistryEntry(
         agent_id="scenario_scoring",
         reads=frozenset(
-            {
-                "evidence",
-                "fundamental_analysis",
-                "macro_analysis",
-                "market_sentiment",
-                "intent",
-                "plan_context",
-            }
+            {"evidence", "fundamental_analysis", "macro_analysis", "market_sentiment", "intent", "plan_context"}
         ),
         writes=frozenset({"scenarios"}),
         parallel_group=None,
@@ -157,15 +128,7 @@ AGENT_REGISTRY: dict[str, AgentRegistryEntry] = {
     ),
     "scenario_debate": AgentRegistryEntry(
         agent_id="scenario_debate",
-        reads=frozenset(
-            {
-                "scenarios",
-                "evidence",
-                "fundamental_analysis",
-                "macro_analysis",
-                "market_sentiment",
-            }
-        ),
+        reads=frozenset({"scenarios", "evidence", "fundamental_analysis", "macro_analysis", "market_sentiment"}),
         writes=frozenset({"scenario_debate"}),
         parallel_group=None,
         depends_on=["scenario_scoring"],
@@ -196,7 +159,6 @@ AGENT_REGISTRY: dict[str, AgentRegistryEntry] = {
                 "validation_result",
                 "quality_metrics",
                 "retry_questions",
-                "stop_reason",
             }
         ),
         parallel_group=None,

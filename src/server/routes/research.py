@@ -38,9 +38,7 @@ def run_research_stream(request: ResearchRequest) -> StreamingResponse:
             return "unknown"
 
         # Emit initial statuses immediately — UI never blank after clicking Run
-        boot_statuses = [
-            s.model_dump() for s in initial_agent_statuses(running="parse_intent")
-        ]
+        boot_statuses = [s.model_dump() for s in initial_agent_statuses(running="planner")]
         last_statuses: list[dict] = boot_statuses
         yield emit("agent_status", boot_statuses)
 
@@ -73,19 +71,8 @@ def run_research_stream(request: ResearchRequest) -> StreamingResponse:
         except Exception as exc:
             message = str(exc) or "research stream failed"
             m = re.match(r"^\[([a-z_]+)\]\s+", message.strip())
-            if m:
-                node = m.group(1)
-            else:
-                msg = message.lower()
-                if "scenario_scoring" in msg:
-                    node = "scenario_scoring"
-                elif "report_finalize" in msg:
-                    node = "report_finalize"
-                else:
-                    node = None
-            statuses = last_statuses or [
-                s.model_dump() for s in initial_agent_statuses()
-            ]
+            node = m.group(1) if m else None
+            statuses = last_statuses or [s.model_dump() for s in initial_agent_statuses()]
             now = datetime.now(UTC).isoformat()
             next_statuses = []
             for item in statuses:
@@ -96,7 +83,7 @@ def run_research_stream(request: ResearchRequest) -> StreamingResponse:
                     item["phase"] = FAILED_PHASE_BY_AGENT.get(node, "idle")
                     item["action"] = "node failed"
                     item["last_error"] = message
-                elif not node and item.get("agent") == "parse_intent":
+                elif not node and item.get("agent") == "planner":
                     item["lifecycle"] = "failed"
                     item["phase"] = "workflow_complete"
                     item["action"] = "workflow failed"

@@ -13,7 +13,7 @@ It is intentionally higher-level than the code. The goal is to clarify:
 
 | Node | Call site | Role |
 |---|---|---|
-| `parse_intent` | Planning-stage intent and report-plan generation | Turn the raw query into intent plus downstream planning context |
+| `planner` | Planning-stage intent and report-plan generation | Turn the raw query into intent plus downstream planning context |
 | `research` | Tactical web-query planning (adaptive search) | Generate 3-5 targeted web queries before web capability fetch |
 | `fundamental_analysis` | Fundamental analysis generation | Produce structured company, quality, valuation, and risk analysis |
 | `macro_analysis` | Macro regime analysis generation | Produce a structured macro view with drivers and risks |
@@ -23,7 +23,7 @@ It is intentionally higher-level than the code. The goal is to clarify:
 | `scenario_debate` | Scenario calibration workflow | Stress-test and recalibrate the baseline scenarios |
 | `report_finalize` | Narrative section writing | Write the final report sections in markdown |
 
-## `parse_intent`
+## `planner`
 
 This is the planning-stage LLM call. It turns a raw user query into structured intent plus a lightweight plan for the rest of the pipeline.
 
@@ -70,6 +70,7 @@ Behavior:
 - merged with normalized research metrics before validation
 - treated as a core analysis dependency
 - degrades gracefully on LLM exhaustion (returns typed degraded output)
+- supplemental research batches prepend **`analysis_gate_context_for_prompt`** to the user message ( **`research_iteration`**, **`retry_questions`**, **`retry_reason`**) — see [**Parallel analysis: retry-aware prompts**](#parallel-analysis-retry-aware-prompts) below
 
 ## `macro_analysis`
 
@@ -84,6 +85,7 @@ Behavior:
 
 - consumed as a normal downstream analysis artifact
 - degrades gracefully on LLM exhaustion (returns typed degraded output)
+- same retry-aware preamble as **`fundamental_analysis`** ( **`analysis_gate_context_for_prompt`**)
 
 ## `market_sentiment`
 
@@ -98,6 +100,13 @@ Behavior:
 
 - used alongside fundamental and macro analysis
 - degrades gracefully on LLM exhaustion (returns typed degraded output)
+- same retry-aware preamble as **`fundamental_analysis`** ( **`analysis_gate_context_for_prompt`**)
+
+## Parallel analysis: retry-aware prompts
+
+`analysis_gate_context_for_prompt` (`src/server/prompts/analysis_gate.py`) prepends gate-oriented prose before the structured evidence/evidence-ID blocks whenever **`research_iteration` ≥ 2** or **`retry_questions`** is non-empty, so supplemental passes are not synthesized as undifferentiated “more text” versus the judge directive.
+
+No extra LLM call — this is static prompt assembly driven by **`ResearchState`**.
 
 ## `llm_judge`
 
@@ -114,8 +123,8 @@ Behavior:
 - may run up to two judge passes
 - combines structural checks with LLM-based adequacy/conflict judgment
 - best-effort rather than fail-fast
-- writes `policy_decision` (hint) to state; deterministic routing is finalized by `policy_router`
-- if the judge is unavailable, the pipeline continues with `policy_decision.reason_code=judge_degraded`
+- LLM assessment feeds into `evaluate_policy()` which writes the final `policy_decision` and routing action
+- if the judge LLM is unavailable, the pipeline continues with `policy_decision.reason_code=judge_degraded`
 
 ## `scenario_scoring`
 
@@ -164,6 +173,7 @@ Behavior:
 - section failures degrade locally rather than killing the full report
 - validation and quality checks happen mostly in Python after generation
 - hard-fails on missing core evidence and on all-analysis-degraded precondition failure
+- per-section **`narrative_section_format_instructions(section_id)`** rules apply ( **`executive_summary`** expects a short lead plus 3–5 `- ` bullet lines — see **`src/server/prompts/templates.py`**)
 
 ## Shared client behavior
 
@@ -189,7 +199,7 @@ Retry and failover behavior are shared across the client:
 
 Fallback-friendly callsites:
 
-- `parse_intent`
+- `planner`
 - `research` query planner step
 - `fundamental_analysis`
 - `macro_analysis`

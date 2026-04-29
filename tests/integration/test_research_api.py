@@ -35,59 +35,24 @@ def _mock_llm(
     )
     _fa = fa_json or json.dumps(
         {
-            "claims": [
-                {
-                    "statement": "Strong margins.",
-                    "confidence": "high",
-                    "evidence_ids": ["ev_001"],
-                }
-            ],
+            "claims": [{"statement": "Strong margins.", "confidence": "high", "evidence_ids": ["ev_001"]}],
             "business_quality": {"view": "stable", "drivers": ["brand"]},
-            "financials": {
-                "profitability_trend": "improving",
-                "cash_flow_quality": "high",
-            },
-            "valuation": {
-                "relative_multiple_view": "near median",
-                "simplified_dcf_view": "fair",
-            },
+            "financials": {"profitability_trend": "improving", "cash_flow_quality": "high"},
+            "valuation": {"relative_multiple_view": "near median", "simplified_dcf_view": "fair"},
             "fundamental_risks": [
-                {
-                    "name": "Competition",
-                    "impact": "medium",
-                    "signal": "market share",
-                    "evidence_ids": ["ev_001"],
-                }
+                {"name": "Competition", "impact": "medium", "signal": "market share", "evidence_ids": ["ev_001"]}
             ],
             "missing_fields": [],
         }
     )
     _ms = ms_json or json.dumps(
         {
-            "claims": [
-                {
-                    "statement": "Positive sentiment.",
-                    "confidence": "medium",
-                    "evidence_ids": ["ev_001"],
-                }
-            ],
+            "claims": [{"statement": "Positive sentiment.", "confidence": "medium", "evidence_ids": ["ev_001"]}],
             "news_sentiment": {"direction": "positive", "confidence": "medium"},
-            "price_action": {
-                "trend": "upward",
-                "return_30d_pct": 3.1,
-                "volatility": "medium",
-            },
-            "market_narrative": {
-                "summary": "Investors optimistic.",
-                "crowding_risk": "low",
-            },
+            "price_action": {"trend": "upward", "return_30d_pct": 3.1, "volatility": "medium"},
+            "market_narrative": {"summary": "Investors optimistic.", "crowding_risk": "low"},
             "sentiment_risks": [
-                {
-                    "name": "Reversal",
-                    "impact": "low",
-                    "signal": "guidance",
-                    "evidence_ids": ["ev_001"],
-                }
+                {"name": "Reversal", "impact": "low", "signal": "guidance", "evidence_ids": ["ev_001"]}
             ],
             "missing_fields": [],
         }
@@ -96,13 +61,7 @@ def _mock_llm(
         {
             "macro_view": "Disinflation continues while growth remains resilient.",
             "macro_drivers": ["Fed policy near neutral", "credit spreads contained"],
-            "macro_risks": [
-                {
-                    "name": "Sticky inflation",
-                    "impact": "medium",
-                    "signal": "CPI re-acceleration",
-                }
-            ],
+            "macro_risks": [{"name": "Sticky inflation", "impact": "medium", "signal": "CPI re-acceleration"}],
             "macro_signals": ["FEDFUNDS trend", "10Y yield direction"],
             "rate_environment": "stable",
             "growth_environment": "expanding",
@@ -157,21 +116,9 @@ def _mock_llm(
                 }
             ],
             "calibrated_scenarios": [
-                {
-                    "name": "AI capex supercycle",
-                    "probability": 0.48,
-                    "tags": ["bullish-2", "ai-demand"],
-                },
-                {
-                    "name": "Rate plateau stalls growth",
-                    "probability": 0.32,
-                    "tags": ["bearish-1", "rate-sensitive"],
-                },
-                {
-                    "name": "Regulatory crackdown",
-                    "probability": 0.20,
-                    "tags": ["bearish-2", "policy-risk"],
-                },
+                {"name": "AI capex supercycle", "probability": 0.48, "tags": ["bullish-2", "ai-demand"]},
+                {"name": "Rate plateau stalls growth", "probability": 0.32, "tags": ["bearish-1", "rate-sensitive"]},
+                {"name": "Regulatory crackdown", "probability": 0.20, "tags": ["bearish-2", "policy-risk"]},
             ],
             "confidence": "medium",
             "debate_flags": [],
@@ -190,15 +137,11 @@ def _mock_llm(
     async def _call_with_retry(prompt: str, **kw) -> str:
         call_count["n"] += 1
         # Route by distinctive schema markers in each node's prompt
-        if (
-            "DEBATE STRUCTURE" in prompt or "probability_adjustments" in prompt
-        ):  # scenario_debate schema
+        if "DEBATE STRUCTURE" in prompt or "probability_adjustments" in prompt:  # scenario_debate schema
             return _debate
         if "raw_probability" in prompt:  # scenario_scoring schema
             return _scenarios
-        if (
-            "rate_environment" in prompt and "growth_environment" in prompt
-        ):  # macro_analysis schema
+        if "rate_environment" in prompt and "growth_environment" in prompt:  # macro_analysis schema
             return _macro
         if "business_quality" in prompt:  # fundamental_analysis schema
             return _fa
@@ -252,10 +195,7 @@ def test_lifespan_clears_then_sets_shutdown_flag() -> None:
 
 
 def test_research_endpoint_returns_valid_response() -> None:
-    with patch(
-        "src.server.routes.research.OrchestratorAgent",
-        return_value=_patched_orchestrator(),
-    ):
+    with patch("src.server.routes.research.OrchestratorAgent", return_value=_patched_orchestrator()):
         client = TestClient(app)
         response = client.post("/research", json={"query": "Analyse NVDA long-term"})
 
@@ -271,14 +211,9 @@ def test_research_endpoint_returns_valid_response() -> None:
 
 
 def test_research_stream_emits_final_and_done() -> None:
-    with patch(
-        "src.server.routes.research.OrchestratorAgent",
-        return_value=_patched_orchestrator(),
-    ):
+    with patch("src.server.routes.research.OrchestratorAgent", return_value=_patched_orchestrator()):
         client = TestClient(app)
-        response = client.post(
-            "/research/stream", json={"query": "Analyse NVDA long-term"}
-        )
+        response = client.post("/research/stream", json={"query": "Analyse NVDA long-term"})
 
     assert response.status_code == 200
     text = response.text
@@ -296,14 +231,10 @@ def test_research_stream_shutdown_emits_error_then_done() -> None:
 
     orchestrator.run_stream = _run_stream
 
-    with patch(
-        "src.server.routes.research.OrchestratorAgent", return_value=orchestrator
-    ):
+    with patch("src.server.routes.research.OrchestratorAgent", return_value=orchestrator):
         with patch("src.server.routes.research.shutdown.is_set", return_value=True):
             client = TestClient(app)
-            response = client.post(
-                "/research/stream", json={"query": "Analyse NVDA long-term"}
-            )
+            response = client.post("/research/stream", json={"query": "Analyse NVDA long-term"})
 
     assert response.status_code == 200
     text = response.text

@@ -17,12 +17,7 @@ class MacroFetchResult:
     next_ev_id: int
 
 
-async def fetch_macro_evidence(
-    *,
-    ev_id_start: int,
-    retrieved_at: str,
-    client: MacroDataClient,
-) -> MacroFetchResult:
+async def fetch_macro_evidence(*, ev_id_start: int, retrieved_at: str, client: MacroDataClient) -> MacroFetchResult:
     evidence: list[Evidence] = []
     ev_id = ev_id_start
 
@@ -37,9 +32,7 @@ async def fetch_macro_evidence(
                 val = item.get("value")
                 if val is None:
                     continue
-                fred_lines.append(
-                    f"{item.get('label', series_id)}: {val} ({item.get('direction', 'stable')})"
-                )
+                fred_lines.append(f"{item.get('label', series_id)}: {val} ({item.get('direction', 'stable')})")
             if fred_lines:
                 evidence.append(
                     Evidence(
@@ -50,13 +43,7 @@ async def fetch_macro_evidence(
                         retrieved_at=retrieved_at,
                         summary="Key economic indicators: " + "; ".join(fred_lines),
                         reliability="high",
-                        related_topics=[
-                            "macro",
-                            "interest_rates",
-                            "inflation",
-                            "gdp",
-                            "employment",
-                        ],
+                        related_topics=["macro", "interest_rates", "inflation", "gdp", "employment"],
                     )
                 )
                 ev_id += 1
@@ -67,9 +54,7 @@ async def fetch_macro_evidence(
                 val = item.get("value")
                 if val is None:
                     continue
-                sig_lines.append(
-                    f"{item.get('label', ticker_sym)}: {val} ({item.get('direction', 'stable')})"
-                )
+                sig_lines.append(f"{item.get('label', ticker_sym)}: {val} ({item.get('direction', 'stable')})")
             if sig_lines:
                 evidence.append(
                     Evidence(

@@ -8,6 +8,7 @@ Thread-safe via SQLite's WAL mode + a per-instance lock.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import sqlite3
 import threading
@@ -15,6 +16,11 @@ import time
 from pathlib import Path
 
 from src.server.config import CACHE_DB_PATH
+
+
+def cache_key(prefix: str, *parts: str) -> str:
+    payload = ":".join(parts)
+    return f"{prefix}:{hashlib.sha256(payload.encode()).hexdigest()[:16]}"
 
 
 class Cache:
@@ -30,9 +36,7 @@ class Cache:
         """Return the cached value, or None on miss or expiry."""
         with self._lock:
             with self._connect() as conn:
-                row = conn.execute(
-                    "SELECT value, expires_at FROM cache WHERE key = ?", (key,)
-                ).fetchone()
+                row = conn.execute("SELECT value, expires_at FROM cache WHERE key = ?", (key,)).fetchone()
             if row is None:
                 return None
             value_json, expires_at = row
@@ -72,9 +76,7 @@ class Cache:
         """Delete all expired rows. Returns count deleted."""
         with self._lock:
             with self._connect() as conn:
-                cursor = conn.execute(
-                    "DELETE FROM cache WHERE expires_at <= ?", (time.time(),)
-                )
+                cursor = conn.execute("DELETE FROM cache WHERE expires_at <= ?", (time.time(),))
                 return cursor.rowcount
 
     # ── internals ──────────────────────────────────────────────────────────

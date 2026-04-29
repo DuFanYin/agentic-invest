@@ -37,12 +37,7 @@ def _normalise(raw: dict, retrieved_at: str) -> dict:
 
 
 class WebResearchClient:
-    def __init__(
-        self,
-        *,
-        api_key: str | None = None,
-        timeout_seconds: float = DEFAULT_FETCH_TIMEOUT_SECONDS,
-    ) -> None:
+    def __init__(self, *, api_key: str | None = None, timeout_seconds: float = DEFAULT_FETCH_TIMEOUT_SECONDS) -> None:
         self.api_key = api_key or TAVILY_API_KEY
         self.timeout = timeout_seconds
 
@@ -84,9 +79,7 @@ class WebResearchClient:
             return []
 
         if response.status_code != 200:
-            logger.warning(
-                "Tavily returned HTTP %d: %s", response.status_code, response.text[:200]
-            )
+            logger.warning("Tavily returned HTTP %d: %s", response.status_code, response.text[:200])
             return []
 
         try:
@@ -98,9 +91,7 @@ class WebResearchClient:
 
         return [_normalise(r, retrieved_at) for r in results if r.get("url")]
 
-    def search_news(
-        self, ticker: str, days: int = 30, max_results: int = _DEFAULT_MAX_RESULTS
-    ) -> list[dict]:
+    def search_news(self, ticker: str, days: int = 30, max_results: int = _DEFAULT_MAX_RESULTS) -> list[dict]:
         """
         News-focused search for a ticker. Filters to recent articles via query framing.
         Returns [] on missing key or any failure.

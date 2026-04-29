@@ -6,14 +6,13 @@ Graph topology
                          ┌─────────────────────────────────────────────────────────┐
                          │  (retry: retry_questions detected, iteration < max)      │
                          ▼                                                          │
-START → parse_intent → research → [parallel] ──────────────────────────────────── ┤
+START → planner → research → [parallel] ──────────────────────────────────── ┤
                          ▲         fundamental_analysis                             │
                          │         macro_analysis                                  │
                          │         market_sentiment                                │
-                        │       → llm_judge ── (retry?) ──────────────────────────┘
-                         │                                   └── (no) → scenario_scoring
-                         │                                               → scenario_debate
-                         │                                               → report_finalize
+                         │       → llm_judge ── (retry?) ──────────────────────────┘
+                         │          │            └── (halt: all analyses degraded) → report_finalize
+                         │          └── (continue) → scenario_scoring → scenario_debate → report_finalize
                          └───────────────────────────────────────────────┘
                                                                            └── END
 """
@@ -31,22 +30,27 @@ from src.server.agents.report_finalize import report_finalize_node
 from src.server.agents.research import research_node
 from src.server.agents.scenario_debate import scenario_debate_node
 from src.server.agents.scenario_scoring import scenario_scoring_node
-from src.server.config import REQUEST_TIMEOUT_SECONDS
+from src.server.config import CACHE_DB_PATH, REQUEST_TIMEOUT_SECONDS
+from src.server.models.analysis import FundamentalAnalysis, MacroAnalysis, MarketSentiment, ScenarioDebate
 from src.server.models.request import ResearchRequest
 from src.server.models.response import LLMCall, ResearchResponse, ValidationResult
 from src.server.models.state import ResearchState
+from src.server.services.cache import Cache
 from src.server.services.collector import LLMCallCollector
+from src.server.services.finance_data import FinanceDataClient
 from src.server.services.llm_provider import LLMClient
-from src.server.services.section_queue import SectionQueue
+from src.server.services.macro_data import MacroDataClient
+from src.server.services.web_research import WebResearchClient
 
 # ── graph builder ──────────────────────────────────────────────────────────
 
 
-def build_graph(
-    llm_client: LLMClient | None = None, sq: SectionQueue | None = None
-) -> StateGraph:
+def build_graph(llm_client: LLMClient | None = None) -> StateGraph:
     llm_client = llm_client or LLMClient()
-    sq = sq  # captured by _report_node closure
+    cache = Cache(db_path=CACHE_DB_PATH)
+    finance_client = FinanceDataClient()
+    macro_client = MacroDataClient(cache=cache)
+    web_client = WebResearchClient()
 
     builder = StateGraph(ResearchState)
 
@@ -69,12 +73,19 @@ def build_graph(
         return await scenario_debate_node(state, llm=llm_client)
 
     async def _report_node(state: ResearchState) -> ResearchState:
-        return await report_finalize_node(state, llm=llm_client, section_queue=sq)
+        return await report_finalize_node(state, llm=llm_client)
 
     async def _research_node(state: ResearchState) -> ResearchState:
-        return await research_node(state, llm=llm_client)
+        return await research_node(
+            state,
+            llm=llm_client,
+            cache=cache,
+            finance_client=finance_client,
+            macro_client=macro_client,
+            web_client=web_client,
+        )
 
-    builder.add_node("parse_intent", make_planning_node(llm_client))
+    builder.add_node("planner", make_planning_node(llm_client))
     builder.add_node("research", _research_node)
     builder.add_node("fundamental_analysis", _fundamental_node)
     builder.add_node("macro_analysis", _macro_node)
@@ -84,8 +95,8 @@ def build_graph(
     builder.add_node("scenario_debate", _debate_node)
     builder.add_node("report_finalize", _report_node)
 
-    builder.add_edge(START, "parse_intent")
-    builder.add_edge("parse_intent", "research")
+    builder.add_edge(START, "planner")
+    builder.add_edge("planner", "research")
 
     # Fan-out: research → three analysis nodes in parallel
     builder.add_edge("research", "fundamental_analysis")
@@ -100,7 +111,7 @@ def build_graph(
     builder.add_conditional_edges(
         "llm_judge",
         llm_judge_router_fn,
-        {"research": "research", "scenario_scoring": "scenario_scoring"},
+        {"research": "research", "scenario_scoring": "scenario_scoring", "report_finalize": "report_finalize"},
     )
 
     builder.add_edge("scenario_scoring", "scenario_debate")
@@ -121,23 +132,18 @@ class OrchestratorAgent:
 
     def _client_for_request(self, collector: LLMCallCollector) -> LLMClient:
         if self._test_client is not None:
-            return (
-                self._test_client
-            )  # test stub owns its own mock behaviour; collector unused
+            return self._test_client  # test stub owns its own mock behaviour; collector unused
         return LLMClient(collector=collector)
 
     async def run(self, request: ResearchRequest) -> ResearchResponse:
         collector = LLMCallCollector()
-        sq = SectionQueue()
         client = self._client_for_request(collector)
-        graph = build_graph(client, sq=sq)
+        graph = build_graph(client)
         try:
             async with asyncio.timeout(REQUEST_TIMEOUT_SECONDS):
                 final_state = await graph.ainvoke({"query": request.query})
         except TimeoutError as exc:
-            raise RuntimeError(
-                f"[orchestrator] request timeout after {int(REQUEST_TIMEOUT_SECONDS)}s"
-            ) from exc
+            raise RuntimeError(f"[orchestrator] request timeout after {int(REQUEST_TIMEOUT_SECONDS)}s") from exc
         cost, prompt_tok, completion_tok = collector.totals()
         return _state_to_response(
             final_state,
@@ -149,44 +155,27 @@ class OrchestratorAgent:
 
     async def run_stream(self, request: ResearchRequest) -> AsyncGenerator[dict, None]:
         collector = LLMCallCollector()
-        sq = SectionQueue()
         client = self._client_for_request(collector)
-        graph = build_graph(client, sq=sq)
+        graph = build_graph(client)
         final_state: ResearchState = {}
-        stream_iter = graph.astream(
-            {"query": request.query},
-            stream_mode=["updates", "values"],
-        ).__aiter__()
+        stream_iter = graph.astream({"query": request.query}, stream_mode=["updates", "values"]).__aiter__()
         step_task: asyncio.Task | None = asyncio.create_task(anext(stream_iter))
         call_task: asyncio.Task | None = asyncio.create_task(collector.wait_next())
-        section_task: asyncio.Task | None = asyncio.create_task(sq.wait_next())
         graph_done = False
 
         try:
             async with asyncio.timeout(REQUEST_TIMEOUT_SECONDS):
                 while True:
-                    wait_tasks = [
-                        t for t in (step_task, call_task, section_task) if t is not None
-                    ]
+                    wait_tasks = [t for t in (step_task, call_task) if t is not None]
                     if not wait_tasks:
                         break
 
-                    done, _ = await asyncio.wait(
-                        wait_tasks, return_when=asyncio.FIRST_COMPLETED
-                    )
+                    done, _ = await asyncio.wait(wait_tasks, return_when=asyncio.FIRST_COMPLETED)
 
                     if call_task is not None and call_task in done:
                         item = call_task.result()
                         yield {"type": "llm_call", "payload": item.model_dump()}
                         call_task = asyncio.create_task(collector.wait_next())
-
-                    if section_task is not None and section_task in done:
-                        item = section_task.result()
-                        if item is not sq.SENTINEL:
-                            yield {"type": "section_ready", "payload": item}
-                            section_task = asyncio.create_task(sq.wait_next())
-                        else:
-                            section_task = None  # queue exhausted
 
                     if step_task is not None and step_task in done:
                         try:
@@ -201,19 +190,13 @@ class OrchestratorAgent:
                                     if agent_statuses:
                                         yield {
                                             "type": "agent_status",
-                                            "payload": [
-                                                s.model_dump() for s in agent_statuses
-                                            ],
+                                            "payload": [s.model_dump() for s in agent_statuses],
                                         }
                             elif mode == "values":
                                 final_state = payload
                             step_task = asyncio.create_task(anext(stream_iter))
 
-                    if (
-                        graph_done
-                        and collector.pending_count() == 0
-                        and section_task is None
-                    ):
+                    if graph_done and collector.pending_count() == 0:
                         if call_task is not None:
                             call_task.cancel()
                             try:
@@ -223,14 +206,12 @@ class OrchestratorAgent:
                             call_task = None
                         break
         except TimeoutError as exc:
-            raise RuntimeError(
-                f"[orchestrator] request timeout after {int(REQUEST_TIMEOUT_SECONDS)}s"
-            ) from exc
+            raise RuntimeError(f"[orchestrator] request timeout after {int(REQUEST_TIMEOUT_SECONDS)}s") from exc
         finally:
-            for task in (step_task, call_task, section_task):
+            for task in (step_task, call_task):
                 if task is not None and not task.done():
                     task.cancel()
-            for task in (step_task, call_task, section_task):
+            for task in (step_task, call_task):
                 if task is not None:
                     try:
                         await task
@@ -260,13 +241,6 @@ def _state_to_response(
     total_prompt_tokens: int = 0,
     total_completion_tokens: int = 0,
 ) -> ResearchResponse:
-    from src.server.models.analysis import (
-        FundamentalAnalysis,
-        MacroAnalysis,
-        MarketSentiment,
-        ScenarioDebate,
-    )
-
     fa = state.get("fundamental_analysis")
     macro = state.get("macro_analysis")
     ms = state.get("market_sentiment")

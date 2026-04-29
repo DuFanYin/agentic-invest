@@ -41,20 +41,9 @@ def retry_sync(
             last_exc = exc
             if attempt >= total_attempts:
                 break
-            logger.warning(
-                "%s transient failure (%d/%d): %s",
-                op_name,
-                attempt,
-                total_attempts,
-                exc,
-            )
+            logger.warning("%s transient failure (%d/%d): %s", op_name, attempt, total_attempts, exc)
             if backoff > 0:
                 time.sleep(backoff)
-            backoff = min(
-                max_backoff_seconds,
-                backoff * backoff_multiplier if backoff > 0 else 0.0,
-            )
+            backoff = min(max_backoff_seconds, backoff * backoff_multiplier if backoff > 0 else 0.0)
 
-    raise RuntimeError(
-        f"{op_name} failed after {total_attempts} attempts"
-    ) from last_exc
+    raise RuntimeError(f"{op_name} failed after {total_attempts} attempts") from last_exc

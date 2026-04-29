@@ -19,13 +19,7 @@ def cache(tmp_path):
 
 def test_set_and_get_roundtrip(cache):
     """Covers serialization for multiple value types."""
-    for key, value in [
-        ("s", "hello"),
-        ("d", {"x": 1}),
-        ("l", [1, 2]),
-        ("i", 42),
-        ("n", None),
-    ]:
+    for key, value in [("s", "hello"), ("d", {"x": 1}), ("l", [1, 2]), ("i", 42), ("n", None)]:
         cache.set(key, value)
         assert cache.get(key) == value
 

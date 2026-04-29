@@ -515,6 +515,38 @@ body[data-variant="dispatch"] .section-body { font-size: 14px; line-height: 1.8;
 .conf-bar.conf-low    { background: var(--muted); }
 .claim-text { color: var(--text); }
 
+/* Narrative sections (conclusion, custom): claim-like row breaks, neutral gray bar only (no confidence coloring) */
+.markdown-narrative-section .narrative-point-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin: 10px 0 0 0;
+}
+.markdown-narrative-section .narrative-point-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  font-size: 13px;
+  line-height: 1.65;
+}
+.markdown-narrative-section .narrative-point-bar {
+  flex-shrink: 0;
+  width: 3px;
+  border-radius: 2px;
+  margin-top: 4px;
+  align-self: stretch;
+  min-height: 14px;
+  background: var(--dim);
+}
+.markdown-narrative-section .narrative-point-text {
+  color: var(--text);
+  flex: 1;
+  min-width: 0;
+}
+body[data-variant="dispatch"] .markdown-narrative-section .narrative-point-bar {
+  background: oklch(45% 0.02 265);
+}
+
 /* risk rows */
 .risk-list { display: flex; flex-direction: column; gap: 7px; margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--border); }
 .risk-item {

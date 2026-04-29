@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from src.server.prompts import build_prompt
+from src.server.prompts import analysis_gate_context_for_prompt, build_prompt
 
 
 def test_fundamental_analysis_user_preserves_leading_newline_in_schema() -> None:
@@ -10,6 +10,7 @@ def test_fundamental_analysis_user_preserves_leading_newline_in_schema() -> None
     system, user = build_prompt(
         "fundamental_analysis",
         "main",
+        analysis_gate_context=analysis_gate_context_for_prompt(research_iteration=1),
         intent_str="Ticker: X | Scope: company | Horizon: 1y",
         focus_str="- margin",
         metrics_str="revenue",
@@ -22,8 +23,8 @@ def test_fundamental_analysis_user_preserves_leading_newline_in_schema() -> None
     assert user.startswith("\nReturn exactly this JSON structure")
 
 
-def test_parse_intent_schema_same_shape() -> None:
-    _, user = build_prompt("parse_intent", "main", query="Is NVDA overvalued?")
+def test_planner_prompt_schema_same_shape() -> None:
+    _, user = build_prompt("planner", "main", query="Is NVDA overvalued?")
     assert user.startswith("\nReturn exactly this JSON structure")
     assert user.endswith("User query: Is NVDA overvalued?")
 
@@ -45,15 +46,9 @@ def test_research_query_planner_schema_has_no_leading_newline() -> None:
 
 def test_scenario_debate_arbitrator_block_order() -> None:
     """Matches old: context, then advocacy blocks, then closing line."""
-    _, user = build_prompt(
-        "scenario_debate",
-        "arbitrator",
-        context="CTX",
-        advocacy_blocks="BLOCK_A\n\nBLOCK_B",
-    )
+    _, user = build_prompt("scenario_debate", "arbitrator", context="CTX", advocacy_blocks="BLOCK_A\n\nBLOCK_B")
     assert user.index("CTX") < user.index("BLOCK_A")
     assert user.index("BLOCK_A") < user.index("BLOCK_B")
     assert user.rstrip().endswith(
-        "Arbitrate: weigh the evidence quality behind each advocacy and "
-        "produce final probabilities."
+        "Arbitrate: weigh the evidence quality behind each advocacy and produce final probabilities."
     )

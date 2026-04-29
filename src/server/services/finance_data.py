@@ -10,14 +10,11 @@ rather than `NaN` so downstream code can use a simple truthiness check.
 from __future__ import annotations
 
 import logging
+import math
 from datetime import UTC, datetime
 from typing import Any
 
-from src.server.models.finance import (
-    CompanyInfo,
-    FinancialsPayload,
-    PriceHistoryPayload,
-)
+from src.server.models.finance import CompanyInfo, FinancialsPayload, PriceHistoryPayload
 from src.server.services.retry import retry_sync
 
 logger = logging.getLogger(__name__)
@@ -29,8 +26,6 @@ logger = logging.getLogger(__name__)
 def _safe(value: Any) -> Any:
     """Convert numpy scalars / NaN to plain Python types; coerce NaN → None."""
     try:
-        import math
-
         import numpy as np  # type: ignore[import]
 
         if isinstance(value, (np.integer,)):
@@ -38,10 +33,10 @@ def _safe(value: Any) -> Any:
         if isinstance(value, (np.floating,)):
             v = float(value)
             return None if math.isnan(v) else v
-        if isinstance(value, float) and math.isnan(value):
-            return None
     except ImportError:
         pass
+    if isinstance(value, float) and math.isnan(value):
+        return None
     return value
 
 
@@ -53,7 +48,6 @@ def _row(df, name: str, col_pos: int = 0) -> float | None:
         return _safe(df.loc[name].iloc[col_pos])
     except (AttributeError, KeyError, IndexError, TypeError, ValueError):
         return None
-    return None
 
 
 def _pct(numerator: float | None, denominator: float | None) -> float | None:
@@ -71,14 +65,10 @@ class FinanceDataClient:
         Returns {} if the ticker is not found.
         """
         try:
-            import yfinance as yf
+            import yfinance as yf  # type: ignore[import]
 
             t = yf.Ticker(ticker)
-            info = retry_sync(
-                lambda: t.info,
-                retry_on=(Exception,),
-                op_name=f"yfinance.info.{ticker}",
-            )
+            info = retry_sync(lambda: t.info, retry_on=(Exception,), op_name=f"yfinance.info.{ticker}")
             if not info.get("shortName"):
                 logger.warning("ticker %s not found (no shortName)", ticker)
                 return {}
@@ -98,9 +88,7 @@ class FinanceDataClient:
                 "ev_to_ebitda": _safe(info.get("enterpriseToEbitda")),
                 "trailing_eps": _safe(info.get("trailingEps")),
                 "forward_eps": _safe(info.get("forwardEps")),
-                "revenue_growth_yoy": _safe(
-                    info.get("revenueGrowth")
-                ),  # decimal, e.g. 0.73
+                "revenue_growth_yoy": _safe(info.get("revenueGrowth")),  # decimal, e.g. 0.73
                 "gross_margins": _safe(info.get("grossMargins")),
                 "operating_margins": _safe(info.get("operatingMargins")),
                 "profit_margins": _safe(info.get("profitMargins")),
@@ -114,38 +102,29 @@ class FinanceDataClient:
 
     def get_financials(self, ticker: str) -> dict[str, Any]:
         """
-        Returns normalised financial metrics across three time slices:
-          - ttm / latest annual (most recent income statement column)
-          - prior_year (one year back)
-          - latest_quarter (most recent quarterly column)
+        Returns normalised financial metrics across time slices:
+          - ttm: latest annual column (income statement col 0)
+          - three_year_avg: 3-year revenue CAGR (col 0 vs col 3) and mean operating
+            margin across the three most recent fiscal years (cols 0–2)
+          - latest_quarter: most recent quarterly column
 
         All monetary values in USD. Percentages as floats (e.g. 71.07 = 71.07%).
         Missing values are None; all missing field names collected in missing_fields[].
         """
         try:
-            import yfinance as yf
+            import yfinance as yf  # type: ignore[import]
 
             t = yf.Ticker(ticker)
             inc = retry_sync(
-                lambda: t.income_stmt,
-                retry_on=(Exception,),
-                op_name=f"yfinance.income_stmt.{ticker}",
+                lambda: t.income_stmt, retry_on=(Exception,), op_name=f"yfinance.income_stmt.{ticker}"
             )  # annual, newest column first
             q_inc = retry_sync(
                 lambda: t.quarterly_income_stmt,
                 retry_on=(Exception,),
                 op_name=f"yfinance.quarterly_income_stmt.{ticker}",
             )
-            cf = retry_sync(
-                lambda: t.cashflow,
-                retry_on=(Exception,),
-                op_name=f"yfinance.cashflow.{ticker}",
-            )
-            bs = retry_sync(
-                lambda: t.balance_sheet,
-                retry_on=(Exception,),
-                op_name=f"yfinance.balance_sheet.{ticker}",
-            )
+            cf = retry_sync(lambda: t.cashflow, retry_on=(Exception,), op_name=f"yfinance.cashflow.{ticker}")
+            bs = retry_sync(lambda: t.balance_sheet, retry_on=(Exception,), op_name=f"yfinance.balance_sheet.{ticker}")
 
             # ── annual metrics ──────────────────────────────────────────
             rev_latest = _row(inc, "Total Revenue", 0)
@@ -155,8 +134,10 @@ class FinanceDataClient:
             ni_latest = _row(inc, "Net Income", 0)
             eps_latest = _row(inc, "Diluted EPS", 0)
 
-            rev_prior2 = _row(inc, "Total Revenue", 2)  # for 3y avg
+            rev_prior2 = _row(inc, "Total Revenue", 2)
+            rev_prior3 = _row(inc, "Total Revenue", 3)
             op_prior = _row(inc, "Operating Income", 1)
+            op_prior2 = _row(inc, "Operating Income", 2)
 
             fcf_latest = _row(cf, "Free Cash Flow", 0)
             capex = _row(cf, "Capital Expenditure", 0)
@@ -185,27 +166,17 @@ class FinanceDataClient:
                 "total_debt": total_debt,
             }
 
-            # 3-year compound revenue growth (latest vs 2 years ago)
+            # 3-year CAGR: FY_N (col 0) vs FY_{N-3} (col 3) → three compounding intervals
             cagr_3y = None
-            if rev_latest and rev_prior2 and rev_prior2 > 0:
-                cagr_3y = round(((rev_latest / rev_prior2) ** 0.5 - 1) * 100, 2)
+            if rev_latest is not None and rev_prior3 is not None and rev_prior3 > 0:
+                cagr_3y = round(((rev_latest / rev_prior3) ** (1 / 3) - 1) * 100, 2)
 
-            # 3-year average operating margin
-            op_margins = [
-                _pct(op_latest, rev_latest),
-                _pct(op_prior, rev_prior),
-            ]
+            # Simple average of operating margin over the three most recent fiscal years
+            op_margins = [_pct(op_latest, rev_latest), _pct(op_prior, rev_prior), _pct(op_prior2, rev_prior2)]
             op_margins_clean = [x for x in op_margins if x is not None]
-            avg_op_margin = (
-                round(sum(op_margins_clean) / len(op_margins_clean), 2)
-                if op_margins_clean
-                else None
-            )
+            avg_op_margin = round(sum(op_margins_clean) / len(op_margins_clean), 2) if op_margins_clean else None
 
-            three_year_avg = {
-                "revenue_cagr_pct": cagr_3y,
-                "avg_operating_margin_pct": avg_op_margin,
-            }
+            three_year_avg = {"revenue_cagr_pct": cagr_3y, "avg_operating_margin_pct": avg_op_margin}
 
             latest_quarter = {
                 "revenue": q_rev,
@@ -255,18 +226,14 @@ class FinanceDataClient:
         period: yfinance period string, e.g. "1mo", "3mo", "6mo", "1y", "2y".
         """
         try:
-            import yfinance as yf
+            import yfinance as yf  # type: ignore[import]
 
             t = yf.Ticker(ticker)
             hist = retry_sync(
-                lambda: t.history(period=period),
-                retry_on=(Exception,),
-                op_name=f"yfinance.price_history.{ticker}",
+                lambda: t.history(period=period), retry_on=(Exception,), op_name=f"yfinance.price_history.{ticker}"
             )
             if hist.empty:
-                return PriceHistoryPayload(
-                    error=f"no price history for {ticker}"
-                ).model_dump(by_alias=True)
+                return PriceHistoryPayload(error=f"no price history for {ticker}").model_dump(by_alias=True)
 
             close = hist["Close"]
             first, last = float(close.iloc[0]), float(close.iloc[-1])
@@ -274,17 +241,10 @@ class FinanceDataClient:
 
             # 30-day return (or full period if shorter)
             close_30d = hist["Close"].iloc[-min(22, len(hist)) :]
-            ret_30d = round(
-                (float(close_30d.iloc[-1]) - float(close_30d.iloc[0]))
-                / float(close_30d.iloc[0])
-                * 100,
-                2,
-            )
+            ret_30d = round((float(close_30d.iloc[-1]) - float(close_30d.iloc[0])) / float(close_30d.iloc[0]) * 100, 2)
 
             daily_returns = close.pct_change().dropna()
-            volatility_annualised_pct = round(
-                float(daily_returns.std()) * (252**0.5) * 100, 2
-            )
+            volatility_annualised_pct = round(float(daily_returns.std()) * (252**0.5) * 100, 2)
 
             payload = {
                 "ticker": ticker,
@@ -309,14 +269,10 @@ class FinanceDataClient:
         Each item: { title, url, publisher, published_at, summary }
         """
         try:
-            import yfinance as yf
+            import yfinance as yf  # type: ignore[import]
 
             t = yf.Ticker(ticker)
-            raw_news = retry_sync(
-                lambda: t.news or [],
-                retry_on=(Exception,),
-                op_name=f"yfinance.news.{ticker}",
-            )
+            raw_news = retry_sync(lambda: t.news or [], retry_on=(Exception,), op_name=f"yfinance.news.{ticker}")
             results = []
             for item in raw_news[:10]:
                 content = item.get("content") or {}
@@ -326,9 +282,7 @@ class FinanceDataClient:
                 canonical = content.get("canonicalUrl") or {}
                 url = canonical.get("url") if isinstance(canonical, dict) else None
                 provider = content.get("provider") or {}
-                publisher = (
-                    provider.get("displayName") if isinstance(provider, dict) else None
-                )
+                publisher = provider.get("displayName") if isinstance(provider, dict) else None
                 published_at = content.get("pubDate") or content.get("displayTime")
                 summary = content.get("summary") or content.get("description") or ""
                 results.append(

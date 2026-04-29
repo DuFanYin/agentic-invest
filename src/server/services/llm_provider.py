@@ -25,13 +25,7 @@ from typing import TYPE_CHECKING
 
 import httpx
 from src.server import shutdown
-from src.server.config import (
-    LLM_API_KEY,
-    LLM_APP_TITLE,
-    LLM_BASE_URL,
-    LLM_HTTP_REFERER,
-    LLM_PROVIDER,
-)
+from src.server.config import LLM_API_KEY, LLM_APP_TITLE, LLM_BASE_URL, LLM_HTTP_REFERER, LLM_PROVIDER
 from src.server.models.response import LLMCall
 from src.server.utils.status import AGENT_TAG_BY_NODE
 
@@ -40,14 +34,8 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-_FREE_MODELS = [
-    "openai/gpt-oss-120b:free",
-    "meta-llama/llama-3.3-70b-instruct:free",
-]
-_OPENAI_MODELS = [
-    "gpt-4.1",
-    "gpt-4.1-mini",
-]
+_FREE_MODELS = ["openai/gpt-oss-120b:free", "meta-llama/llama-3.3-70b-instruct:free"]
+_OPENAI_MODELS = ["gpt-4.1", "gpt-4.1-mini"]
 
 # Cost per 1M tokens (input, output) in USD — OpenAI public pricing
 _OPENAI_PRICING: dict[str, tuple[float, float]] = {
@@ -61,16 +49,10 @@ _OPENAI_PRICING: dict[str, tuple[float, float]] = {
 }
 
 
-def _compute_cost(
-    model: str, prompt_tokens: int, completion_tokens: int
-) -> float | None:
+def _compute_cost(model: str, prompt_tokens: int, completion_tokens: int) -> float | None:
     for key, (input_cost, output_cost) in _OPENAI_PRICING.items():
         if model.startswith(key):
-            return round(
-                (prompt_tokens * input_cost + completion_tokens * output_cost)
-                / 1_000_000,
-                8,
-            )
+            return round((prompt_tokens * input_cost + completion_tokens * output_cost) / 1_000_000, 8)
     return None
 
 
@@ -127,9 +109,7 @@ class LLMClient:
         retry_backoff: float = 2.0,
         collector: LLMCallCollector | None = None,
     ) -> None:
-        self.provider = (
-            LLM_PROVIDER if LLM_PROVIDER in {"openrouter", "openai"} else "openrouter"
-        )
+        self.provider = LLM_PROVIDER if LLM_PROVIDER in {"openrouter", "openai"} else "openrouter"
         self.api_key = api_key or LLM_API_KEY
         self._models = [model] if model else self._default_models()
         resolved_base_url = (base_url or LLM_BASE_URL).rstrip("/")
@@ -141,46 +121,28 @@ class LLMClient:
 
     # ── public API ─────────────────────────────────────────────────────────
 
-    async def complete(
-        self, prompt: str, *, system: str | None = None, node: str = "unknown"
-    ) -> str:
+    async def complete(self, prompt: str, *, system: str | None = None, node: str = "unknown") -> str:
         """Send prompt, return validated JSON string. Raises RuntimeError on exhaustion."""
         return await self._run(prompt, system=system, json_mode=True, node=node)
 
-    async def complete_text(
-        self, prompt: str, *, system: str | None = None, node: str = "unknown"
-    ) -> str:
+    async def complete_text(self, prompt: str, *, system: str | None = None, node: str = "unknown") -> str:
         """Send prompt, return raw text (no JSON enforcement). For Markdown reports."""
         return await self._run(prompt, system=system, json_mode=False, node=node)
 
-    async def call_with_retry(
-        self,
-        prompt: str,
-        *,
-        system: str | None = None,
-        node: str = "unknown",
-        **_,
-    ) -> str:
+    async def call_with_retry(self, prompt: str, *, system: str | None = None, node: str = "unknown", **_) -> str:
         """Call complete(). On JSON parse failure, retry once with a stripped prompt."""
         try:
             return await self.complete(prompt, system=system, node=node)
         except RuntimeError as exc:
             if "invalid JSON" not in str(exc):
                 raise
-            logger.warning(
-                "%s: JSON parse failed — retrying with simplified prompt", node
-            )
-            return await self.complete(
-                _simplify_prompt(prompt), system=system, node=node
-            )
+            logger.warning("%s: JSON parse failed — retrying with simplified prompt", node)
+            return await self.complete(_simplify_prompt(prompt), system=system, node=node)
 
     # ── internals ──────────────────────────────────────────────────────────
 
     def _headers(self) -> dict:
-        h = {
-            "Authorization": f"Bearer {self.api_key}",
-            "Content-Type": "application/json",
-        }
+        h = {"Authorization": f"Bearer {self.api_key}", "Content-Type": "application/json"}
         if self.provider == "openrouter":
             if LLM_HTTP_REFERER:
                 h["HTTP-Referer"] = LLM_HTTP_REFERER
@@ -202,15 +164,12 @@ class LLMClient:
             return self._collector.next_id()
         return "llm_notrace"
 
-    async def _run(
-        self, prompt: str, *, system: str | None, json_mode: bool, node: str
-    ) -> str:
+    async def _run(self, prompt: str, *, system: str | None, json_mode: bool, node: str) -> str:
         if not self.api_key:
-            raise RuntimeError(
-                "LLM API key is not set. Set LLM_API_KEY in your environment."
-            )
+            raise RuntimeError("LLM API key is not set. Set LLM_API_KEY in your environment.")
 
         last_error: Exception | None = None
+        agent_tag = AGENT_TAG_BY_NODE.get(node, "?")
 
         for model_id in self._models:
             for attempt in range(1, self.max_retries + 2):
@@ -224,7 +183,7 @@ class LLMClient:
                     LLMCall(
                         id=call_id,
                         node=node,
-                        agent_tag=AGENT_TAG_BY_NODE.get(node, "?"),
+                        agent_tag=agent_tag,
                         model=model_id,
                         attempt=attempt,
                         status="calling",
@@ -233,18 +192,12 @@ class LLMClient:
                 )
 
                 try:
-                    content, usage = await self._call(
-                        model_id, prompt, system=system, json_mode=json_mode
-                    )
+                    content, usage = await self._call(model_id, prompt, system=system, json_mode=json_mode)
                     finished_at = datetime.now(UTC).isoformat()
                     prompt_tokens = usage.get("prompt_tokens") if usage else None
-                    completion_tokens = (
-                        usage.get("completion_tokens") if usage else None
-                    )
+                    completion_tokens = usage.get("completion_tokens") if usage else None
                     cost_usd = (
-                        _compute_cost(
-                            model_id, prompt_tokens or 0, completion_tokens or 0
-                        )
+                        _compute_cost(model_id, prompt_tokens or 0, completion_tokens or 0)
                         if (prompt_tokens is not None or completion_tokens is not None)
                         else None
                     )
@@ -252,7 +205,7 @@ class LLMClient:
                         LLMCall(
                             id=call_id,
                             node=node,
-                            agent_tag=AGENT_TAG_BY_NODE.get(node, "?"),
+                            agent_tag=agent_tag,
                             model=model_id,
                             attempt=attempt,
                             status="success",
@@ -273,7 +226,7 @@ class LLMClient:
                         LLMCall(
                             id=call_id,
                             node=node,
-                            agent_tag=AGENT_TAG_BY_NODE.get(node, "?"),
+                            agent_tag=agent_tag,
                             model=model_id,
                             attempt=attempt,
                             status="retry",
@@ -297,9 +250,7 @@ class LLMClient:
                         if await shutdown.wait_or_timeout(wait):
                             raise RuntimeError("[llm] server shutting down")
                     else:
-                        logger.warning(
-                            "model %s exhausted retries, trying next", model_id
-                        )
+                        logger.warning("model %s exhausted retries, trying next", model_id)
 
                 except _FatalError as exc:
                     last_error = exc
@@ -308,7 +259,7 @@ class LLMClient:
                         LLMCall(
                             id=call_id,
                             node=node,
-                            agent_tag=AGENT_TAG_BY_NODE.get(node, "?"),
+                            agent_tag=agent_tag,
                             model=model_id,
                             attempt=attempt,
                             status="failed",
@@ -328,7 +279,7 @@ class LLMClient:
                         LLMCall(
                             id=call_id,
                             node=node,
-                            agent_tag=AGENT_TAG_BY_NODE.get(node, "?"),
+                            agent_tag=agent_tag,
                             model=model_id,
                             attempt=attempt,
                             status="retry",
@@ -351,44 +302,28 @@ class LLMClient:
                         if await shutdown.wait_or_timeout(wait):
                             raise RuntimeError("[llm] server shutting down")
                     else:
-                        logger.warning(
-                            "model %s exhausted retries after unexpected error, trying next",
-                            model_id,
-                        )
+                        logger.warning("model %s exhausted retries after unexpected error, trying next", model_id)
 
-        raise RuntimeError(
-            f"[llm] All models exhausted. Last error: {last_error}"
-        ) from last_error
+        raise RuntimeError(f"[llm] All models exhausted. Last error: {last_error}") from last_error
 
     async def _call(
         self, model_id: str, prompt: str, *, system: str | None, json_mode: bool
     ) -> tuple[str, dict | None]:
         default_system = (
-            "Return only valid JSON. Do not include markdown, comments, or extra text."
-            if json_mode
-            else None
+            "Return only valid JSON. Do not include markdown, comments, or extra text." if json_mode else None
         )
         messages = []
         if system or default_system:
             messages.append({"role": "system", "content": system or default_system})
         messages.append({"role": "user", "content": prompt})
 
-        payload: dict = {
-            "model": model_id,
-            "messages": messages,
-            "temperature": 0,
-            "max_tokens": 2048,
-        }
+        payload: dict = {"model": model_id, "messages": messages, "temperature": 0, "max_tokens": 2048}
         if json_mode:
             payload["response_format"] = {"type": "json_object"}
 
         try:
             async with httpx.AsyncClient(timeout=self.timeout_seconds) as client:
-                response = await client.post(
-                    f"{self.base_url}/chat/completions",
-                    headers=self._headers(),
-                    json=payload,
-                )
+                response = await client.post(f"{self.base_url}/chat/completions", headers=self._headers(), json=payload)
         except httpx.TimeoutException as exc:
             raise _RetryableError(f"timeout: {exc}") from exc
         except httpx.NetworkError as exc:
@@ -416,9 +351,7 @@ class LLMClient:
             raise _FatalError("response missing message content") from exc
 
         if isinstance(content, list):
-            content = "".join(
-                c.get("text", "") if isinstance(c, dict) else str(c) for c in content
-            )
+            content = "".join(c.get("text", "") if isinstance(c, dict) else str(c) for c in content)
 
         if not isinstance(content, str) or not content.strip():
             raise _FatalError("model returned empty content")
@@ -432,9 +365,7 @@ class LLMClient:
             try:
                 json.loads(content)
             except json.JSONDecodeError as exc:
-                raise _RetryableError(
-                    f"invalid JSON from model: {content[:120]}"
-                ) from exc
+                raise _RetryableError(f"invalid JSON from model: {content[:120]}") from exc
 
         usage: dict | None = data.get("usage") if isinstance(data, dict) else None
         return content, usage

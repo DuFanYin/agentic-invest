@@ -34,6 +34,16 @@ ruff check . --fix
 ruff check .
 ```
 
+## Running tests
+
+```bash
+source .venv/bin/activate
+PYTHONPATH=. pytest tests/unit/ -q
+PYTHONPATH=. pytest tests/integration/ -q
+```
+
+Integration tests require `LLM_API_KEY` (see `.env.example`).
+
 ## Structure
 
 - `src/server/`: FastAPI backend, orchestration graph, capability layer, services, models, and utilities.
@@ -45,33 +55,17 @@ ruff check .
 
 ## Key Design Considerations
 
-### Accuracy
-
-- The system prevents error propagation by gating progress through `llm_judge` and `policy_router`.
-- The system uses fine-grained retry control to trigger targeted capability retries instead of full research re-runs.
-- `scenario_debate` challenges baseline scenario probabilities before final reporting.
-
-### Modularity
-
-- The runtime follows a clear layering: `routes -> agents -> capabilities -> services -> utils/models`.
-- A centralized agent registry is the source of truth for node contracts and dependencies.
-
-### Robustness
-
-- State contract enforcement via `registry.py` + `contract.py` constrains per-node read/write fields and reduces hidden state coupling and regression risk.
-- The system uses best-effort degradation for non-critical LLM failures.
-- The system fails fast only on hard preconditions.
-
-### Testability
-
-- Node logic is testable in isolation because contracts are explicit and dependencies are injectable/mocked.
-- Policy behavior is testable with deterministic rule-engine unit tests (`policy.py`) independent of LLM variance.
-
-
-### Observability
-
-- Stream live execution events to the UI (`agent_status`, `llm_call`, `section_ready`, `final`, `error`, `done`).
-- The status model uses `lifecycle` (`standby/active/waiting/blocked/degraded/failed`) plus `phase` (task stage such as `collecting_evidence` or `generating_report`).
+- Runtime layering: `routes → agents → capabilities → services → utils/models` with a centralised agent registry as source of truth for node contracts and dependencies.
+- All inter-node data flows through validated Pydantic models — schema drift is caught at parse time, not propagated silently downstream.
+- State contract enforcement via `registry.py` + `contract.py` constrains per-node read/write fields, reducing hidden state coupling and regression risk.
+- Node logic is testable in isolation because contracts are explicit and dependencies are injectable; policy retry rules are testable deterministically, independent of LLM variance.
+- Iteration-aware judging: the LLM judge’s strictness scales down as `research_iteration` increases, while a hard max batch count and policy `iteration_limit` still cap supplemental research — tight quality checks without endless loops.
+- Retry-aware analysis: analysis nodes include gate-oriented context on supplemental batches, so synthesis explicitly treats extra evidence as addressing the gate rather than repeating the same prompt with a larger dossier alone.
+- LLM client implements model-chain failover, per-attempt telemetry, and interruptible backoff — resilient to transient provider failures.
+- Best-effort degradation for non-critical LLM failures; hard fail only on unrecoverable preconditions.
+- Evidence IDs use `iteration_id * 100 + offset` — simple collision prevention across retry passes without coordination overhead.
+- `seen_urls` dedup across concurrent web fetches is safe under asyncio cooperative multitasking (no `await` between check and add).
+- Live SSE streaming with `lifecycle` + `phase` status model gives the frontend fine-grained visibility into node progress.
 
 
 ## Design Docs

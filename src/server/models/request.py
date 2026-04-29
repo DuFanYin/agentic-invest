@@ -10,10 +10,3 @@ class ResearchRequest(BaseModel):
         if not isinstance(value, str):
             return value
         return value.strip()
-
-    @field_validator("query")
-    @classmethod
-    def validate_query_not_blank(cls, value: str) -> str:
-        if not value:
-            raise ValueError("query must not be blank")
-        return value

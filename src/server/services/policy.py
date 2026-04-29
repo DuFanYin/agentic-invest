@@ -11,15 +11,10 @@ class PolicyInput(BaseModel):
     """Snapshot extracted from ResearchState for rule evaluation."""
 
     research_iteration: int
-    evidence_counts: dict[str, int]  # keyed by source_type
-    conflict_count: int
-    missing_field_count: int
     fa_degraded: bool
     macro_degraded: bool
     ms_degraded: bool
-    judge_reason: (
-        str  # structural|analysis_robustness|evidence_conflict|none|judge_degraded
-    )
+    judge_reason: str  # structural|analysis_robustness|evidence_conflict|none|judge_degraded|skipped_iteration_cap
     judge_retry_question: str
     max_iterations: int
 
@@ -27,12 +22,7 @@ class PolicyInput(BaseModel):
 class PolicyDecision(BaseModel):
     """Routing instruction produced by policy evaluation."""
 
-    action: Literal[
-        "continue",
-        "retry_full_research",
-        "retry_capability_only",
-        "halt_with_degraded_output",
-    ]
+    action: Literal["continue", "retry_full_research", "retry_capability_only", "halt_with_degraded_output"]
     targets: list[str]
     retry_question: str
     reason_code: str

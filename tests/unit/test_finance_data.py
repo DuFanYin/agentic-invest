@@ -34,13 +34,7 @@ def _make_income_stmt(
 
 def _make_cashflow(fcf=96_676e6, capex=-6_042e6) -> pd.DataFrame:
     cols = pd.to_datetime(["2026-01-31"])
-    return pd.DataFrame(
-        {
-            "Free Cash Flow": [np.float64(fcf)],
-            "Capital Expenditure": [np.float64(capex)],
-        },
-        index=cols,
-    ).T
+    return pd.DataFrame({"Free Cash Flow": [np.float64(fcf)], "Capital Expenditure": [np.float64(capex)]}, index=cols).T
 
 
 def _make_balance_sheet(total_debt=11_412e6) -> pd.DataFrame:
@@ -48,13 +42,9 @@ def _make_balance_sheet(total_debt=11_412e6) -> pd.DataFrame:
     return pd.DataFrame({"Total Debt": [np.float64(total_debt)]}, index=cols).T
 
 
-def _make_quarterly_income(
-    q_rev=68_127e6, q_gp=51_093e6, q_op=44_299e6, q_rev_prior=35_082e6
-) -> pd.DataFrame:
+def _make_quarterly_income(q_rev=68_127e6, q_gp=51_093e6, q_op=44_299e6, q_rev_prior=35_082e6) -> pd.DataFrame:
     # 5 quarters so col index 4 (same Q prior year) exists
-    cols = pd.to_datetime(
-        ["2026-01-31", "2025-10-31", "2025-07-31", "2025-04-30", "2025-01-31"]
-    )
+    cols = pd.to_datetime(["2026-01-31", "2025-10-31", "2025-07-31", "2025-04-30", "2025-01-31"])
     rows = {
         "Total Revenue": [np.float64(q_rev), 0, 0, 0, np.float64(q_rev_prior)],
         "Gross Profit": [np.float64(q_gp), 0, 0, 0, 0],
@@ -146,13 +136,13 @@ def test_get_financials_core_metrics_are_consistent():
     assert fin["ttm"]["gross_margin_pct"] == pytest.approx(71.07, rel=1e-2)
     # (215_938 - 130_497) / 130_497 ≈ 65.47 %
     assert fin["ttm"]["revenue_growth_yoy_pct"] == pytest.approx(65.47, rel=1e-2)
-    # sqrt(215_938 / 60_922) - 1 ≈ 88.2 %
-    assert fin["three_year_avg"]["revenue_cagr_pct"] == pytest.approx(88.2, rel=1e-1)
+    # (215_938 / 26_974)^(1/3) - 1 ≈ 100.05 % — true 3-year CAGR (not 2-year)
+    assert fin["three_year_avg"]["revenue_cagr_pct"] == pytest.approx(100.05, rel=1e-2)
+    # Mean of operating margins for FY columns 0–2: ~58.97 %
+    assert fin["three_year_avg"]["avg_operating_margin_pct"] == pytest.approx(58.97, rel=1e-2)
     assert fin["latest_quarter"]["revenue"] == pytest.approx(68_127e6, rel=1e-3)
     # (68127 - 35082) / 35082 ≈ 94.2 %
-    assert fin["latest_quarter"]["revenue_growth_yoy_pct"] == pytest.approx(
-        94.2, rel=1e-1
-    )
+    assert fin["latest_quarter"]["revenue_growth_yoy_pct"] == pytest.approx(94.2, rel=1e-1)
 
 
 def test_get_financials_marks_missing_when_revenue_nan():

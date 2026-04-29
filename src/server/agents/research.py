@@ -35,12 +35,6 @@ _WRITES = NODE_CONTRACTS["research"].writes
 
 logger = logging.getLogger(__name__)
 
-_finance = FinanceDataClient()
-_macro = MacroDataClient()
-_web = WebResearchClient()
-_cache = Cache(db_path=CACHE_DB_PATH)
-_llm = LLMClient()
-
 
 async def _plan_web_queries(
     subject: str,
@@ -69,9 +63,7 @@ async def _plan_web_queries(
     try:
         raw = await llm.call_with_retry(prompt, system=system, node="research")
         parsed = json.loads(raw)
-        queries = [
-            q for q in (parsed.get("queries") or []) if isinstance(q, str) and q.strip()
-        ]
+        queries = [q for q in (parsed.get("queries") or []) if isinstance(q, str) and q.strip()]
         if queries:
             return queries[:5]
     except Exception:
@@ -87,72 +79,59 @@ async def _plan_web_queries(
     return fallback[:5]
 
 
-async def research_node(
-    state: ResearchState, *, llm: LLMClient | None = None
-) -> ResearchState:
-    assert_reads(state, _READS, "research")
+async def _run_capabilities(
+    *,
+    ticker: str | None,
+    subject: str,
+    retry_scope: list[str] | None,
+    retry_questions: list[str],
+    research_focus: list[str],
+    must_have_metrics: list[str],
+    prior_evidence: list,
+    iteration_id: int,
+    retrieved_at: str,
+    llm: LLMClient,
+    cache: Cache,
+    finance_client: FinanceDataClient,
+    macro_client: MacroDataClient,
+    web_client: WebResearchClient,
+) -> tuple[list, dict, list[str]]:
+    """Run enabled capabilities and return (new_evidence, metrics, missing_fields).
 
-    query = state["query"]
-    intent = state.get("intent")
-    plan_ctx = state.get("plan_context")
-    research_focus = plan_ctx.research_focus if plan_ctx else []
-    must_have_metrics = plan_ctx.must_have_metrics if plan_ctx else []
-    retry_questions = state.get("retry_questions") or []
-    retry_scope = state.get("retry_scope")  # None = full; list = scoped
-    iteration_id = state.get("research_iteration", 0)
-    statuses = list(state.get("agent_statuses") or [])
-    prior_evidence = state.get("evidence") or []
+    retry_scope=None means all capabilities are enabled (full research pass).
+    """
 
-    # When retry_scope is set, only run the listed capabilities.
-    # None means full research (all caps enabled).
     def _cap_enabled(cap: str) -> bool:
         return retry_scope is None or cap in retry_scope
 
-    retrieved_at = datetime.now(UTC).isoformat()
-    ticker = intent.ticker if intent else None
-    subject = (intent.subjects[0] if intent and intent.subjects else None) or query
     ev_id = iteration_id * 100 + 1
-
     new_evidence: list = []
     all_metrics: dict = {}
     all_missing: list[str] = []
 
-    # ── Finance (ticker-gated, scope-gated) ──────────────────────────────
     if ticker and _cap_enabled("cap.fetch_finance"):
         fin = await fetch_finance_evidence(
-            ticker,
-            ev_id_start=ev_id,
-            retrieved_at=retrieved_at,
-            cache=_cache,
-            client=_finance,
+            ticker, ev_id_start=ev_id, retrieved_at=retrieved_at, cache=cache, client=finance_client
         )
         new_evidence.extend(fin.evidence)
         all_metrics.update(fin.metrics)
         all_missing.extend(fin.missing_fields)
         ev_id = fin.next_ev_id
 
-    # ── Macro (scope-gated) ───────────────────────────────────────────────
     if _cap_enabled("cap.fetch_macro"):
-        mac = await fetch_macro_evidence(
-            ev_id_start=ev_id,
-            retrieved_at=retrieved_at,
-            client=_macro,
-        )
+        mac = await fetch_macro_evidence(ev_id_start=ev_id, retrieved_at=retrieved_at, client=macro_client)
         new_evidence.extend(mac.evidence)
         ev_id = mac.next_ev_id
 
-    # ── Web search: LLM query planner → concurrent multi-query fetch ──────
     if _cap_enabled("cap.fetch_web"):
-        existing_queries = [
-            ev.title for ev in prior_evidence if getattr(ev, "source_type", "") == "web"
-        ]
+        existing_queries = [ev.title for ev in prior_evidence if getattr(ev, "source_type", "") == "web"]
         web_queries = await _plan_web_queries(
             subject,
             research_focus=research_focus,
             must_have_metrics=must_have_metrics,
             retry_questions=retry_questions,
             existing_queries=existing_queries,
-            llm=llm or _llm,
+            llm=llm,
         )
         seen_urls = {ev.url for ev in new_evidence if ev.url}
         web = await fetch_web_evidence(
@@ -160,13 +139,59 @@ async def research_node(
             ev_id_start=ev_id,
             retrieved_at=retrieved_at,
             seen_urls=seen_urls,
-            cache=_cache,
-            client=_web,
+            cache=cache,
+            client=web_client,
         )
         new_evidence.extend(web.evidence)
-        ev_id = web.next_ev_id
 
-    # ── Fail if nothing collected ─────────────────────────────────────────
+    return new_evidence, all_metrics, all_missing
+
+
+async def research_node(
+    state: ResearchState,
+    *,
+    llm: LLMClient | None = None,
+    cache: Cache | None = None,
+    finance_client: FinanceDataClient | None = None,
+    macro_client: MacroDataClient | None = None,
+    web_client: WebResearchClient | None = None,
+) -> ResearchState:
+    assert_reads(state, _READS, "research")
+
+    llm = llm or LLMClient()
+    cache = cache or Cache(db_path=CACHE_DB_PATH)
+    finance_client = finance_client or FinanceDataClient()
+    macro_client = macro_client or MacroDataClient(cache=cache)
+    web_client = web_client or WebResearchClient()
+
+    query = state["query"]
+    intent = state.get("intent")
+    plan_ctx = state.get("plan_context")
+    retry_questions = state.get("retry_questions") or []
+    iteration_id = state.get("research_iteration", 0)
+    statuses = list(state.get("agent_statuses") or [])
+
+    ticker = intent.ticker if intent else None
+    subject = (intent.subjects[0] if intent and intent.subjects else None) or query
+    retrieved_at = datetime.now(UTC).isoformat()
+
+    new_evidence, all_metrics, all_missing = await _run_capabilities(
+        ticker=ticker,
+        subject=subject,
+        retry_scope=state.get("retry_scope"),
+        retry_questions=retry_questions,
+        research_focus=plan_ctx.research_focus if plan_ctx else [],
+        must_have_metrics=plan_ctx.must_have_metrics if plan_ctx else [],
+        prior_evidence=state.get("evidence") or [],
+        iteration_id=iteration_id,
+        retrieved_at=retrieved_at,
+        llm=llm,
+        cache=cache,
+        finance_client=finance_client,
+        macro_client=macro_client,
+        web_client=web_client,
+    )
+
     if not new_evidence:
         msg = "[research] no usable evidence collected from finance/news/web sources"
         logger.error(msg)
@@ -181,19 +206,11 @@ async def research_node(
             )
         raise RuntimeError(msg)
 
-    # ── Normalize ─────────────────────────────────────────────────────────
     all_evidence = (state.get("evidence") or []) + new_evidence
     normalized_data = normalize_evidence(
-        query,
-        intent,
-        all_evidence,
-        all_metrics,
-        all_missing,
-        retry_questions,
-        iteration_id,
+        query, intent, all_evidence, all_metrics, all_missing, retry_questions, iteration_id
     )
 
-    # ── Status updates ────────────────────────────────────────────────────
     if statuses:
         statuses = update_status(
             statuses,
@@ -219,11 +236,7 @@ async def research_node(
             action="analysing macro environment",
         )
         statuses = update_status(
-            statuses,
-            "market_sentiment",
-            lifecycle="active",
-            phase="analyzing_sentiment",
-            action="analysing sentiment",
+            statuses, "market_sentiment", lifecycle="active", phase="analyzing_sentiment", action="analysing sentiment"
         )
 
     delta = {

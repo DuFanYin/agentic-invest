@@ -7,25 +7,21 @@ import logging
 
 from src.server.models.analysis import MarketNarrative, MarketSentiment, NewsSentiment
 from src.server.models.state import ResearchState
-from src.server.prompts import build_prompt
+from src.server.prompts import build_prompt, analysis_gate_context_for_prompt
 from src.server.services.llm_provider import LLMClient
 from src.server.utils.contract import NODE_CONTRACTS, assert_reads, assert_writes
-from src.server.utils.status import update_status
+from src.server.utils.status import mark_analysis_done, update_status
 
 _READS = NODE_CONTRACTS["market_sentiment"].reads
 _WRITES = NODE_CONTRACTS["market_sentiment"].writes
 
 logger = logging.getLogger(__name__)
 
-_default_llm = LLMClient()
 _NODE = "market_sentiment"
 
 
-def _build_prompt(news_evidence, price_history, all_evidence_ids) -> tuple[str, str]:
-    news_lines = (
-        "\n".join(f"[{ev.id}] {ev.summary}" for ev in news_evidence)
-        or "No news evidence available."
-    )
+def _build_prompt(news_evidence, price_history, all_evidence_ids, *, analysis_gate_context: str) -> tuple[str, str]:
+    news_lines = "\n".join(f"[{ev.id}] {ev.summary}" for ev in news_evidence) or "No news evidence available."
 
     price_str = json.dumps(price_history, indent=2) if price_history else "{}"
 
@@ -34,16 +30,16 @@ def _build_prompt(news_evidence, price_history, all_evidence_ids) -> tuple[str, 
     return build_prompt(
         "market_sentiment",
         "main",
+        analysis_gate_context=analysis_gate_context,
         ids_str=ids_str,
         news_lines=news_lines,
         price_str=price_str,
     )
 
 
-async def market_sentiment_node(
-    state: ResearchState, *, llm: LLMClient = _default_llm
-) -> ResearchState:
+async def market_sentiment_node(state: ResearchState, *, llm: LLMClient | None = None) -> ResearchState:
     assert_reads(state, _READS, _NODE)
+    llm = llm or LLMClient()
 
     evidence = state.get("evidence") or []
     normalized_data = state.get("normalized_data")
@@ -61,10 +57,15 @@ async def market_sentiment_node(
     all_evidence_ids = [ev.id for ev in evidence]
     price_history = normalized_data.metrics.price_history if normalized_data else {}
 
+    gate = analysis_gate_context_for_prompt(
+        research_iteration=int(state.get("research_iteration") or 0),
+        retry_questions=state.get("retry_questions"),
+        retry_reason=state.get("retry_reason"),
+    )
     result: MarketSentiment | None = None
 
     if evidence:
-        system, prompt = _build_prompt(news_evidence, price_history, all_evidence_ids)
+        system, prompt = _build_prompt(news_evidence, price_history, all_evidence_ids, analysis_gate_context=gate)
         try:
             raw = await llm.call_with_retry(prompt, system=system, node=_NODE)
             parsed = json.loads(raw)
@@ -89,28 +90,14 @@ async def market_sentiment_node(
             )
 
     if statuses:
-        statuses = update_status(
+        statuses = mark_analysis_done(
             statuses,
             "market_sentiment",
-            lifecycle="standby",
             phase="analyzing_sentiment",
             action="sentiment ready",
-            details=[
-                f"claims={len(result.claims)}",
-                f"direction={result.news_sentiment.direction}",
-            ],
-        )
-        statuses = update_status(
-            statuses,
-            "llm_judge",
-            lifecycle="active",
-            phase="evaluating_readiness",
-            action="reviewing analysis readiness",
+            details=[f"claims={len(result.claims)}", f"direction={result.news_sentiment.direction}"],
         )
 
-    delta = {
-        "market_sentiment": result,
-        "agent_statuses": statuses,
-    }
+    delta = {"market_sentiment": result, "agent_statuses": statuses}
     assert_writes(delta, _WRITES, "market_sentiment")
     return delta

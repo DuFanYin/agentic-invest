@@ -42,7 +42,7 @@ Two columns:
 - Left panel (`left-panel`, fixed `30%` width)
   - Agent header (`Agents`, active/waiting counters)
   - Agent list (`agent-list`): nine agent rows
-    - Planning (`parse_intent`), Research, Fundamental, Macro, Sentiment, LLM Judge, Scenarios (`scenario_scoring`), Debate (`scenario_debate`), Report (`report_finalize`)
+    - Planning (`planner`), Research, Fundamental, Macro, Sentiment, LLM Judge, Scenarios (`scenario_scoring`), Debate (`scenario_debate`), Report (`report_finalize`)
     - each row shows dot, agent name, current action, status tag
   - Output log area
     - model-call/event stream (`log-box`)
@@ -56,23 +56,21 @@ Two columns:
 
 ## 4) Report Information Architecture
 
-The report is rendered as a section-based flow driven by backend payloads:
+The report is rendered as a section-based flow driven by the final `ResearchResponse` payload (`final` SSE event):
 
 - `report_json.report_plan.sections` defines the standard section order
-- `section_ready` marks sections as ready to render
 - `narrative_sections` provides LLM-written markdown for narrative sections
 - structured sections are rendered from typed payloads such as `fundamental_analysis`, `macro_analysis`, `market_sentiment`, `scenarios`, `scenario_debate`, and `evidence`
 - planning can also add query-specific `custom_sections`
 
-Typical render order:
+Typical render order (after `final` arrives):
 
 1. intent card (`IntentSection`)
 2. standard plan sections in backend-provided order
-3. arrived custom sections
-4. pending custom-section skeletons
-5. evidence table last (once the run is complete)
+3. custom sections (from `report_json.custom_sections` + `narrative_sections`)
+4. evidence table last (when evidence exists)
 
-Validation badge (`VALID` / `REVIEW`) is attached to the executive summary block when that section is rendered.
+Validation badge (`VALID` / `REVIEW`) is attached to the executive summary block when that section is rendered. The hero layout parses a **Markdown lead paragraph** plus **`'- '`-prefixed bullets** (`parseExecutiveSummaryParts`); prose without bullets does not populate the breakdown.
 
 ---
 
@@ -84,22 +82,20 @@ Core UI state variables:
 - `query`: current input text
 - `agentStatuses`: per-agent runtime lifecycle/phase/action map
 - `logLines`: chronological event log
-- `readySections`: streamed section registry (`section_id -> {content, source, title}`)
-- `reportData`: final structured response payload
+- `reportData`: final structured response payload (set only on `final`)
 - `llmCalls`: merged real-time LLM call history
 
 Run behavior:
 
 - `runResearch()` resets local UI state and starts the real backend stream at `/research/stream`
 - log auto-scrolls to the newest entry
-- the SSE parser handles `agent_status`, `llm_call`, `section_ready`, `final`, `error`, `done`
+- the SSE parser handles `agent_status`, `llm_call`, `final`, `error`, `done`
 
 Event effects:
 
 - `agent_status`: updates agent row status/action
 - `llm_call`: merges call updates by `id` and updates the visible log line in place
-- `section_ready`: reveals ready sections; structured sections may use this as a readiness signal with empty content
-- `final`: stores the full response payload, merges final `llm_calls`, backfills undeclared standard-plan sections, and marks the run `complete`
+- `final`: stores the full response payload and merges final `llm_calls`; marks the run `complete`; report body renders only after this event
 - `error`: marks the run `error` and appends a system error log
 - `done`: acts only as a termination marker; if it arrives without `final`/`error`, the frontend treats the run as interrupted (`STREAM_DONE_WITHOUT_FINAL`)
 
@@ -118,7 +114,7 @@ Main components:
 
 Runtime mapping and stream helpers:
 
-- `AGENT_ID_BY_NAME`: backend node name -> UI row ID map (`parse_intent`, `research`, `fundamental_analysis`, `macro_analysis`, `market_sentiment`, `llm_judge`, `scenario_scoring`, `scenario_debate`, `report_finalize`)
+- `AGENT_ID_BY_NAME`: backend node name -> UI row ID map (`planner`, `research`, `fundamental_analysis`, `macro_analysis`, `market_sentiment`, `llm_judge`, `scenario_scoring`, `scenario_debate`, `report_finalize`)
 - `applyAgentStatuses`: applies backend lifecycle/phase/action updates from `agent_status`
 - `processBlock`: parses SSE blocks (`event:` + `data:`) and dispatches to state handlers
-  - handled event types: `agent_status`, `llm_call`, `section_ready`, `final`, `error`, `done`
+  - handled event types: `agent_status`, `llm_call`, `final`, `error`, `done`

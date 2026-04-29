@@ -1,44 +1,35 @@
-"""Report finalization node — per-section narrative rendering with streaming queue."""
+"""Report finalization node — per-section narrative rendering and assembly."""
 
 from __future__ import annotations
 
 import logging
+
 
 from src.server.models.analysis import (
     CustomSection,
     FundamentalAnalysis,
     MacroAnalysis,
     MarketSentiment,
-    QualityMetrics,
-    ReportPlan,
     ReportSection,
     ScenarioDebate,
 )
-from src.server.models.response import ValidationResult
 from src.server.models.scenario import Scenario
 from src.server.models.state import ResearchState
-from src.server.prompts import build_prompt
+from src.server.prompts import build_prompt, narrative_section_format_instructions
 from src.server.services.llm_provider import LLMClient
-from src.server.services.section_queue import SectionQueue
+from src.server.services.report_assembly import assemble, validate_report_plan
 from src.server.utils.contract import NODE_CONTRACTS, assert_reads, assert_writes
 from src.server.utils.status import update_status
-from src.server.utils.validation import (
-    SCENARIO_PROB_TOLERANCE,
-    validate_claim_coverage,
-    validate_evidence_completeness,
-    validate_scenario_scores,
-)
 
 logger = logging.getLogger(__name__)
 
-_default_llm = LLMClient()
-_default_llm.max_retries = 1
 _NODE = "report_finalize"
 
 _READS = NODE_CONTRACTS["report_finalize"].reads
 _WRITES = NODE_CONTRACTS["report_finalize"].writes
+_MIN_SECTION_LENGTH = 50
 
-# Sections that are rendered from structured data — no LLM narrative needed
+# Sections rendered from structured data — no LLM narrative needed
 _STRUCTURED_SOURCES = {
     "fundamental_analysis",
     "macro_analysis",
@@ -48,141 +39,20 @@ _STRUCTURED_SOURCES = {
     "evidence",
 }
 
-_CANONICAL_SECTION_IDS = {
-    "executive_summary",
-    "fundamental_analysis",
-    "macro_environment",
-    "market_sentiment",
-    "scenarios",
-    "scenario_debate",
-    "conclusion",
-}
-_ALLOWED_SECTION_SOURCES = _STRUCTURED_SOURCES | {"all"}
 
-_FALLBACK_SECTIONS = [
-    ReportSection(
-        id="executive_summary", title="Executive Summary", source="all", required=True
-    ),
-    ReportSection(
-        id="fundamental_analysis",
-        title="Fundamental Analysis",
-        source="fundamental_analysis",
-        required=True,
-    ),
-    ReportSection(
-        id="macro_environment",
-        title="Macro Environment",
-        source="macro_analysis",
-        required=True,
-    ),
-    ReportSection(
-        id="market_sentiment",
-        title="Market Sentiment",
-        source="market_sentiment",
-        required=True,
-    ),
-    ReportSection(
-        id="scenarios", title="Future Scenarios", source="scenarios", required=True
-    ),
-    ReportSection(
-        id="scenario_debate",
-        title="Scenario Calibration",
-        source="scenario_debate",
-        required=True,
-    ),
-    ReportSection(
-        id="conclusion", title="Conclusion & What To Watch", source="all", required=True
-    ),
-]
-_FALLBACK_SECTION_BY_ID = {section.id: section for section in _FALLBACK_SECTIONS}
-
-
-def _validate_report_plan(
-    report_plan: ReportPlan | None,
-) -> tuple[list[ReportSection], list[str], ReportPlan]:
-    """Return usable sections, validation warnings, and the accepted plan.
-
-    Prefer salvaging valid sections over falling back the entire plan.
-    """
-    if report_plan is None:
-        fallback = ReportPlan(report_type="general", sections=list(_FALLBACK_SECTIONS))
-        return list(_FALLBACK_SECTIONS), [], fallback
-
-    warnings: list[str] = []
-    validated: list[ReportSection] = []
-    seen_ids: set[str] = set()
-
-    for section in report_plan.sections:
-        section_id = (section.id or "").strip()
-        source = (section.source or "").strip()
-        title = (section.title or "").strip()
-        if section_id not in _CANONICAL_SECTION_IDS:
-            warnings.append(f"Skipping unknown report_plan section id '{section_id}'")
-            continue
-        if section_id in seen_ids:
-            warnings.append(f"Skipping duplicate report_plan section id '{section_id}'")
-            continue
-
-        canonical = _FALLBACK_SECTION_BY_ID[section_id]
-        if source != canonical.source:
-            prev = source or "<empty>"
-            warnings.append(
-                f"Normalizing report_plan source for section '{section_id}' "
-                f"from '{prev}' to '{canonical.source}'"
-            )
-            source = canonical.source
-        if not title:
-            warnings.append(
-                f"Using default title for report_plan section '{section_id}'"
-            )
-            title = canonical.title
-
-        seen_ids.add(section_id)
-        validated.append(
-            ReportSection(
-                id=section_id,
-                title=title,
-                source=source,
-                required=section.required,
-            )
-        )
-
-    if not validated:
-        warnings.append("No usable report_plan sections — using fallback plan")
-        fallback = ReportPlan(
-            report_type=report_plan.report_type or "general",
-            sections=list(_FALLBACK_SECTIONS),
-        )
-        return list(_FALLBACK_SECTIONS), warnings, fallback
-
-    return (
-        validated,
-        warnings,
-        ReportPlan(report_type=report_plan.report_type, sections=validated),
-    )
-
-
-# ── Source data formatters (used in LLM prompt context only) ──────────────
+# ── Source data formatters (prompt context only) ───────────────────────────
 
 
 def _fmt_evidence(evidence: list) -> str:
     return (
-        "\n".join(
-            f"[{e['id']}] ({e['source_type']}) {e['title']}: {e['summary'][:200]}"
-            for e in evidence
-        )
+        "\n".join(f"[{e['id']}] ({e['source_type']}) {e['title']}: {e['summary'][:200]}" for e in evidence)
         or "No evidence available."
     )
 
 
 def _fmt_fundamental(fa: FundamentalAnalysis) -> str:
-    claims = "\n".join(
-        f"- {c.statement} (confidence: {c.confidence}, refs: {c.evidence_ids})"
-        for c in fa.claims
-    )
-    risks = "\n".join(
-        f"- {r.name} [{r.impact}]: {r.signal}" for r in fa.fundamental_risks
-    )
+    claims = "\n".join(f"- {c.statement} (confidence: {c.confidence}, refs: {c.evidence_ids})" for c in fa.claims)
+    risks = "\n".join(f"- {r.name} [{r.impact}]: {r.signal}" for r in fa.fundamental_risks)
     return (
         f"Business quality: {fa.business_quality.view}\n"
         f"Valuation: {fa.valuation.relative_multiple_view}\n"
@@ -204,18 +74,10 @@ def _fmt_macro(macro: MacroAnalysis) -> str:
 
 
 def _fmt_sentiment(ms: MarketSentiment) -> str:
-    claims = "\n".join(
-        f"- {c.statement} (confidence: {c.confidence})" for c in ms.claims
-    )
-    risks = "\n".join(
-        f"- {r.name} [{r.impact}]: {r.signal}" for r in ms.sentiment_risks
-    )
+    claims = "\n".join(f"- {c.statement} (confidence: {c.confidence})" for c in ms.claims)
+    risks = "\n".join(f"- {r.name} [{r.impact}]: {r.signal}" for r in ms.sentiment_risks)
     pa = ms.price_action
-    price_str = (
-        f"30d return: {pa.return_30d_pct}% | volatility: {pa.volatility}\n"
-        if pa
-        else ""
-    )
+    price_str = f"30d return: {pa.return_30d_pct}% | volatility: {pa.volatility}\n" if pa else ""
     return (
         f"News direction: {ms.news_sentiment.direction}\n"
         f"{price_str}"
@@ -227,14 +89,10 @@ def _fmt_sentiment(ms: MarketSentiment) -> str:
 
 def _fmt_scenarios(scenarios: list[Scenario], debate: ScenarioDebate | None) -> str:
     calibrated: dict[str, float] = {}
-    if (
-        isinstance(debate, ScenarioDebate)
-        and debate.calibrated_scenarios
-        and not debate.degraded
-    ):
-        for s in debate.calibrated_scenarios:
-            if s.get("name"):
-                calibrated[s["name"]] = s.get("probability", 0.0)
+    if isinstance(debate, ScenarioDebate) and debate.calibrated_scenarios and not debate.degraded:
+        for row in debate.calibrated_scenarios:
+            if row.name:
+                calibrated[row.name] = row.probability
 
     lines = []
     for s in scenarios:
@@ -249,20 +107,14 @@ def _fmt_debate(debate: ScenarioDebate) -> str:
     parts = [f"Summary: {debate.debate_summary}", f"Confidence: {debate.confidence}"]
     for a in debate.probability_adjustments:
         sign = "+" if a.delta >= 0 else ""
-        parts.append(
-            f"- {a.scenario_name}: {a.before:.0%} → {a.after:.0%} ({sign}{a.delta:.0%}): {a.reason}"
-        )
+        parts.append(f"- {a.scenario_name}: {a.before:.0%} → {a.after:.0%} ({sign}{a.delta:.0%}): {a.reason}")
     return "\n".join(parts)
 
 
-def _all_context(
-    intent, evidence_dump, fa, macro, ms, scenarios, debate, metrics
-) -> str:
+def _all_context(intent, evidence_dump, fa, macro, ms, scenarios, debate, metrics) -> str:
     parts = []
     if intent:
-        parts.append(
-            f"Ticker: {intent.ticker or 'N/A'} | Horizon: {intent.time_horizon or 'unspecified'}"
-        )
+        parts.append(f"Ticker: {intent.ticker or 'N/A'} | Horizon: {intent.time_horizon or 'unspecified'}")
     if evidence_dump:
         parts.append(f"EVIDENCE:\n{_fmt_evidence(evidence_dump[:8])}")
     if isinstance(fa, FundamentalAnalysis):
@@ -278,17 +130,7 @@ def _all_context(
     return "\n\n".join(parts)
 
 
-def _section_context(
-    section: ReportSection,
-    evidence_dump,
-    fa,
-    macro,
-    ms,
-    scenarios,
-    debate,
-    intent,
-    metrics,
-) -> str:
+def _section_context(section: ReportSection, evidence_dump, fa, macro, ms, scenarios, debate, intent, metrics) -> str:
     src = section.source
     if src == "fundamental_analysis" and isinstance(fa, FundamentalAnalysis):
         return _fmt_fundamental(fa)
@@ -302,45 +144,38 @@ def _section_context(
         return _fmt_debate(debate)
     if src == "evidence":
         return _fmt_evidence(evidence_dump)
-    return _all_context(
-        intent, evidence_dump, fa, macro, ms, scenarios, debate, metrics
-    )
+    return _all_context(intent, evidence_dump, fa, macro, ms, scenarios, debate, metrics)
 
 
 # ── Narrative section rendering ────────────────────────────────────────────
 
 
-async def _render_narrative(
-    section: ReportSection,
-    context: str,
-    llm: LLMClient,
-) -> str:
+async def _render_narrative(section: ReportSection, context: str, llm: LLMClient) -> str:
+    fmt = narrative_section_format_instructions(section.id)
     system, prompt = build_prompt(
-        "report_finalize",
-        "narrative_section",
-        section_title=section.title,
-        context=context,
+        "report_finalize", "narrative_section", section_title=section.title, format_instructions=fmt, context=context
     )
     try:
         raw = await llm.complete_text(prompt, system=system, node=_NODE)
         content = (raw or "").strip()
-        if len(content) > 50:
+        if len(content) > _MIN_SECTION_LENGTH:
             return content
     except Exception as exc:
         logger.warning("%s: narrative for '%s' failed — %s", _NODE, section.id, exc)
-    return f"## {section.title}\n\n*Section unavailable.*"
+    return (
+        f"*Section unavailable* — narrative generation did not return enough text for “{section.title}”.\n\n"
+        "*Not financial advice.*"
+    )
 
 
-# ── Node entry point ────────────────────────────────────────────────────────
+# ── Node entry point ───────────────────────────────────────────────────────
 
 
-async def report_finalize_node(
-    state: ResearchState,
-    *,
-    llm: LLMClient = _default_llm,
-    section_queue: SectionQueue | None = None,
-) -> ResearchState:
+async def report_finalize_node(state: ResearchState, *, llm: LLMClient | None = None) -> ResearchState:
     assert_reads(state, _READS, _NODE)
+    if llm is None:
+        llm = LLMClient()
+        llm.max_retries = 1
 
     intent = state.get("intent")
     evidence = state.get("evidence") or []
@@ -356,80 +191,39 @@ async def report_finalize_node(
 
     if statuses:
         statuses = update_status(
-            statuses,
-            "report_finalize",
-            lifecycle="active",
-            phase="generating_report",
-            action="rendering sections",
+            statuses, "report_finalize", lifecycle="active", phase="generating_report", action="rendering sections"
         )
-
-    evidence_dump = [item.model_dump() for item in evidence]
-    available_evidence_ids = {item["id"] for item in evidence_dump}
-    metrics = fa.metrics if isinstance(fa, FundamentalAnalysis) else {}
 
     if not evidence:
         msg = f"[{_NODE}] no evidence — cannot generate report"
         logger.error(msg)
         raise RuntimeError(msg)
 
-    # Degraded-node detection — fail fast if all three analysis nodes are degraded
     fa_degraded = isinstance(fa, FundamentalAnalysis) and fa.degraded
     macro_degraded = isinstance(macro, MacroAnalysis) and macro.degraded
     ms_degraded = isinstance(ms, MarketSentiment) and ms.degraded
     if fa_degraded and macro_degraded and ms_degraded:
-        raise RuntimeError(
-            f"[{_NODE}] all three analysis nodes degraded — cannot generate report"
-        )
+        raise RuntimeError(f"[{_NODE}] all three analysis nodes degraded — cannot generate report")
 
-    # Validation
-    errors: list[str] = []
-    errors.extend(validate_scenario_scores(scenarios))
-    errors.extend(validate_evidence_completeness(evidence_dump))
-    if isinstance(fa, FundamentalAnalysis):
-        errors.extend(validate_claim_coverage(fa, available_evidence_ids))
-    if isinstance(ms, MarketSentiment):
-        errors.extend(validate_claim_coverage(ms, available_evidence_ids))
+    evidence_dump = [item.model_dump() for item in evidence]
+    metrics = fa.metrics if isinstance(fa, FundamentalAnalysis) else {}
+    sections, plan_warnings, report_plan = validate_report_plan(report_plan)
 
-    warnings: list[str] = []
-    if fa_degraded:
-        warnings.append("fundamental_analysis unavailable: LLM exhausted")
-    if macro_degraded:
-        warnings.append("macro_analysis unavailable: LLM exhausted")
-    if ms_degraded:
-        warnings.append("market_sentiment unavailable: LLM exhausted")
-    if isinstance(debate, ScenarioDebate) and debate.degraded:
-        warnings.append("scenario_debate unavailable: baseline probabilities used")
-    retry_reason = state.get("retry_reason", "none")
-    if retry_reason == "judge_degraded":
-        warnings.append("llm_judge unavailable: retry decision skipped")
-    sections, plan_warnings, report_plan = _validate_report_plan(report_plan)
-    warnings.extend(plan_warnings)
+    sections_main = [s for s in sections if s.id != "conclusion"]
+    sections_tail = [s for s in sections if s.id == "conclusion"]
 
-    # Render sections — narrative ones via LLM, structured ones signalled directly
     narrative_sections: dict[str, str] = {}
     report_parts: list[str] = []
-    uncovered: list[str] = []
 
-    for section in sections:
+    async def _process_plan_section(section: ReportSection) -> None:
+        nonlocal statuses
         src = section.source
-
         if src in _STRUCTURED_SOURCES:
-            # Structured section — frontend renders from typed data, just signal it's ready
-            if section_queue:
-                section_queue.push(section.id, "", src)
-            continue
-
-        # Narrative section — LLM writes it
-        context = _section_context(
-            section, evidence_dump, fa, macro, ms, scenarios, debate, intent, metrics
-        )
+            return
+        context = _section_context(section, evidence_dump, fa, macro, ms, scenarios, debate, intent, metrics)
         content = await _render_narrative(section, context, llm)
         narrative_sections[section.id] = content
         report_parts.append(content)
-
-        if section_queue:
-            section_queue.push(section.id, content, src)
-
         if statuses:
             statuses = update_status(
                 statuses,
@@ -439,21 +233,16 @@ async def report_finalize_node(
                 action=f"section ready: {section.title}",
             )
 
-    # Custom sections — query-specific narratives proposed by planning agent
-    full_ctx = _all_context(
-        intent, evidence_dump, fa, macro, ms, scenarios, debate, metrics
-    )
+    for section in sections_main:
+        await _process_plan_section(section)
+
+    full_ctx = _all_context(intent, evidence_dump, fa, macro, ms, scenarios, debate, metrics)
     for cs in custom_sections:
-        synthetic = ReportSection(
-            id=cs.id, title=cs.title, source="all", required=False
-        )
-        # Prepend the focus directive so the LLM answers the specific question
+        synthetic = ReportSection(id=cs.id, title=cs.title, source="all", required=False)
         focused_ctx = f"FOCUS FOR THIS SECTION: {cs.focus}\n\n{full_ctx}"
         content = await _render_narrative(synthetic, focused_ctx, llm)
         narrative_sections[cs.id] = content
         report_parts.append(content)
-        if section_queue:
-            section_queue.push(cs.id, content, "custom", title=cs.title)
         if statuses:
             statuses = update_status(
                 statuses,
@@ -463,103 +252,29 @@ async def report_finalize_node(
                 action=f"section ready: {cs.title}",
             )
 
-    if section_queue:
-        section_queue.done()
+    for section in sections_tail:
+        await _process_plan_section(section)
 
-    # Assemble export markdown (structured sections summarised in Python)
-    export_parts = list(report_parts)
-    if isinstance(fa, FundamentalAnalysis):
-        export_parts.append(f"## Fundamental Analysis\n\n{_fmt_fundamental(fa)}")
-    if isinstance(macro, MacroAnalysis):
-        export_parts.append(f"## Macro Environment\n\n{_fmt_macro(macro)}")
-    if isinstance(ms, MarketSentiment):
-        export_parts.append(f"## Market Sentiment\n\n{_fmt_sentiment(ms)}")
-    if scenarios:
-        export_parts.append(
-            f"## Future Scenarios\n\n{_fmt_scenarios(scenarios, debate)}"
-        )
-    if isinstance(debate, ScenarioDebate):
-        export_parts.append(f"## Scenario Calibration\n\n{_fmt_debate(debate)}")
-    if errors:
-        export_parts.append(
-            "## Validation Errors\n" + "\n".join(f"- {e}" for e in errors)
-        )
-    if warnings:
-        export_parts.append(
-            "## Validation Warnings\n" + "\n".join(f"- {w}" for w in warnings)
-        )
-    export_parts.append("---\n*Not financial advice.*")
-    report_markdown = "\n\n".join(export_parts)
-
-    # Quality metrics
-    cited_claims = []
-    if isinstance(fa, FundamentalAnalysis):
-        cited_claims.extend(fa.claims)
-    if isinstance(ms, MarketSentiment):
-        cited_claims.extend(ms.claims)
-    valid_citations = sum(
-        1
-        for c in cited_claims
-        if any(eid in available_evidence_ids for eid in c.evidence_ids)
+    result = assemble(
+        intent=intent,
+        evidence_dump=evidence_dump,
+        fa=fa,
+        macro=macro,
+        ms=ms,
+        scenarios=scenarios,
+        debate=debate,
+        report_plan=report_plan,
+        custom_sections=custom_sections,
+        narrative_sections=narrative_sections,
+        report_parts=report_parts,
+        retry_reason=state.get("retry_reason", "none"),
+        fmt_fundamental=_fmt_fundamental,
+        fmt_macro=_fmt_macro,
+        fmt_sentiment=_fmt_sentiment,
+        fmt_scenarios=_fmt_scenarios,
+        fmt_debate=_fmt_debate,
     )
-    citation_coverage = valid_citations / len(cited_claims) if cited_claims else 0.0
-
-    if (
-        isinstance(debate, ScenarioDebate)
-        and debate.calibrated_scenarios
-        and not debate.degraded
-    ):
-        prob_sum = sum(
-            float(s.get("probability", 0.0)) for s in debate.calibrated_scenarios
-        )
-    else:
-        prob_sum = sum(s.probability for s in scenarios)
-
-    debate_applied = (
-        isinstance(debate, ScenarioDebate)
-        and len(debate.probability_adjustments) > 0
-        and not debate.degraded
-    )
-    unresolved = len(errors) + len(uncovered)
-    if unresolved == 0 and citation_coverage >= 0.8:
-        qm_confidence = "high"
-    elif unresolved <= 2:
-        qm_confidence = "medium"
-    else:
-        qm_confidence = "low"
-
-    quality_metrics = QualityMetrics(
-        citation_coverage=round(citation_coverage, 4),
-        scenario_probability_valid=abs(prob_sum - 1.0) <= SCENARIO_PROB_TOLERANCE,
-        debate_applied=debate_applied,
-        unresolved_issues=unresolved,
-        confidence=qm_confidence,
-    )
-
-    report_json = {
-        "intent": intent.model_dump() if intent else {},
-        "report_plan": report_plan.model_dump() if report_plan else {},
-        "custom_sections": [cs.model_dump() for cs in custom_sections],
-        "narrative_sections": narrative_sections,
-        "evidence": evidence_dump,
-        "fundamental_analysis": fa.model_dump()
-        if isinstance(fa, FundamentalAnalysis)
-        else {},
-        "macro_analysis": macro.model_dump()
-        if isinstance(macro, MacroAnalysis)
-        else {},
-        "market_sentiment": ms.model_dump() if isinstance(ms, MarketSentiment) else {},
-        "scenarios": [s.model_dump() for s in scenarios],
-        "scenario_debate": debate.model_dump()
-        if isinstance(debate, ScenarioDebate)
-        else {},
-        "quality_metrics": quality_metrics.model_dump(),
-        "validation": {
-            "errors": errors,
-            "warnings": warnings,
-            "uncovered_sections": uncovered,
-        },
-    }
+    result.warnings[:0] = plan_warnings  # prepend plan warnings before assembly warnings
 
     if statuses:
         statuses = update_status(
@@ -568,26 +283,19 @@ async def report_finalize_node(
             lifecycle="standby",
             phase="generating_report",
             action="report published",
-            details=[f"narrative={len(narrative_sections)}", f"errors={len(errors)}"],
+            details=[f"narrative={len(narrative_sections)}", f"errors={len(result.errors)}"],
         )
         statuses = update_status(
-            statuses,
-            "parse_intent",
-            lifecycle="standby",
-            phase="workflow_complete",
-            action="workflow complete",
+            statuses, "planner", lifecycle="standby", phase="workflow_complete", action="workflow complete"
         )
 
     delta = {
         "narrative_sections": narrative_sections,
-        "report_markdown": report_markdown,
-        "report_json": report_json,
-        "validation_result": ValidationResult(
-            is_valid=not errors, errors=errors, warnings=warnings
-        ),
-        "quality_metrics": quality_metrics,
+        "report_markdown": result.report_markdown,
+        "report_json": result.report_json,
+        "validation_result": result.validation_result,
+        "quality_metrics": result.quality_metrics,
         "retry_questions": [],
-        "stop_reason": "complete",
         "agent_statuses": statuses,
     }
     assert_writes(delta, _WRITES, "report_finalize")

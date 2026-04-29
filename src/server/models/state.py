@@ -38,14 +38,7 @@ def _last_list(left: list, right: list) -> list:
     Prefer the most recently updated status for each agent and use lifecycle
     rank as a deterministic tie-breaker when timestamps are identical.
     """
-    lifecycle_rank = {
-        "standby": 0,
-        "active": 1,
-        "waiting": 2,
-        "blocked": 3,
-        "degraded": 4,
-        "failed": 5,
-    }
+    lifecycle_rank = {"standby": 0, "active": 1, "waiting": 2, "blocked": 3, "degraded": 4, "failed": 5}
 
     def _ts(item) -> float:
         value = getattr(item, "last_update_at", None)
@@ -86,9 +79,7 @@ class ResearchState(TypedDict, total=False):
 
     # ── Orchestrator ───────────────────────────────────────────────────────
     intent: ResearchIntent | None
-    plan_context: (
-        PlanContext | None
-    )  # consolidated planning output (replaces 4 scattered fields)
+    plan_context: PlanContext | None  # consolidated planning output (replaces 4 scattered fields)
 
     # ── Research agent ─────────────────────────────────────────────────────
     evidence: Annotated[list[Evidence], operator.add]  # append across passes
@@ -118,7 +109,6 @@ class ResearchState(TypedDict, total=False):
     report_json: dict[str, Any]
     validation_result: ValidationResult
     quality_metrics: QualityMetrics
-    stop_reason: str
 
     # ── Agent status sidebar ───────────────────────────────────────────────
     # _last_list: both parallel analysis nodes write this in the same step.

@@ -1,6 +1,6 @@
 """
-Central config — load .env once, expose typed constants.
-All other modules import from here instead of calling os.getenv directly.
+Central config — expose typed constants from environment variables.
+.env loading is handled by main.py at server startup.
 """
 
 from __future__ import annotations
@@ -8,29 +8,15 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-try:
-    from dotenv import load_dotenv  # type: ignore[import]
-except ImportError as exc:
-    raise RuntimeError(
-        "python-dotenv is required but not installed; cannot load .env"
-    ) from exc
-
 repo_root = Path(__file__).resolve().parents[2]
-env_path = repo_root / ".env"
-if not env_path.is_file():
-    raise RuntimeError(f"Missing .env file at fixed path: {env_path}")
-load_dotenv(env_path)
 
 # Required
 LLM_PROVIDER: str = (os.getenv("LLM_PROVIDER") or "openrouter").strip().lower()
 LLM_API_KEY: str | None = os.getenv("LLM_API_KEY") or None
 
 # Derived runtime defaults (not environment-facing)
-LLM_BASE_URL: str = (
-    "https://api.openai.com/v1"
-    if LLM_PROVIDER == "openai"
-    else "https://openrouter.ai/api/v1"
-)
+LLM_BASE_URL: str = "https://api.openai.com/v1" if LLM_PROVIDER == "openai" else "https://openrouter.ai/api/v1"
+# OpenRouter optional headers — set these in code if needed, not via env.
 LLM_HTTP_REFERER: str | None = None
 LLM_APP_TITLE: str | None = None
 

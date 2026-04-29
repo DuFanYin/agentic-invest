@@ -28,15 +28,14 @@ def _llm_response(overrides: dict | None = None) -> dict:
             "Is NVDA valuation justified by AI capex cycle?",
             "Assess margin sustainability under rising competition",
         ],
-        "must_have_metrics": [
-            "pe_ratio",
-            "revenue_growth_yoy",
-            "gross_margin_pct",
-            "free_cash_flow",
-        ],
-        "plan_notes": [
-            "Benchmark against semiconductor peers",
-            "Model sensitivity to hyperscaler capex slowdown",
+        "must_have_metrics": ["pe_ratio", "revenue_growth_yoy", "gross_margin_pct", "free_cash_flow"],
+        "plan_notes": ["Benchmark against semiconductor peers", "Model sensitivity to hyperscaler capex slowdown"],
+        "custom_sections": [
+            {
+                "id": "ai_capex_valuation_link",
+                "title": "AI capex and valuation",
+                "focus": "Explain how hyperscaler capex plans affect NVDA fair value over the stated horizon.",
+            }
         ],
     }
     if overrides:
@@ -67,6 +66,7 @@ def test_plan_returns_structured_result():
     assert all(isinstance(f, str) for f in result.research_focus)
     assert all(isinstance(m, str) for m in result.must_have_metrics)
     assert all(isinstance(n, str) for n in result.plan_notes)
+    assert 1 <= len(result.custom_sections) <= 3
 
 
 # ── fallback on LLM failure ────────────────────────────────────────────────
@@ -79,6 +79,14 @@ def test_plan_fallback_on_llm_error():
     assert len(result.research_focus) >= 1
     assert len(result.must_have_metrics) >= 1
     assert len(result.plan_notes) >= 1
+    assert len(result.custom_sections) == 1
+    assert result.custom_sections[0].id == "query_specific_deep_dive"
+
+
+def test_plan_injects_fallback_when_custom_sections_missing():
+    result = _run(plan("Compare AMD vs INTC margin outlook", _mock_llm(_llm_response({"custom_sections": []}))))
+    assert len(result.custom_sections) == 1
+    assert result.custom_sections[0].id == "query_specific_deep_dive"
 
 
 # ── make_planning_node() ────────────────────────────────────────────────────

@@ -1,10 +1,10 @@
-"""Unit tests for research_node — all external calls mocked."""
+"""Unit tests for research_node — all external calls mocked via constructor injection."""
 
 from __future__ import annotations
 
 import asyncio
 import json
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from src.server.agents.research import research_node
@@ -33,10 +33,7 @@ def _base_state(ticker: str = "AAPL", iteration_id: int = 0) -> dict:
 
 
 def _mock_finance(
-    info: dict | None = None,
-    financials: dict | None = None,
-    price: dict | None = None,
-    news: list | None = None,
+    info: dict | None = None, financials: dict | None = None, price: dict | None = None, news: list | None = None
 ):
     client = MagicMock()
     client.get_info.return_value = info or {
@@ -136,34 +133,24 @@ class _FailLLM:
         raise RuntimeError("llm unavailable")
 
 
-def _patch(finance=None, web=None, macro=None):
-    """Context manager — patches module-level service singletons in research.py
-    and the cache singletons in each capability module."""
-    from contextlib import ExitStack
-
-    stack = ExitStack()
-    # research.py singletons (used to build capability call args)
-    stack.enter_context(
-        patch("src.server.agents.research._finance", finance or _mock_finance())
-    )
-    stack.enter_context(
-        patch("src.server.agents.research._macro", macro or _mock_macro())
-    )
-    stack.enter_context(patch("src.server.agents.research._web", web or _mock_web()))
-    stack.enter_context(patch("src.server.agents.research._cache", _mock_cache()))
-    # Prevent unit tests from running real LLM backoff/retry paths via module-level _llm.
-    stack.enter_context(patch("src.server.agents.research._llm", _FailLLM()))
-    # capability modules pass through the same client/cache objects received from research.py,
-    # so patching research.py singletons is sufficient — no extra patches needed.
-    return stack
+def _research_deps(**overrides):
+    """Defaults match previous _patch behaviour: all mocked, LLM fails unless overridden."""
+    base = {
+        "llm": _FailLLM(),
+        "cache": _mock_cache(),
+        "finance_client": _mock_finance(),
+        "macro_client": _mock_macro(),
+        "web_client": _mock_web(),
+    }
+    base.update(overrides)
+    return base
 
 
 # ── Basic shape ────────────────────────────────────────────────────────────
 
 
 def test_research_smoke_contract_and_metrics():
-    with _patch():
-        result = _run(research_node(_base_state()))
+    result = _run(research_node(_base_state(), **_research_deps()))
     ids = [ev.id for ev in result["evidence"]]
     assert result["research_iteration"] == 1
     for ev in result["evidence"]:
@@ -192,8 +179,7 @@ def test_no_ticker_no_web_results_raises():
         "agent_statuses": [],
     }
     with pytest.raises(RuntimeError, match="research"):
-        with _patch(finance=_mock_finance(), web=web):
-            _run(research_node(state))
+        _run(research_node(state, **_research_deps(finance_client=_mock_finance(), web_client=web)))
 
 
 # ── Resilience: individual service failures ────────────────────────────────
@@ -209,8 +195,7 @@ def test_single_service_failure_does_not_crash(failed_target: str):
         finance.get_financials.side_effect = Exception("timeout")
     else:
         web.search.side_effect = Exception("Tavily down")
-    with _patch(web=web):
-        result = _run(research_node(_base_state()))
+    result = _run(research_node(_base_state(), **_research_deps(finance_client=finance, web_client=web)))
     assert isinstance(result["evidence"], list)
 
 
@@ -223,21 +208,15 @@ def test_all_services_fail_raises():
     web = _mock_web()
     web.search.side_effect = Exception("err")
     with pytest.raises(RuntimeError, match="research"):
-        with _patch(finance=finance, web=web):
-            _run(research_node(_base_state()))
+        _run(research_node(_base_state(), **_research_deps(finance_client=finance, web_client=web)))
 
 
 def test_research_uses_llm_planned_multi_queries():
     web = _mock_web()
-    llm_queries = [
-        "Apple margin trend latest",
-        "Apple segment revenue mix latest",
-        "Apple guidance revision 2026",
-    ]
+    llm_queries = ["Apple margin trend latest", "Apple segment revenue mix latest", "Apple guidance revision 2026"]
     llm = _OkLLM(llm_queries)
 
-    with _patch(web=web):
-        result = _run(research_node(_base_state(), llm=llm))
+    result = _run(research_node(_base_state(), **_research_deps(llm=llm, web_client=web)))
 
     assert isinstance(result["evidence"], list)
     called_queries = [call.args[0] for call in web.search.call_args_list]
@@ -250,8 +229,7 @@ def test_research_falls_back_to_default_queries_when_llm_fails():
     state = _base_state()
     state["retry_questions"] = ["profitability trend"]
 
-    with _patch(web=web):
-        result = _run(research_node(state, llm=_FailLLM()))
+    result = _run(research_node(state, **_research_deps(llm=_FailLLM(), web_client=web)))
 
     assert isinstance(result["evidence"], list)
     called_queries = [call.args[0] for call in web.search.call_args_list]

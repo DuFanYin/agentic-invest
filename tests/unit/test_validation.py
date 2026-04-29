@@ -1,12 +1,7 @@
 """Unit tests: validation helpers."""
 
 import pytest
-from src.server.models.analysis import (
-    BusinessQuality,
-    Claim,
-    FundamentalAnalysis,
-    Valuation,
-)
+from src.server.models.analysis import BusinessQuality, Claim, FundamentalAnalysis, Valuation
 from src.server.models.scenario import Scenario
 from src.server.utils.validation import (
     validate_claim_coverage,
@@ -30,11 +25,7 @@ def _scenario(**kwargs) -> Scenario:
 
 @pytest.mark.parametrize(
     ("scenario_kwargs", "expected_markers"),
-    [
-        ({"probability": 0.5}, ["sum"]),
-        ({"drivers": []}, ["drivers"]),
-        ({"triggers": []}, ["triggers"]),
-    ],
+    [({"probability": 0.5}, ["sum"]), ({"drivers": []}, ["drivers"]), ({"triggers": []}, ["triggers"])],
 )
 def test_scenario_validation_errors(scenario_kwargs, expected_markers) -> None:
     scenarios = [_scenario(**scenario_kwargs)]
@@ -44,15 +35,7 @@ def test_scenario_validation_errors(scenario_kwargs, expected_markers) -> None:
 
 
 def test_evidence_completeness_fails_when_required_field_missing() -> None:
-    evidence = [
-        {
-            "id": "ev_001",
-            "url": None,
-            "retrieved_at": None,
-            "summary": "",
-            "reliability": None,
-        }
-    ]
+    evidence = [{"id": "ev_001", "url": None, "retrieved_at": None, "summary": "", "reliability": None}]
     errors = validate_evidence_completeness(evidence)
     assert errors
 
@@ -62,9 +45,7 @@ def test_evidence_completeness_fails_when_required_field_missing() -> None:
 
 def test_claim_coverage_flags_unknown_ids() -> None:
     analysis = FundamentalAnalysis(
-        claims=[
-            Claim(statement="claim A", confidence="medium", evidence_ids=["ev_999"])
-        ],
+        claims=[Claim(statement="claim A", confidence="medium", evidence_ids=["ev_999"])],
         business_quality=BusinessQuality(view="stable"),
         valuation=Valuation(relative_multiple_view="fair"),
         fundamental_risks=[],

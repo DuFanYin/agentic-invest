@@ -13,18 +13,12 @@ from dataclasses import dataclass
 
 from src.server.models.evidence import Evidence
 from src.server.services.cache import Cache
+from src.server.services.cache import cache_key as _cache_key
 from src.server.services.finance_data import FinanceDataClient
 
 logger = logging.getLogger(__name__)
 
 _FINANCE_TTL = 3600  # 1 hour
-
-
-def _cache_key(prefix: str, *parts: str) -> str:
-    import hashlib
-
-    payload = ":".join(parts)
-    return f"{prefix}:{hashlib.sha256(payload.encode()).hexdigest()[:16]}"
 
 
 @dataclass
@@ -36,12 +30,7 @@ class FinanceFetchResult:
 
 
 async def fetch_finance_evidence(
-    ticker: str,
-    *,
-    ev_id_start: int,
-    retrieved_at: str,
-    cache: Cache,
-    client: FinanceDataClient,
+    ticker: str, *, ev_id_start: int, retrieved_at: str, cache: Cache, client: FinanceDataClient
 ) -> FinanceFetchResult:
     evidence: list[Evidence] = []
     metrics: dict = {}
@@ -51,11 +40,11 @@ async def fetch_finance_evidence(
     # ── Company info ──────────────────────────────────────────────────────
     try:
         ck = _cache_key("info", ticker)
-        info = cache.get(ck) or {}
+        info = await asyncio.to_thread(cache.get, ck) or {}
         if not info:
             info = await asyncio.to_thread(client.get_info, ticker)
             if info:
-                cache.set(ck, info, ttl_seconds=_FINANCE_TTL)
+                await asyncio.to_thread(cache.set, ck, info, ttl_seconds=_FINANCE_TTL)
         if info:
             evidence.append(
                 Evidence(
@@ -82,11 +71,11 @@ async def fetch_finance_evidence(
     # ── Financials ────────────────────────────────────────────────────────
     try:
         ck = _cache_key("financials", ticker)
-        financials = cache.get(ck) or {}
+        financials = await asyncio.to_thread(cache.get, ck) or {}
         if not financials:
             financials = await asyncio.to_thread(client.get_financials, ticker)
             if financials:
-                cache.set(ck, financials, ttl_seconds=_FINANCE_TTL)
+                await asyncio.to_thread(cache.set, ck, financials, ttl_seconds=_FINANCE_TTL)
         if financials:
             ttm = financials.get("ttm", {})
             metrics = {
@@ -131,11 +120,11 @@ async def fetch_finance_evidence(
     # ── Price history ─────────────────────────────────────────────────────
     try:
         ck = _cache_key("price", ticker)
-        price = cache.get(ck) or {}
+        price = await asyncio.to_thread(cache.get, ck) or {}
         if not price:
             price = await asyncio.to_thread(client.get_price_history, ticker)
             if price:
-                cache.set(ck, price, ttl_seconds=_FINANCE_TTL)
+                await asyncio.to_thread(cache.set, ck, price, ttl_seconds=_FINANCE_TTL)
         if price:
             ret_1y = price.get("period_return_pct")
             ret_30d = price.get("return_30d_pct")
@@ -172,10 +161,10 @@ async def fetch_finance_evidence(
     # ── News ──────────────────────────────────────────────────────────────
     try:
         ck = _cache_key("news", ticker)
-        news_items = cache.get(ck)
+        news_items = await asyncio.to_thread(cache.get, ck)
         if news_items is None:
             news_items = await asyncio.to_thread(client.get_news, ticker)
-            cache.set(ck, news_items, ttl_seconds=_FINANCE_TTL)
+            await asyncio.to_thread(cache.set, ck, news_items, ttl_seconds=_FINANCE_TTL)
         for item in news_items[:5]:
             evidence.append(
                 Evidence(
@@ -194,9 +183,4 @@ async def fetch_finance_evidence(
     except Exception:
         logger.warning("get_news failed for %s", ticker, exc_info=True)
 
-    return FinanceFetchResult(
-        evidence=evidence,
-        metrics=metrics,
-        missing_fields=missing_fields,
-        next_ev_id=ev_id,
-    )
+    return FinanceFetchResult(evidence=evidence, metrics=metrics, missing_fields=missing_fields, next_ev_id=ev_id)

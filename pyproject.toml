@@ -14,3 +14,7 @@ select = ["E", "F", "I"]
 quote-style = "double"
 indent-style = "space"
 skip-magic-trailing-comma = true
+
+# Align isort with formatter: split-on-trailing-comma + skip-magic-trailing-comma disagree
+[tool.ruff.lint.isort]
+split-on-trailing-comma = false

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from textwrap import dedent
 from typing import NotRequired, TypedDict
 
 
@@ -12,7 +13,7 @@ class PromptSpec(TypedDict):
 
 
 PROMPTS: dict[str, dict[str, PromptSpec]] = {
-    "parse_intent": {
+    "planner": {
         "main": {
             "system": (
                 "You are a senior investment research director. "
@@ -46,10 +47,10 @@ Rules:
 - research_focus: be specific and actionable. Not "analyse fundamentals" but "Is the margin expansion sustainable given rising input costs?"
 - must_have_metrics: name the exact metrics needed (e.g. revenue_growth_yoy, gross_margin_pct, fcf_yield).
 - plan_notes: name specific risks or angles that must appear somewhere in the report. Short phrases only, max 10 words each.
-- custom_sections: REQUIRED, 1-3 sections addressing the specific angle of this query that the standard template does not cover. Always produce at least 1. The standard template already covers: fundamentals, macro environment, market sentiment, scenarios, and scenario calibration — do not duplicate these. Each custom section must answer a question that a sophisticated investor would specifically want answered given this exact query. The id must be unique snake_case, the title a concise display label, and the focus a precise directive to the analyst writing this section.
+- custom_sections: REQUIRED. You MUST return 1 to 3 objects in this array (never an empty array, never more than three). Each entry must address a specific angle of this query that the standard report spine does not cover. The standard template already covers: fundamentals, macro environment, market sentiment, scenarios, and scenario calibration — do not duplicate those. Each custom section must answer a question a sophisticated investor would want answered for this exact query. The id must be unique snake_case, the title a concise display label, and the focus a precise directive to the analyst writing the section.
 """,
             "user_template": "User query: {query}",
-        },
+        }
     },
     "research": {
         "query_planner": {
@@ -82,7 +83,7 @@ MUST-HAVE METRICS: {metrics}
 RETRY QUESTION: {retry_q}
 ALREADY SEARCHED (do not repeat): {existing}
 """,
-        },
+        }
     },
     "fundamental_analysis": {
         "main": {
@@ -111,7 +112,9 @@ Rules:
 - fundamental_risks: 1-3 risks. signal must be a specific observable indicator, not a generic phrase.
 - Every claim and risk must cite at least one evidence_id from the list provided.
 """,
-            "user_template": """INTENT: {intent_str}
+            "user_template": """{analysis_gate_context}
+
+INTENT: {intent_str}
 
 RESEARCH PLAN:
 Focus areas:
@@ -131,7 +134,7 @@ FINANCIAL METRICS:
 SUPPLEMENTAL EVIDENCE (macro/news — for context only, do not lead with these):
 {supplemental_lines}
 """,
-        },
+        }
     },
     "macro_analysis": {
         "main": {
@@ -158,7 +161,9 @@ Rules:
 - rate_environment: exactly one of tightening|easing|stable.
 - growth_environment: exactly one of expanding|contracting|stable.
 """,
-            "user_template": """RESEARCH CONTEXT: {intent_str}
+            "user_template": """{analysis_gate_context}
+
+RESEARCH CONTEXT: {intent_str}
 
 MACRO DATA (primary source):
 {macro_lines}
@@ -166,7 +171,7 @@ MACRO DATA (primary source):
 SUPPLEMENTAL EVIDENCE (for context only):
 {supplemental_lines}
 """,
-        },
+        }
     },
     "market_sentiment": {
         "main": {
@@ -197,7 +202,9 @@ Rules:
 - sentiment_risks: 1-2 risks. signal must name a specific observable trigger.
 - Every claim and sentiment_risk must cite at least one evidence_id.
 """,
-            "user_template": """AVAILABLE EVIDENCE IDs: {ids_str}
+            "user_template": """{analysis_gate_context}
+
+AVAILABLE EVIDENCE IDs: {ids_str}
 
 NEWS HEADLINES:
 {news_lines}
@@ -205,17 +212,17 @@ NEWS HEADLINES:
 PRICE / MARKET DATA:
 {price_str}
 """,
-        },
+        }
     },
     "llm_judge": {
         "analysis": {
             "system": (
-                "You are a conservative research-quality gate. "
-                "Your only job is to decide if the evidence and analyses are good enough to proceed to scenario generation. "
-                "You do NOT decide what to search for in detail — the research node handles tactical search planning. "
-                "If a retry is needed, provide one concrete directional question; the research node will expand it into specific queries. "
-                "Bias toward proceeding unless there is a clear, material gap that another research pass is likely to fix. "
-                "Return only valid JSON, no markdown, no extra keys."
+                "You are a research-quality gate (strictness calibrated by research_iteration — see STRICTNESS CONTEXT). "
+                "Your job is to decide whether evidence and analyses are good enough for scenario generation. "
+                "You do NOT choose concrete search keywords — research expands your retry_question into queries if needed. "
+                "Honor the STRICTNESS BAND alongside the Rules block: early passes tolerate fewer gaps; "
+                "later passes should accept workable uncertainty unless a gap clearly blocks defensible modelling. "
+                "Return only valid JSON — no markdown, no extra keys."
             ),
             "schema": """Return exactly this JSON (no extra keys):
 {
@@ -251,16 +258,18 @@ RESEARCH FOCUS:
 
 MUST-HAVE METRICS:
 {must_metrics}
+
+STRICTNESS CONTEXT (research_iteration-aware — obey):
+{strictness_guidance}
 """,
         },
         "conflict": {
             "system": (
-                "You are a conservative evidence-conflict gate. "
-                "Your only job is to decide whether detected conflicts are serious enough to warrant another research pass. "
-                "You do NOT resolve the conflict yourself — provide one directional question pointing at the conflict; "
-                "the research node will generate targeted search queries to resolve it. "
-                "Bias toward proceeding unless the conflict is material, decision-relevant, and likely resolvable with one more pass. "
-                "Return only valid JSON, no markdown, no extra keys."
+                "You weigh evidence conflicts (strictness depends on research_iteration — see STRICTNESS CONTEXT). "
+                "Decide if conflicts warrant another research pass versus disclosure in-report. "
+                "You do NOT resolve the conflict yourself; give one directional retry_question pointing at tension. "
+                "Early iterations: escalate material conflicts sooner. Later iterations: require clearly decision-blocking conflicts. "
+                "Return only valid JSON — no markdown, no extra keys."
             ),
             "schema": """Return exactly this JSON (no extra keys):
 {
@@ -284,6 +293,9 @@ DETECTED CONFLICT TOPICS:
 
 CONFLICT DETAILS:
 {conflict_lines}
+
+STRICTNESS CONTEXT (research_iteration-aware — obey):
+{strictness_guidance}
 """,
         },
     },
@@ -348,7 +360,7 @@ MARKET SENTIMENT:
 Direction: {ms_direction}
 Narrative: {ms_narrative}
 """,
-        },
+        }
     },
     "scenario_debate": {
         "advocate": {
@@ -434,22 +446,130 @@ Arbitrate: weigh the evidence quality behind each advocacy and produce final pro
     "report_finalize": {
         "narrative_section": {
             "system": (
-                "You are a senior investment analyst writing one section of a structured research report. "
-                "Write clear, concise Markdown. Ground every claim in the evidence provided. "
-                "Do not invent data. Return only the Markdown for this section — no JSON wrapper, "
-                "no preamble, start directly with the section heading."
+                "You are a senior investment analyst writing ONE section body of a memo-style report. "
+                "Ground every substantive claim in the evidence provided — do not invent prices or KPIs. "
+                "Return Markdown body text ONLY (no YAML/JSON wrappers, no preamble that names this instruction block)."
             ),
-            "user_template": """Write the '{section_title}' section of an investment research report.
+            "user_template": """Section display name (already shown above in the UI): '{section_title}'
 
-DATA FOR THIS SECTION:
+SECTION-SPECIFIC FORMAT INSTRUCTIONS (follow exactly):
+{format_instructions}
+
+Supporting data (only use what reflects here unless common knowledge qualifies as unstated framing):
 {context}
 
-Instructions:
-- Start with '## {section_title}' as the heading.
-- Ground claims in the data above — cite evidence IDs like [ev_001] where relevant.
-- 80-150 words. Concise and substantive.
-- Not financial advice.
-""",
-        },
+Write ONLY the prose for this section.""",
+        }
     },
 }
+
+
+# ── Narrative subsection copy (wired into PROMPTS.report_finalize.narrative_section via {format_instructions}) ─
+
+_STANDARD_PLAN_SECTION_IDS_FOR_NARRATIVE: frozenset[str] = frozenset(
+    {
+        "executive_summary",
+        "fundamental_analysis",
+        "macro_environment",
+        "market_sentiment",
+        "scenarios",
+        "scenario_debate",
+        "conclusion",
+        "evidence",
+    }
+)
+
+
+def narrative_section_format_instructions(section_id: str) -> str:
+    """Return format rules for `_render_narrative` — kept here with other prompt copy."""
+
+    footer = dedent(
+        """\
+        - Do NOT repeat the section heading: emit no Markdown '#' heading lines — the UI already shows the title.
+        - Ground claims; cite IDs like [ev_001].
+        - Not financial advice.
+        """
+    ).strip()
+
+    conclusion_and_custom = dedent(
+        """\
+        - Write exactly **3–5 short paragraphs** of prose (no '#' headings, **no '-' bullet lists** unless one inline list is unavoidable).
+        - Separate paragraphs with **one blank line** between blocks.
+        - Each paragraph ~2–4 sentences and self-contained (~40–90 words typical); stay tight — no sprawling walls of text.
+        - Cover distinct themes across paragraphs — no duplicate ideas; synthesize insight.
+        - Total roughly ~150–260 words unless the topic warrants less.
+        """
+    ).strip()
+
+    standard_narrative = dedent(
+        """\
+        - Write **3–5 short paragraphs** of prose separated by blank lines (no '#' headings unless structurally unavoidable).
+        - Prefer coherent paragraphs over long bullet armies; bullets only if clearer for skimming risk lists.
+        - Target ~120–240 words unless this section merits a narrower scope (e.g. executive summary pacing).
+        - Keep paragraphs brisk: roughly 2–5 sentences each.
+        """
+    ).strip()
+
+    executive_summary_format = dedent(
+        """\
+        - **Structure (required):** (1) A **short lead** — **1–2 sentences** only (bottom-line thesis; no '#' heading).
+        - (2) Then **exactly 3–5** bullet lines: each line must start with `'- '` (dash + space); one crisp clause or sentence per bullet.
+        - Put **one blank line** between the lead block and the first bullet line.
+        - Prefer '-' bullets only (no numbered lists for these points).
+        - Total roughly **120–200 words**.
+        """
+    ).strip()
+
+    if section_id == "executive_summary":
+        return f"{executive_summary_format}\n\n{footer}"
+
+    if section_id == "conclusion" or section_id not in _STANDARD_PLAN_SECTION_IDS_FOR_NARRATIVE:
+        return f"{conclusion_and_custom}\n\n{footer}"
+
+    return f"{standard_narrative}\n\n{footer}"
+
+
+def judge_strictness_guidance(research_iteration: int, max_research_iterations: int) -> str:
+    """Increase strictness early; progressively accept 'good enough' as batches consume budget."""
+
+    head = dedent(
+        f"""\
+        Pipeline context:
+        - Completed research batches before this verdict: **{research_iteration}**
+        - Retrieval cannot expand forever; configured hard-cap on batch count ≈ **{max_research_iterations}**.
+        """
+    ).strip()
+
+    band_early = dedent(
+        """\
+        **Band A — earliest review (strict)**:
+        - Prefer `should_retry=true` whenever evidence/analysis depth visibly under-serves fundamentals, macro lens, sentiment, or corroborating web-news relative to the stated research focus — if one more augmentation plausibly closes the gap.
+        - Accept `should_retry=false` only when the dossier already supports disciplined scenario sizing with clearly cited claims.
+        - Minor thinness that caveats alone can honour should **not** stand in the way of escalation here.
+        """
+    ).strip()
+
+    band_middle = dedent(
+        """\
+        **Band B — mid pipeline (moderate)** — at least one prior augmentation already landed:
+        - Relax versus Band A: residual uncertainty framed as ranges is acceptable; escalate only where omission would **materially skew** probabilistic narratives.
+        - Default `should_retry=false` unless a gap is glaring and realistically fixable with one narrowly-scoped supplemental pass.
+        """
+    ).strip()
+
+    band_final = dedent(
+        """\
+        **Band C — last discretionary review before escalation budget ends**:
+        - Treat synthesis as materially complete — prefer `should_retry=false` broadly; escalate only when a gap is objectively decision-blocking AND one incremental pass reasonably repairs it.
+        - Duplicated Band-A/B noise should **almost never** produce `should_retry=true` anymore.
+        """
+    ).strip()
+
+    if research_iteration <= 1:
+        body = band_early
+    elif research_iteration >= max_research_iterations - 1:
+        body = band_final
+    else:
+        body = band_middle
+
+    return f"{head}\n\n{body}"

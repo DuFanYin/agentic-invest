@@ -8,18 +8,12 @@ from dataclasses import dataclass
 
 from src.server.models.evidence import Evidence
 from src.server.services.cache import Cache
+from src.server.services.cache import cache_key as _cache_key
 from src.server.services.web_research import WebResearchClient
 
 logger = logging.getLogger(__name__)
 
 _WEB_TTL = 900  # 15 min
-
-
-def _cache_key(prefix: str, *parts: str) -> str:
-    import hashlib
-
-    payload = ":".join(parts)
-    return f"{prefix}:{hashlib.sha256(payload.encode()).hexdigest()[:16]}"
 
 
 @dataclass
@@ -29,20 +23,15 @@ class WebFetchResult:
 
 
 async def _fetch_single(
-    query: str,
-    *,
-    retrieved_at: str,
-    seen_urls: set[str],
-    cache: Cache,
-    client: WebResearchClient,
+    query: str, *, retrieved_at: str, seen_urls: set[str], cache: Cache, client: WebResearchClient
 ) -> list[dict]:
     """Fetch one query's results; returns raw items (URL dedup applied in-place)."""
     try:
         ck = _cache_key("web", query)
-        web_results = cache.get(ck)
+        web_results = await asyncio.to_thread(cache.get, ck)
         if web_results is None:
             web_results = await asyncio.to_thread(client.search, query, 5)
-            cache.set(ck, web_results, ttl_seconds=_WEB_TTL)
+            await asyncio.to_thread(cache.set, ck, web_results, ttl_seconds=_WEB_TTL)
         fresh = []
         for item in web_results:
             url = item.get("url", "")
@@ -74,16 +63,7 @@ async def fetch_web_evidence(
         queries = [queries]
 
     results = await asyncio.gather(
-        *[
-            _fetch_single(
-                q,
-                retrieved_at=retrieved_at,
-                seen_urls=seen_urls,
-                cache=cache,
-                client=client,
-            )
-            for q in queries
-        ]
+        *[_fetch_single(q, retrieved_at=retrieved_at, seen_urls=seen_urls, cache=cache, client=client) for q in queries]
     )
 
     evidence: list[Evidence] = []

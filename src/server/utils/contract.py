@@ -83,8 +83,7 @@ def assert_writes(delta: dict, declared: frozenset[str], node: str) -> None:
     extra = set(delta.keys()) - allowed
     if extra:
         raise ContractViolation(
-            f"[{node}] wrote undeclared state fields: {sorted(extra)}\n"
-            f"Declared writes: {sorted(allowed)}"
+            f"[{node}] wrote undeclared state fields: {sorted(extra)}\nDeclared writes: {sorted(allowed)}"
         )
 
 
@@ -96,8 +95,7 @@ def _build_contracts() -> dict[str, NodeContract]:
     from src.server.agents.registry import AGENT_REGISTRY
 
     return {
-        agent_id: NodeContract(reads=entry.reads, writes=entry.writes)
-        for agent_id, entry in AGENT_REGISTRY.items()
+        agent_id: NodeContract(reads=entry.reads, writes=entry.writes) for agent_id, entry in AGENT_REGISTRY.items()
     }
 
 

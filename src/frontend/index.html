@@ -36,7 +36,7 @@ const AGENTS = [
 ];
 
 const AGENT_ID_BY_NAME = {
-  parse_intent: 'O',
+  planner: 'O',
   research: 'R',
   fundamental_analysis: 'F',
   macro_analysis: 'X',
@@ -79,12 +79,9 @@ const shortenModel = (model) => {
     .replace('-instruct', '')
     .replace('-it', '');
 };
-const firstSentence = (text) => {
-  if (!text) return 'N/A';
-  const i = text.indexOf('.');
-  return i === -1 ? text : text.slice(0, i + 1);
-};
-const _stripMarkdown = (text) => {
+
+/** Strip inline md for plain-text summary snippets (Executive Summary hero). */
+function stripMarkdownLite(text) {
   if (!text) return '';
   return text
     .replace(/`([^`]+)`/g, '$1')
@@ -92,32 +89,107 @@ const _stripMarkdown = (text) => {
     .replace(/[*_~>#-]/g, ' ')
     .replace(/\s+/g, ' ')
     .trim();
-};
+}
 
-const _extractExecutiveSummary = (markdown) => {
-  if (!markdown) return '';
-  const m = markdown.match(/(?:^|\n)#{1,3}\s*Executive Summary\s*\n([\s\S]*?)(?=\n#{1,3}\s|$)/i);
-  if (!m) return '';
-  return m[1].trim();
-};
-
-const splitSummary = (markdown) => {
-  const section = _extractExecutiveSummary(markdown) || '';
-  const plain = _stripMarkdown(section);
-  if (!plain) return { lead: 'No summary available.', points: [] };
-
-  const sentences = plain
-    .split(/(?<=[.!?])\s+/)
-    .map((s) => s.trim())
-    .filter(Boolean);
-
-  if (sentences.length === 0) return { lead: 'No summary available.', points: [] };
-
-  const lead = sentences[0];
-  const points = sentences.slice(1);
-
+/** Lead (lines before first bullet) + up to 5 `-`/`*` bullets. Used only by SummarySection `narrativeContent` (section body, not full report). */
+function parseExecutiveSummaryParts(raw) {
+  const text = (raw || '').trim();
+  if (!text) return { lead: '', points: [] };
+  const lines = text.split(/\r?\n/).map((l) => l.trim()).filter((l) => l.length > 0);
+  const bulletIdx = lines.findIndex((l) => /^\s*[-*]\s+/.test(l));
+  if (bulletIdx === -1) {
+    return { lead: '', points: [] };
+  }
+  const leadRaw = lines.slice(0, bulletIdx).join('\n');
+  const lead = (stripMarkdownLite(leadRaw) || '').trim();
+  const points = lines
+    .slice(bulletIdx)
+    .filter((l) => /^\s*[-*]\s+/.test(l))
+    .map((l) => stripMarkdownLite(l.replace(/^\s*[-*]\s+/, '')))
+    .filter(Boolean)
+    .slice(0, 5);
   return { lead, points };
-};
+}
+
+/** Normalize for comparing UI section title ↔ duplicate markdown heading echoed by the model */
+function _normHeadingForDedupe(s) {
+  return String(s || '')
+    .toLowerCase()
+    .replace(/&/g, 'and')
+    .replace(/[^a-z0-9]+/g, ' ')
+    .trim();
+}
+
+/** Remove leading # / ## headings that duplicate the section title rendered in CSS */
+function stripRedundantMarkdownTitle(raw, title) {
+  if (!raw || !title) return raw || '';
+  let text = raw.replace(/^\uFEFF/, '');
+  for (let n = 0; n < 12; n += 1) {
+    const lines = text.split('\n');
+    let i = 0;
+    while (i < lines.length && !lines[i].trim()) i += 1;
+    if (i >= lines.length) break;
+    const trimmed = lines[i].trim();
+    const hm = trimmed.match(/^#{1,6}\s+(.+)$/);
+    if (!hm) break;
+    const inner = hm[1].replace(/\*{2}|`/g, '').trim();
+    const t1 = _normHeadingForDedupe(title);
+    const t2 = _normHeadingForDedupe(inner);
+    let dup = Boolean(t2 && (t1 === t2 || t1.includes(t2) || t2.includes(t1)));
+    if (!dup && t2 && t1 && t2.length >= 16 && t1.length >= 16) {
+      const pref = Math.min(t1.length, t2.length, 28);
+      dup = t1.slice(0, pref) === t2.slice(0, pref);
+    }
+    if (dup) {
+      lines.splice(i, 1);
+      text = lines.join('\n');
+      continue;
+    }
+    break;
+  }
+  return text;
+}
+
+/** Strip GFM-style table rows so narrative blocks don't absorb them (tables render below). */
+function stripMarkdownTableBlocks(text) {
+  if (!text) return '';
+  const lines = text.split('\n');
+  const out = [];
+  let i = 0;
+  while (i < lines.length) {
+    if (lines[i].trim().startsWith('|')) {
+      while (i < lines.length && lines[i].trim().startsWith('|')) i += 1;
+      continue;
+    }
+    out.push(lines[i]);
+    i += 1;
+  }
+  return out.join('\n').trim();
+}
+
+/** Paragraphs separated by blank lines, or markdown bullet lists → one UI row each (aligned with claim rows). */
+function buildNarrativePointRows(body) {
+  if (!body) return [];
+  const chunks = body.split(/\n\s*\n+/).map((c) => c.trim()).filter(Boolean);
+  const rows = [];
+  for (const chunk of chunks) {
+    const chunkLines = chunk.split('\n').map((l) => l.trim()).filter(Boolean);
+    const allBullets =
+      chunkLines.length > 0 && chunkLines.every((l) => /^[-*]\s+/.test(l));
+    if (allBullets) {
+      chunkLines.forEach((l) => rows.push(l.replace(/^[-*]\s+/, '').trim()));
+    } else {
+      rows.push(chunk.replace(/\s*\n\s*/g, ' ').trim());
+    }
+  }
+  return rows;
+}
+
+/** Light cleanup of **bold** markers for monospace narrative display */
+function stripInlineMdMarkers(s) {
+  return String(s || '').replace(/\*\*([^*]+)\*\*/g, '$1');
+}
+
 const metricGroupsFromAnalysis = (analysis) => {
   const metrics = analysis?.metrics || {};
   return Object.entries(metrics).map(([group, value]) => {
@@ -627,13 +699,7 @@ function DebateSection({ debate, loading }) {
 
 function SummarySection({ validationBadge, narrativeContent, intent }) {
   if (!narrativeContent) return null;
-  const plain = _stripMarkdown(narrativeContent);
-  const sentences = plain
-    ? plain.split(/(?<=[.!?])\s+/).map(s => s.trim()).filter(Boolean)
-    : [];
-  const summary = sentences.length > 0
-    ? { lead: sentences[0], points: sentences.slice(1) }
-    : { lead: plain || 'No summary available.', points: [] };
+  const summary = parseExecutiveSummaryParts(narrativeContent);
   return (
     <div className="report-section">
       {validationBadge}
@@ -652,48 +718,36 @@ function SummarySection({ validationBadge, narrativeContent, intent }) {
 }
 
 function MarkdownSection({ section, content }) {
-  const raw = content || '';
-  const lines = raw ? raw.split('\n') : [];
+  const rawFull = stripRedundantMarkdownTitle(content || '', section?.title || '');
+  const bodyOnly = stripMarkdownTableBlocks(rawFull);
+  const pointRows = buildNarrativePointRows(bodyOnly);
   return (
-    <div className="report-section">
+    <div className="report-section markdown-narrative-section">
       <SectionLabel>{section.title}</SectionLabel>
       <div className="section-title">{section.title}</div>
-      {lines.length === 0 && (
+      {pointRows.length === 0 && (
         <div className="section-body" style={{color:'var(--muted)'}}>No content available for this section.</div>
       )}
-      {lines.map((line, i) => {
-        const trimmed = line.trim();
-        if (!trimmed) return null;
-        // Markdown table row
-        if (trimmed.startsWith('|')) {
-          return null; // skip table lines — rendered below as a block
-        }
-        // Bullet
-        if (trimmed.startsWith('- ') || trimmed.startsWith('* ')) {
-          return <div key={i} className="section-body" style={{paddingLeft:'12px'}}>· {trimmed.slice(2)}</div>;
-        }
-        // Bold label: **text**
-        const boldMatch = trimmed.match(/^\*\*(.+?)\*\*:?\s*(.*)/);
-        if (boldMatch) {
-          return (
-            <div key={i} className="section-body">
-              <b>{boldMatch[1]}</b>{boldMatch[2] ? `: ${boldMatch[2]}` : ''}
+      {pointRows.length > 0 && (
+        <div className="narrative-point-list">
+          {pointRows.map((rowText, i) => (
+            <div key={i} className="narrative-point-row">
+              <span className="narrative-point-bar" aria-hidden="true" />
+              <div className="narrative-point-text">{stripInlineMdMarkers(rowText)}</div>
             </div>
-          );
-        }
-        return <div key={i} className="section-body">{trimmed}</div>;
-      })}
-      {/* Render any markdown table found in the raw content */}
+          ))}
+        </div>
+      )}
       {(() => {
-        const tableLines = raw.split('\n').filter(l => l.trim().startsWith('|'));
+        const tableLines = rawFull.split('\n').filter((l) => l.trim().startsWith('|'));
         if (tableLines.length < 2) return null;
-        const headers = tableLines[0].split('|').map(h => h.trim()).filter(Boolean);
-        const rows = tableLines.slice(2).map(r => r.split('|').map(c => c.trim()).filter(Boolean));
+        const headers = tableLines[0].split('|').map((h) => h.trim()).filter(Boolean);
+        const rows = tableLines.slice(2).map((r) => r.split('|').map((c) => c.trim()).filter(Boolean));
         if (!headers.length) return null;
         return (
-          <div className="evidence-table-wrap" style={{marginTop:'8px'}}>
+          <div className="evidence-table-wrap narrative-table-follow" style={{marginTop:'8px'}}>
             <table className="evidence-table">
-              <thead><tr>{headers.map((h,i) => <th key={i}>{h}</th>)}</tr></thead>
+              <thead><tr>{headers.map((h, hi) => <th key={hi}>{h}</th>)}</tr></thead>
               <tbody>{rows.map((row, ri) => (
                 <tr key={ri}>{row.map((cell, ci) => <td key={ci}>{cell}</td>)}</tr>
               ))}</tbody>
@@ -711,7 +765,6 @@ function App() {
   const [query, setQuery] = useState('');
   const [agentStatuses, setAgentStatuses] = useState({});
   const [logLines, setLogLines] = useState([]);
-  const [readySections, setReadySections] = useState({});  // section_id → {content, source}
   const [reportData, setReportData] = useState(null);
   const [llmCalls, setLlmCalls] = useState([]);
   const [nowMs, setNowMs] = useState(Date.now());  // still needed for elapsed timer
@@ -816,27 +869,12 @@ function App() {
         return;
       }
 
-      if (eventName === 'section_ready') {
-        const sid = parsed?.id;
-        if (sid) {
-          setReadySections((prev) => ({ ...prev, [sid]: { content: parsed.content || '', source: parsed.source || 'all', title: parsed.title || '' } }));
-        }
-        return;
-      }
-
       if (eventName === 'final') {
         gotFinal = true;
         setReportData(parsed);
         if (Array.isArray(parsed?.llm_calls) && parsed.llm_calls.length > 0) {
           setLlmCalls((prev) => parsed.llm_calls.reduce(mergeLLMCallById, prev));
         }
-        // Ensure all structured sections from report_plan are marked ready
-        const planSections = parsed?.report_json?.report_plan?.sections || [];
-        setReadySections((prev) => {
-          const next = { ...prev };
-          planSections.forEach((s) => { if (!next[s.id]) next[s.id] = { content: '', source: s.source }; });
-          return next;
-        });
         setAppState('complete');
         return;
       }
@@ -880,7 +918,6 @@ function App() {
     setRunStartMs(startMs);
     setTotalElapsedSec(null);
     setAppState('running');
-    setReadySections({});
     setAgentStatuses({});
     setLogLines([]);
     setReportData(null);
@@ -913,7 +950,6 @@ function App() {
       if (Array.isArray(snap.logLines)) setLogLines(snap.logLines);
       if (Array.isArray(snap.llmCalls)) setLlmCalls(snap.llmCalls);
       if (snap.reportData && typeof snap.reportData === 'object') setReportData(snap.reportData);
-      if (snap.readySections && typeof snap.readySections === 'object') setReadySections(snap.readySections);
       // Transient states don't survive a tab close — treat as idle on restore
       const restoredState = snap.appState === 'complete' ? 'complete' : 'idle';
       setAppState(restoredState);
@@ -932,13 +968,12 @@ function App() {
         logLines,
         llmCalls,
         reportData,
-        readySections,
       };
       sessionStorage.setItem(STORAGE_KEY, JSON.stringify(snapshot));
     } catch (_e) {
       // ignore storage quota / serialization errors
     }
-  }, [appState, query, agentStatuses, logLines, llmCalls, reportData, readySections]);
+  }, [appState, query, agentStatuses, logLines, llmCalls, reportData]);
 
   // Auto-scroll log
   useEffect(() => {
@@ -968,17 +1003,48 @@ function App() {
   const macroData = reportData?.macro_analysis || reportData?.report_json?.macro_analysis || null;
   const debateData = reportData?.scenario_debate || reportData?.report_json?.scenario_debate || null;
   const reportPlanSections = reportData?.report_json?.report_plan?.sections || null;
-  const narrativeSections = reportData?.narrative_sections || reportData?.report_json?.narrative_sections || {};
-  // Custom sections: sections that have arrived (source=custom in section_ready events).
-  // Title comes from the section_ready payload itself — no need to wait for final.
-  const arrivedCustom = Object.entries(readySections)
-    .filter(([, v]) => v.source === 'custom')
-    .map(([id, v]) => ({ id, title: v.title || id.replace(/_/g, ' '), content: v.content || '' }));
-  // Pending custom sections: declared in report_json but section_ready not yet received.
+  // Merge nested + top-level narratives: `{}` at top level is truthy so `a || b` skips `b`
+  // and drops custom markdown that only exists under report_json — merge fills gaps instead.
+  const narrativeNested = reportData?.report_json?.narrative_sections;
+  const narrativeTop = reportData?.narrative_sections;
+  const narrativeSections = {
+    ...(typeof narrativeNested === 'object' && narrativeNested !== null ? narrativeNested : {}),
+    ...(typeof narrativeTop === 'object' && narrativeTop !== null ? narrativeTop : {}),
+  };
   const declaredCustom = reportData?.report_json?.custom_sections || [];
-  const arrivedCustomIds = new Set(arrivedCustom.map(c => c.id));
-  const pendingCustom = declaredCustom.filter(c => !arrivedCustomIds.has(c.id));
-  const anySectionReady = Object.keys(readySections).length > 0;
+  // Custom sections: order follows plan; body text comes from merged narrative_sections.
+  const customSectionBlocks = declaredCustom.map((c) => {
+    const cid = (c?.id ?? c?.section_id ?? '').trim();
+    const title = c?.title || cid.replace(/_/g, ' ') || 'Custom section';
+    return {
+      id: cid,
+      title,
+      content: cid ? (narrativeSections[cid] || '') : '',
+    };
+  });
+  const planTailIds = new Set(['conclusion']);
+  const reportPlanMain = (reportPlanSections || []).filter((s) => !planTailIds.has(s.id));
+  const reportPlanTail = (reportPlanSections || []).filter((s) => planTailIds.has(s.id));
+  const showFullReport = appState === 'complete' && reportData;
+
+  function renderPlanSection(section) {
+    const src = section.source;
+    const narrativeContent = narrativeSections[section.id] || '';
+    const isLoading = false;
+    if (src === 'fundamental_analysis') return <FundamentalSection key={section.id} analysis={reportData?.fundamental_analysis} sectionTitle={section.title} loading={isLoading} />;
+    if (src === 'macro_analysis')       return <MacroSection       key={section.id} macro={macroData}                           sectionTitle={section.title} loading={isLoading} />;
+    if (src === 'market_sentiment')     return <SentimentSection   key={section.id} sentiment={reportData?.market_sentiment}    sectionTitle={section.title} loading={isLoading} />;
+    if (src === 'scenarios')            return <ScenariosSection   key={section.id} scenarios={reportData?.scenarios}           loading={isLoading} />;
+    if (src === 'scenario_debate')      return <DebateSection      key={section.id} debate={debateData}                         loading={isLoading} />;
+    if (src === 'evidence')             return <EvidenceSection    key={section.id} evidence={reportData?.evidence} />;
+    if (section.id === 'executive_summary') return <SummarySection key={section.id} validationBadge={validationBadge} narrativeContent={narrativeContent} intent={reportData?.intent} />;
+    if (src === 'all' || src === 'custom') return <MarkdownSection key={section.id} section={section} content={narrativeContent} />;
+    if (!warnedUnknownSectionsRef.current.has(section.id)) {
+      warnedUnknownSectionsRef.current.add(section.id);
+      console.warn('Unknown report_plan section skipped', { id: section.id, source: src, title: section.title });
+    }
+    return null;
+  }
 
   const liveElapsedSec = (appState === 'running' && runStartMs)
     ? Math.floor((nowMs - runStartMs) / 1000)
@@ -986,7 +1052,7 @@ function App() {
   const displayElapsed = totalElapsedSec != null ? totalElapsedSec : liveElapsedSec;
   const formatElapsed = (s) => s == null ? null : s >= 60 ? `${Math.floor(s/60)}m ${s%60}s` : `${s}s`;
 
-  const validationBadge = anySectionReady ? (
+  const validationBadge = showFullReport ? (
     <div className={`validation-bar ${isValid ? 'valid' : 'review'}`}>
       <span>{isValid ? '✓' : '!'}</span><span>{isValid ? 'VALID' : 'REVIEW'}</span>
     </div>
@@ -1076,17 +1142,22 @@ function App() {
               </span>
             </div>
           )}
-          {!anySectionReady && (
+          {appState === 'idle' && (
+            <div className="report-idle">
+              <div className="report-idle-icon">◈</div>
+              <div className="report-idle-text">Enter a query to begin research</div>
+            </div>
+          )}
+          {(appState === 'running' || appState === 'error') && !showFullReport && (
             <div className="report-idle">
               <div className="report-idle-icon">◈</div>
               <div className="report-idle-text">
-                {appState === 'idle' ? 'Enter a query to begin research' : 'Generating report…'}
+                {appState === 'error' ? 'Research run failed — see log for details' : 'Generating report…'}
               </div>
             </div>
           )}
-          {anySectionReady && (
+          {showFullReport && (
             <div className="report-wrap">
-              {/* Intent card — shown as soon as any section arrives */}
               {reportData?.intent && <IntentSection intent={reportData.intent} />}
 
               {/* Degraded / validation warnings — shown once report is complete */}
@@ -1103,52 +1174,30 @@ function App() {
                 </div>
               )}
 
-              {/* ── Standard plan sections — deterministic order from report_plan ── */}
-              {(reportPlanSections || []).map((section) => {
-                if (!readySections[section.id]) return null;
-                const src = section.source;
-                const narrativeContent = narrativeSections[section.id] || readySections[section.id]?.content || '';
-                const isLoading = !reportData;
-                if (src === 'fundamental_analysis') return <FundamentalSection key={section.id} analysis={reportData?.fundamental_analysis} sectionTitle={section.title} loading={isLoading} />;
-                if (src === 'macro_analysis')       return <MacroSection       key={section.id} macro={macroData}                           sectionTitle={section.title} loading={isLoading} />;
-                if (src === 'market_sentiment')     return <SentimentSection   key={section.id} sentiment={reportData?.market_sentiment}    sectionTitle={section.title} loading={isLoading} />;
-                if (src === 'scenarios')            return <ScenariosSection   key={section.id} scenarios={reportData?.scenarios}           loading={isLoading} />;
-                if (src === 'scenario_debate')      return <DebateSection      key={section.id} debate={debateData}                         loading={isLoading} />;
-                if (src === 'evidence')             return <EvidenceSection    key={section.id} evidence={reportData?.evidence} />;
-                if (section.id === 'executive_summary') return <SummarySection key={section.id} validationBadge={validationBadge} narrativeContent={narrativeContent} intent={reportData?.intent} />;
-                if (src === 'all' || src === 'custom') return <MarkdownSection key={section.id} section={section} content={narrativeContent} />;
-                if (!warnedUnknownSectionsRef.current.has(section.id)) {
-                  warnedUnknownSectionsRef.current.add(section.id);
-                  console.warn('Unknown report_plan section skipped', { id: section.id, source: src, title: section.title });
-                }
-                return null;
-              })}
+              {Array.isArray(reportPlanSections) && reportPlanSections.length > 0 ? (
+                <>
+                  {reportPlanMain.map((section) => renderPlanSection(section))}
+                  {customSectionBlocks.map((cs) => (
+                    <MarkdownSection key={cs.id} section={{ id: cs.id, title: cs.title }} content={cs.content} />
+                  ))}
+                  {reportPlanTail.map((section) => renderPlanSection(section))}
+                </>
+              ) : (
+                <>
+                  <SummarySection validationBadge={validationBadge} narrativeContent={narrativeSections['executive_summary'] || ''} intent={reportData?.intent} />
+                  {reportData?.fundamental_analysis && <FundamentalSection analysis={reportData.fundamental_analysis} />}
+                  {macroData && <MacroSection macro={macroData} />}
+                  {reportData?.market_sentiment && <SentimentSection sentiment={reportData.market_sentiment} />}
+                  {reportData?.scenarios?.length > 0 && <ScenariosSection scenarios={reportData.scenarios} />}
+                  {debateData && <DebateSection debate={debateData} />}
+                  {customSectionBlocks.map((cs) => (
+                    <MarkdownSection key={`fb-${cs.id}`} section={{ id: cs.id, title: cs.title }} content={cs.content} />
+                  ))}
+                  <MarkdownSection section={{ id: 'conclusion', title: 'Conclusion & What To Watch' }} content={narrativeSections['conclusion'] || ''} />
+                </>
+              )}
 
-              {/* ── Custom sections — order and titles from planning, skeleton until content arrives ── */}
-              {/* Arrived custom sections — render immediately with real content */}
-              {arrivedCustom.map((cs) => (
-                <MarkdownSection key={cs.id} section={cs} content={cs.content} />
-              ))}
-              {/* Pending custom sections — show skeleton while report_finalize is still writing */}
-              {pendingCustom.map((cs) => (
-                <SkeletonSection key={cs.id} label={cs.title}>
-                  <SkeletonLine w="w-full" /><SkeletonLine w="w-3q" /><SkeletonLine w="w-full" /><SkeletonLine w="w-half" />
-                </SkeletonSection>
-              ))}
-
-              {/* ── Fallback: no report_plan yet (e.g. plan parse failed) ── */}
-              {!reportPlanSections && (<>
-                {readySections['executive_summary'] && <SummarySection validationBadge={validationBadge} narrativeContent={narrativeSections['executive_summary'] || ''} intent={reportData?.intent} />}
-                {reportData?.fundamental_analysis && <FundamentalSection analysis={reportData.fundamental_analysis} />}
-                {macroData && <MacroSection macro={macroData} />}
-                {reportData?.market_sentiment && <SentimentSection sentiment={reportData.market_sentiment} />}
-                {reportData?.scenarios?.length > 0 && <ScenariosSection scenarios={reportData.scenarios} />}
-                {debateData && <DebateSection debate={debateData} />}
-                {readySections['conclusion'] && <MarkdownSection section={{id:'conclusion',title:'Conclusion & What To Watch'}} content={narrativeSections['conclusion'] || ''} />}
-              </>)}
-
-              {/* Evidence always last */}
-              {reportData?.evidence?.length > 0 && appState === 'complete' && <EvidenceSection evidence={reportData.evidence} />}
+              {reportData?.evidence?.length > 0 && <EvidenceSection evidence={reportData.evidence} />}
             </div>
           )}
         </div>
