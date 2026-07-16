@@ -493,30 +493,30 @@ def narrative_section_format_instructions(section_id: str) -> str:
 
     conclusion_and_custom = dedent(
         """\
-        - Write exactly **3–5 short paragraphs** of prose (no '#' headings, **no '-' bullet lists** unless one inline list is unavoidable).
+        - Write exactly **2–3 short paragraphs** of prose (no '#' headings, **no '-' bullet lists** unless one inline list is unavoidable).
         - Separate paragraphs with **one blank line** between blocks.
-        - Each paragraph ~2–4 sentences and self-contained (~40–90 words typical); stay tight — no sprawling walls of text.
+        - Each paragraph ~2–3 sentences and self-contained (~40–70 words typical); stay tight — no sprawling walls of text.
         - Cover distinct themes across paragraphs — no duplicate ideas; synthesize insight.
-        - Total roughly ~150–260 words unless the topic warrants less.
+        - Total roughly ~90–150 words unless the topic warrants less. Be concise.
         """
     ).strip()
 
     standard_narrative = dedent(
         """\
-        - Write **3–5 short paragraphs** of prose separated by blank lines (no '#' headings unless structurally unavoidable).
+        - Write **2–3 short paragraphs** of prose separated by blank lines (no '#' headings unless structurally unavoidable).
         - Prefer coherent paragraphs over long bullet armies; bullets only if clearer for skimming risk lists.
-        - Target ~120–240 words unless this section merits a narrower scope (e.g. executive summary pacing).
-        - Keep paragraphs brisk: roughly 2–5 sentences each.
+        - Target ~80–150 words unless this section merits a narrower scope (e.g. executive summary pacing). Be concise.
+        - Keep paragraphs brisk: roughly 2–4 sentences each.
         """
     ).strip()
 
     executive_summary_format = dedent(
         """\
         - **Structure (required):** (1) A **short lead** — **1–2 sentences** only (bottom-line thesis; no '#' heading).
-        - (2) Then **exactly 3–5** bullet lines: each line must start with `'- '` (dash + space); one crisp clause or sentence per bullet.
+        - (2) Then **exactly 3–4** bullet lines: each line must start with `'- '` (dash + space); one crisp clause or sentence per bullet.
         - Put **one blank line** between the lead block and the first bullet line.
         - Prefer '-' bullets only (no numbered lists for these points).
-        - Total roughly **120–200 words**.
+        - Total roughly **90–150 words**. Be concise.
         """
     ).strip()
 

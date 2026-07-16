@@ -3,7 +3,7 @@ Provider-agnostic LLM client.
 
 Strategy
 ────────
-- Provider: openrouter (default) or openai (from env)
+- Provider: openrouter (default), openai, or deepseek (from env)
 - Both providers use a two-model chain with per-model retries on 429 / 5xx
 - complete()        — enforces response_format json_object; validates JSON before returning
 - complete_text()   — free-form text (Markdown reports); skips JSON mode and validation
@@ -36,9 +36,22 @@ logger = logging.getLogger(__name__)
 
 _FREE_MODELS = ["openai/gpt-oss-120b:free", "meta-llama/llama-3.3-70b-instruct:free"]
 _OPENAI_MODELS = ["gpt-4.1", "gpt-4.1-mini"]
+# DeepSeek V4 — flash is the fast/cheap default; pro is the higher-quality failover.
+_DEEPSEEK_MODELS = ["deepseek-v4-flash", "deepseek-v4-pro"]
 
-# Cost per 1M tokens (input, output) in USD — OpenAI public pricing
-_OPENAI_PRICING: dict[str, tuple[float, float]] = {
+# Generous output ceilings per provider. max_tokens is a cap, not a target — setting
+# it high costs nothing unless the output is actually long, it just prevents truncation.
+# Each value stays under the provider's hard limit (exceeding it returns a fatal 400).
+_MAX_TOKENS_BY_PROVIDER = {
+    "deepseek": 65536,  # V4 allows up to 384K; 64K is far more than any report/JSON needs
+    "openai": 32768,  # gpt-4.1 / gpt-4.1-mini max completion tokens
+    "openrouter": 8192,  # conservative — free models often cap low
+}
+_DEFAULT_MAX_TOKENS = 8192
+
+# Cost per 1M tokens (input, output) in USD — public provider pricing.
+# DeepSeek input uses the cache-miss rate (worst case).
+_PRICING: dict[str, tuple[float, float]] = {
     "gpt-4.1": (2.00, 8.00),
     "gpt-4.1-mini": (0.40, 1.60),
     "gpt-4.1-nano": (0.10, 0.40),
@@ -46,11 +59,13 @@ _OPENAI_PRICING: dict[str, tuple[float, float]] = {
     "gpt-4o-mini": (0.15, 0.60),
     "o3": (10.0, 40.0),
     "o4-mini": (1.10, 4.40),
+    "deepseek-v4-flash": (0.14, 0.28),
+    "deepseek-v4-pro": (0.435, 0.87),
 }
 
 
 def _compute_cost(model: str, prompt_tokens: int, completion_tokens: int) -> float | None:
-    for key, (input_cost, output_cost) in _OPENAI_PRICING.items():
+    for key, (input_cost, output_cost) in _PRICING.items():
         if model.startswith(key):
             return round((prompt_tokens * input_cost + completion_tokens * output_cost) / 1_000_000, 8)
     return None
@@ -104,12 +119,13 @@ class LLMClient:
         api_key: str | None = None,
         model: str | None = None,
         base_url: str = LLM_BASE_URL,
-        timeout_seconds: float = 30.0,
+        timeout_seconds: float = 60.0,
         max_retries: int = 2,
         retry_backoff: float = 2.0,
+        max_tokens: int | None = None,
         collector: LLMCallCollector | None = None,
     ) -> None:
-        self.provider = LLM_PROVIDER if LLM_PROVIDER in {"openrouter", "openai"} else "openrouter"
+        self.provider = LLM_PROVIDER if LLM_PROVIDER in {"openrouter", "openai", "deepseek"} else "openrouter"
         self.api_key = api_key or LLM_API_KEY
         self._models = [model] if model else self._default_models()
         resolved_base_url = (base_url or LLM_BASE_URL).rstrip("/")
@@ -117,6 +133,7 @@ class LLMClient:
         self.timeout_seconds = timeout_seconds
         self.max_retries = max_retries
         self.retry_backoff = retry_backoff
+        self.max_tokens = max_tokens or _MAX_TOKENS_BY_PROVIDER.get(self.provider, _DEFAULT_MAX_TOKENS)
         self._collector = collector  # None → telemetry disabled
 
     # ── public API ─────────────────────────────────────────────────────────
@@ -153,6 +170,8 @@ class LLMClient:
     def _default_models(self) -> list[str]:
         if self.provider == "openai":
             return list(_OPENAI_MODELS)
+        if self.provider == "deepseek":
+            return list(_DEEPSEEK_MODELS)
         return list(_FREE_MODELS)
 
     def _emit(self, call: LLMCall) -> None:
@@ -317,9 +336,13 @@ class LLMClient:
             messages.append({"role": "system", "content": system or default_system})
         messages.append({"role": "user", "content": prompt})
 
-        payload: dict = {"model": model_id, "messages": messages, "temperature": 0, "max_tokens": 2048}
+        payload: dict = {"model": model_id, "messages": messages, "temperature": 0, "max_tokens": self.max_tokens}
         if json_mode:
             payload["response_format"] = {"type": "json_object"}
+        if self.provider == "deepseek":
+            # V4 defaults to thinking mode (slow, emits reasoning_content we don't use).
+            # Disable it for faster, cheaper, non-reasoning completions.
+            payload["thinking"] = {"type": "disabled"}
 
         try:
             async with httpx.AsyncClient(timeout=self.timeout_seconds) as client:
@@ -346,9 +369,16 @@ class LLMClient:
             raise _FatalError(f"API error {code}: {msg}")
 
         try:
-            content = data["choices"][0]["message"]["content"]
+            choice = data["choices"][0]
+            content = choice["message"]["content"]
         except (KeyError, IndexError, TypeError) as exc:
             raise _FatalError("response missing message content") from exc
+
+        # A "length" finish means the output hit max_tokens and is truncated. At
+        # temperature=0 the same prompt+cap yields byte-identical truncation, so
+        # retrying this model is futile — fail over to the next one instead.
+        if choice.get("finish_reason") == "length":
+            raise _FatalError(f"response truncated at max_tokens={self.max_tokens} (finish_reason=length)")
 
         if isinstance(content, list):
             content = "".join(c.get("text", "") if isinstance(c, dict) else str(c) for c in content)

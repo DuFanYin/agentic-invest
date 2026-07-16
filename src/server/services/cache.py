@@ -95,7 +95,10 @@ class Cache:
             conn.execute("CREATE INDEX IF NOT EXISTS idx_expires ON cache (expires_at)")
 
     def _connect(self) -> sqlite3.Connection:
-        return sqlite3.connect(self._db_path)
+        # timeout → block up to 5s on a locked DB (SQLITE_BUSY) instead of raising
+        # immediately. Concurrent requests use separate Cache instances (separate
+        # locks), so the DB file lock is the real cross-request serialisation point.
+        return sqlite3.connect(self._db_path, timeout=5.0)
 
     def _delete(self, key: str) -> None:
         with self._connect() as conn:

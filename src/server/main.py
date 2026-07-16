@@ -36,9 +36,20 @@ async def lifespan(app: FastAPI):
     # (reload/tests may recreate the app in the same process).
     shutdown.init_async_event()
     shutdown.clear()
+    # Bound the default thread pool used by asyncio.to_thread — caps total threads
+    # spawned by concurrent blocking fetches (yfinance, SQLite, Tavily) so a burst
+    # of requests can't exhaust process resources.
+    import asyncio
+    from concurrent.futures import ThreadPoolExecutor
+
+    from src.server.config import THREAD_POOL_WORKERS
+
+    executor = ThreadPoolExecutor(max_workers=THREAD_POOL_WORKERS, thread_name_prefix="fetch")
+    asyncio.get_running_loop().set_default_executor(executor)
     try:
         yield
     finally:
+        executor.shutdown(wait=False, cancel_futures=True)
         # uvicorn has already handled SIGINT/SIGTERM by this point — signal active SSE
         # generators and retry sleeps to abort immediately.
         shutdown.set()

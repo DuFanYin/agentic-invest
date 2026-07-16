@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
-
 
 from src.server.models.analysis import (
     CustomSection,
@@ -215,45 +215,41 @@ async def report_finalize_node(state: ResearchState, *, llm: LLMClient | None = 
     narrative_sections: dict[str, str] = {}
     report_parts: list[str] = []
 
-    async def _process_plan_section(section: ReportSection) -> None:
-        nonlocal statuses
-        src = section.source
-        if src in _STRUCTURED_SOURCES:
-            return
-        context = _section_context(section, evidence_dump, fa, macro, ms, scenarios, debate, intent, metrics)
-        content = await _render_narrative(section, context, llm)
-        narrative_sections[section.id] = content
-        report_parts.append(content)
-        if statuses:
-            statuses = update_status(
-                statuses,
-                "report_finalize",
-                lifecycle="active",
-                phase="generating_report",
-                action=f"section ready: {section.title}",
-            )
+    # Build the render plan in final assembly order (main → custom → tail). Sections
+    # are independent — each renders from state data, not from other sections' text —
+    # so we render them concurrently instead of sequentially (was the 180s bottleneck).
+    full_ctx = _all_context(intent, evidence_dump, fa, macro, ms, scenarios, debate, metrics)
+    render_jobs: list[tuple[ReportSection, str]] = []
 
     for section in sections_main:
-        await _process_plan_section(section)
+        if section.source in _STRUCTURED_SOURCES:
+            continue
+        ctx = _section_context(section, evidence_dump, fa, macro, ms, scenarios, debate, intent, metrics)
+        render_jobs.append((section, ctx))
 
-    full_ctx = _all_context(intent, evidence_dump, fa, macro, ms, scenarios, debate, metrics)
     for cs in custom_sections:
         synthetic = ReportSection(id=cs.id, title=cs.title, source="all", required=False)
-        focused_ctx = f"FOCUS FOR THIS SECTION: {cs.focus}\n\n{full_ctx}"
-        content = await _render_narrative(synthetic, focused_ctx, llm)
-        narrative_sections[cs.id] = content
-        report_parts.append(content)
-        if statuses:
-            statuses = update_status(
-                statuses,
-                "report_finalize",
-                lifecycle="active",
-                phase="generating_report",
-                action=f"section ready: {cs.title}",
-            )
+        render_jobs.append((synthetic, f"FOCUS FOR THIS SECTION: {cs.focus}\n\n{full_ctx}"))
 
     for section in sections_tail:
-        await _process_plan_section(section)
+        if section.source in _STRUCTURED_SOURCES:
+            continue
+        ctx = _section_context(section, evidence_dump, fa, macro, ms, scenarios, debate, intent, metrics)
+        render_jobs.append((section, ctx))
+
+    contents = await asyncio.gather(*[_render_narrative(section, ctx, llm) for section, ctx in render_jobs])
+    for (section, _), content in zip(render_jobs, contents):
+        narrative_sections[section.id] = content
+        report_parts.append(content)
+
+    if statuses and render_jobs:
+        statuses = update_status(
+            statuses,
+            "report_finalize",
+            lifecycle="active",
+            phase="generating_report",
+            action=f"rendered {len(render_jobs)} sections",
+        )
 
     result = assemble(
         intent=intent,

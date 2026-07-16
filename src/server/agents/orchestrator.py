@@ -30,7 +30,7 @@ from src.server.agents.report_finalize import report_finalize_node
 from src.server.agents.research import research_node
 from src.server.agents.scenario_debate import scenario_debate_node
 from src.server.agents.scenario_scoring import scenario_scoring_node
-from src.server.config import CACHE_DB_PATH, REQUEST_TIMEOUT_SECONDS
+from src.server.config import CACHE_DB_PATH, MAX_CONCURRENT_REQUESTS, REQUEST_TIMEOUT_SECONDS
 from src.server.models.analysis import FundamentalAnalysis, MacroAnalysis, MarketSentiment, ScenarioDebate
 from src.server.models.request import ResearchRequest
 from src.server.models.response import LLMCall, ResearchResponse, ValidationResult
@@ -123,6 +123,17 @@ def build_graph(llm_client: LLMClient | None = None) -> StateGraph:
 
 # ── public façade ──────────────────────────────────────────────────────────
 
+# Process-wide gate on concurrent research runs. Lazily bound to the running loop
+# so it is created inside the server event loop, not at import time.
+_request_semaphore: asyncio.Semaphore | None = None
+
+
+def _get_request_semaphore() -> asyncio.Semaphore:
+    global _request_semaphore
+    if _request_semaphore is None:
+        _request_semaphore = asyncio.Semaphore(MAX_CONCURRENT_REQUESTS)
+    return _request_semaphore
+
 
 class OrchestratorAgent:
     def __init__(self, llm_client: LLMClient | None = None) -> None:
@@ -139,11 +150,14 @@ class OrchestratorAgent:
         collector = LLMCallCollector()
         client = self._client_for_request(collector)
         graph = build_graph(client)
-        try:
-            async with asyncio.timeout(REQUEST_TIMEOUT_SECONDS):
-                final_state = await graph.ainvoke({"query": request.query})
-        except TimeoutError as exc:
-            raise RuntimeError(f"[orchestrator] request timeout after {int(REQUEST_TIMEOUT_SECONDS)}s") from exc
+        # Acquire the concurrency slot outside the timeout: queue wait must not
+        # count against the request's own execution budget.
+        async with _get_request_semaphore():
+            try:
+                async with asyncio.timeout(REQUEST_TIMEOUT_SECONDS):
+                    final_state = await graph.ainvoke({"query": request.query})
+            except TimeoutError as exc:
+                raise RuntimeError(f"[orchestrator] request timeout after {int(REQUEST_TIMEOUT_SECONDS)}s") from exc
         cost, prompt_tok, completion_tok = collector.totals()
         return _state_to_response(
             final_state,
@@ -158,6 +172,10 @@ class OrchestratorAgent:
         client = self._client_for_request(collector)
         graph = build_graph(client)
         final_state: ResearchState = {}
+        # Hold the concurrency slot for the whole stream. `async with` guarantees
+        # release even if the client disconnects (aclose → GeneratorExit here).
+        semaphore = _get_request_semaphore()
+        await semaphore.acquire()
         stream_iter = graph.astream({"query": request.query}, stream_mode=["updates", "values"]).__aiter__()
         step_task: asyncio.Task | None = asyncio.create_task(anext(stream_iter))
         call_task: asyncio.Task | None = asyncio.create_task(collector.wait_next())
@@ -217,6 +235,9 @@ class OrchestratorAgent:
                         await task
                     except (asyncio.CancelledError, StopAsyncIteration, Exception):
                         pass
+            # All heavy work (LLM calls, thread-pool fetches) is done by here;
+            # the remaining assembly is in-memory, so free the slot now.
+            semaphore.release()
 
         all_llm_calls = collector.all()
         cost, prompt_tok, completion_tok = collector.totals()
